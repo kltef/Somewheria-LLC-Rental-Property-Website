@@ -1,65 +1,377 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full scroll-smooth">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"/>
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{{ title or 'Somewheria, LLC.' }}</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Noto+Sans:wght@400;500;700;900&family=Plus+Jakarta+Sans:wght@400;500;700;800"/>
+  <link rel="stylesheet" href="https://unpkg.com/@theme-toggles/react/css/Around.css" />
   <script>
-    tailwind = {
-      config: {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              display: ['Space Grotesk', 'sans-serif'],
-              body: ['Manrope', 'sans-serif']
-            },
-            colors: {
-              brand: {
-                50: '#eef7ff',
-                100: '#d9ecff',
-                200: '#b5d8ff',
-                300: '#87bfff',
-                400: '#5aa2ff',
-                500: '#3b82f6',
-                600: '#2563eb',
-                700: '#1d4ed8',
-                800: '#1e40af',
-                900: '#1e3a8a'
-              }
-            },
-            boxShadow: {
-              soft: '0 20px 40px -30px rgba(15, 23, 42, 0.5)',
-              glow: '0 0 0 1px rgba(148, 163, 184, 0.2), 0 20px 60px -30px rgba(59, 130, 246, 0.55)'
-            },
-            keyframes: {
-              float: {
-                '0%, 100%': { transform: 'translateY(0px)' },
-                '50%': { transform: 'translateY(-8px)' }
-              },
-              fadeUp: {
-                '0%': { opacity: '0', transform: 'translateY(18px)' },
-                '100%': { opacity: '1', transform: 'translateY(0)' }
-              }
-            },
-            animation: {
-              float: 'float 6s ease-in-out infinite',
-              fadeUp: 'fadeUp 0.7s ease-out both'
-            }
-          }
+    tailwind = { config: { darkMode: 'class' } }
+  </script>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script>
+    // Initialize theme immediately to prevent flash
+    (function() {
+      const storageKey = 'theme-preference';
+      const getColorPreference = () => {
+        if (localStorage.getItem(storageKey)) {
+          return localStorage.getItem(storageKey);
         }
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      };
+      
+      const theme = getColorPreference();
+      document.documentElement.setAttribute('data-theme', theme);
+      if (theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    })();
+  </script>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap");
+    .bar1, .bar2, .bar3 {
+      width: 24px;
+      height: 2.5px;
+      background-color: #111518;
+      margin: 4px auto;
+      border-radius: 9999px;
+      transform-origin: center;
+      transition: transform 0.3s ease, opacity 0.25s ease, background-color 0.25s ease, width 0.25s ease;
+    }
+    .bar2 {
+      width: 18px;
+    }
+    #mobile-nav {
+      display: none;
+      position: relative;
+      margin-left: auto;
+      z-index: 30;
+    }
+    #hamburger-icon {
+      margin: auto 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 10px 8px;
+      border-radius: 9999px;
+      border: 1px solid rgba(17, 21, 24, 0.12);
+      background: rgba(255, 255, 255, 0.85);
+      box-shadow: 0 8px 24px rgba(17, 21, 24, 0.08);
+      transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
+    }
+    #hamburger-icon:hover,
+    #hamburger-icon:focus-visible {
+      background: rgba(234, 237, 241, 0.98);
+      border-color: rgba(37, 99, 235, 0.22);
+      box-shadow: 0 10px 28px rgba(37, 99, 235, 0.14);
+      outline: none;
+    }
+    #hamburger-icon:active {
+      transform: scale(0.97);
+    }
+    #mobile-nav.open #hamburger-icon {
+      background: rgba(31, 59, 87, 0.08);
+      border-color: rgba(31, 59, 87, 0.18);
+      box-shadow: 0 12px 30px rgba(17, 21, 24, 0.12);
+    }
+    #mobile-nav.open .bar1 {
+      -webkit-transform: translateY(6.5px) rotate(-45deg);
+      transform: translateY(6.5px) rotate(-45deg);
+      width: 24px;
+    }
+    #mobile-nav.open .bar2 {
+      opacity: 0;
+      width: 24px;
+    }
+    #mobile-nav.open .bar3 {
+      -webkit-transform: translateY(-6.5px) rotate(45deg);
+      transform: translateY(-6.5px) rotate(45deg);
+      width: 24px;
+    }
+    #mobile-nav .mobile-menu {
+      display: none;
+      position: absolute;
+      top: 68px;
+      left: 12px;
+      right: 12px;
+      height: calc(100vh - 88px);
+      width: auto;
+      background: #fff;
+      color: #111518;
+      border-radius: 24px;
+      border: 1px solid rgba(17, 21, 24, 0.08);
+      box-shadow: 0 24px 60px rgba(17, 21, 24, 0.18);
+      padding: 20px 18px 28px;
+      transition: background 0.3s, color 0.3s;
+    }
+    #mobile-nav.open .mobile-menu {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      background: #fff;
+      color: #111518;
+    }
+    .mobile-menu li {
+      margin-bottom: 8px;
+    }
+    .mobile-menu a {
+      display: block;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      font-weight: 600;
+      transition: color 0.3s, background 0.3s;
+    }
+    .mobile-menu a:hover,
+    .mobile-menu a:focus-visible {
+      background: #eaedf1;
+      color: #2563eb !important;
+      outline: none;
+    }
+    html[data-theme="dark"] #hamburger-icon {
+      background: rgba(24, 24, 27, 0.95);
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+    }
+    html[data-theme="dark"] #hamburger-icon:hover,
+    html[data-theme="dark"] #hamburger-icon:focus-visible {
+      background: rgba(39, 39, 42, 0.98);
+      border-color: rgba(96, 165, 250, 0.26);
+    }
+    html[data-theme="dark"] #mobile-nav.open #hamburger-icon {
+      background: rgba(39, 39, 42, 1);
+    }
+    html[data-theme="dark"] #mobile-nav .mobile-menu {
+      background: #18181b !important;
+      color: #fff !important;
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    }
+    html[data-theme="dark"] #mobile-nav.open .mobile-menu {
+      background: #18181b !important;
+      color: #fff !important;
+    }
+    html[data-theme="dark"] .mobile-menu a {
+      color: #fff !important;
+    }
+    html[data-theme="dark"] .mobile-menu a:hover,
+    html[data-theme="dark"] .mobile-menu a:focus-visible {
+      background: #27272a !important;
+      color: #60a5fa !important;
+    }
+    html[data-theme="light"] .bar1,
+    html[data-theme="light"] .bar2,
+    html[data-theme="light"] .bar3 {
+      background-color: #111518 !important;
+    }
+    html[data-theme="dark"] .bar1,
+    html[data-theme="dark"] .bar2,
+    html[data-theme="dark"] .bar3 {
+      background-color: #ffffff !important;
+    }
+    @media only screen and (max-width: 640px) {
+      header nav.desktop-nav {
+        display: none;
+      }
+      #mobile-nav {
+        display: block;
       }
     }
-  </script>
-  <script>
-    document.documentElement.classList.remove('dark');
-    document.documentElement.removeAttribute('data-theme');
-  </script>
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries,typography"></script>
+    @media only screen and (min-width: 641px) {
+      #mobile-nav {
+        display: none !important;
+      }
+      nav.desktop-nav {
+        display: block !important;
+      }
+    }
+    /* Form transitions */
+    form input, form textarea, form select {
+      transition: background 0.3s, color 0.3s, border-color 0.3s;
+    }
+    form input:focus, form textarea:focus, form select:focus {
+      outline: none;
+      border-color: #2563eb;
+      background: #f3f4f6;
+      color: #111518;
+    }
+    @media (prefers-color-scheme: dark) {
+      form input, form textarea, form select {
+        background: #18181b;
+        color: #fff;
+        border-color: #27272a;
+      }
+      form input:focus, form textarea:focus, form select:focus {
+        background: #27272a;
+        color: #fff;
+        border-color: #2563eb;
+      }
+    }
+    /* Theme Toggle Styles - Sun to Moon transformation */
+    .theme-toggle {
+      --icon-fill: #111518;
+      --icon-fill-hover: #2563eb;
+      cursor: pointer;
+      display: inline-block;
+      position: relative;
+    }
+    
+    [data-theme="dark"] .theme-toggle {
+      --icon-fill: #ffffff;
+      --icon-fill-hover: #60a5fa;
+    }
+    
+    .theme-toggle svg {
+      fill: var(--icon-fill);
+      transition: fill 0.3s ease;
+    }
+    
+    .theme-toggle:hover svg {
+      fill: var(--icon-fill-hover);
+    }
+    
+    /* Sun to Moon Animation */
+    .theme-toggle .sun {
+      transition: all 0.5s ease;
+    }
+    
+    .theme-toggle .sun-beams {
+      transition: all 0.5s ease;
+    }
+    
+    .theme-toggle .moon {
+      transition: all 0.5s ease;
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    
+    /* Dark mode: Hide sun, show moon */
+    [data-theme="dark"] .theme-toggle .sun {
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    
+    [data-theme="dark"] .theme-toggle .sun-beams {
+      opacity: 0;
+      transform: rotate(45deg);
+    }
+    
+    [data-theme="dark"] .theme-toggle .moon {
+      opacity: 1;
+      transform: scale(1);
+    }
+    
+    /* Screen reader text */
+    .theme-toggle-sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    
+    /* Simple transitions for the new SVG */
+    .theme-toggle svg circle,
+    .theme-toggle svg g {
+      transition: all 0.3s ease;
+    }
+    
+    /* Hide/show elements based on theme */
+    [data-theme="dark"] .sun-and-moon > .sun { 
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    
+    [data-theme="dark"] .sun-and-moon > .sun-beams { 
+      opacity: 0;
+    }
+    
+    [data-theme="dark"] .sun-and-moon > .moon { 
+      opacity: 1;
+      transform: scale(1);
+    }
+    
+    [data-theme="light"] .sun-and-moon > .moon { 
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    
+    /* Transitions */
+    .sun-and-moon > .sun,
+    .sun-and-moon > .moon,
+    .sun-and-moon > .sun-beams {
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    
+    /* Force override browser dark mode settings */
+    html[data-theme="light"] {
+      background-color: #f5f5f5 !important;
+      color: #111518 !important;
+    }
+    
+    html[data-theme="light"] body {
+      background-color: #f5f5f5 !important;
+      color: #111518 !important;
+    }
+    
+    html[data-theme="light"] .bg-neutral-100 {
+      background-color: #f5f5f5 !important;
+    }
+    
+    html[data-theme="light"] .bg-neutral-950 {
+      background-color: #f5f5f5 !important;
+    }
+
+    html[data-theme="light"] .text-\[\#111518\] {
+      color: #111518 !important;
+    }
+
+    html[data-theme="dark"] {
+      background-color: #0a0a0a !important;
+      color: #ffffff !important;
+    }
+    
+    html[data-theme="dark"] body {
+      background-color: #0a0a0a !important;
+      color: #ffffff !important;
+    }
+    
+    html[data-theme="dark"] .bg-neutral-100 {
+      background-color: #0a0a0a !important;
+    }
+    
+    html[data-theme="dark"] .bg-neutral-950 {
+      background-color: #0a0a0a !important;
+    }
+
+    html[data-theme="dark"] .text-\[\#111518\] {
+      color: #ffffff !important;
+    }
+
+    /* Force override for all elements */
+    html[data-theme="light"] * {
+      background-color: inherit !important;
+      color: inherit !important;
+    }
+    
+    html[data-theme="dark"] * {
+      background-color: inherit !important;
+      color: inherit !important;
+    }
+  </style>
+  <!-- PWA manifest: always served at /manifest.webmanifest and /manifest.json for compatibility -->
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#0f172a">
+  <meta name="theme-color" content="#111518">
   <link rel="apple-touch-icon" sizes="192x192" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
   <link rel="apple-touch-icon" sizes="384x384" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
   <link rel="apple-touch-icon" sizes="512x512" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
@@ -67,132 +379,235 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
-<body class="min-h-full font-body text-slate-900 bg-slate-50 dark:bg-slate-950">
-  <div class="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
-    <div class="absolute -top-24 left-10 h-72 w-72 rounded-full bg-blue-200/50 blur-3xl dark:bg-blue-500/20"></div>
-    <div class="absolute top-32 right-10 h-80 w-80 rounded-full bg-amber-200/50 blur-3xl dark:bg-amber-500/10"></div>
-    <div class="absolute bottom-10 left-1/3 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl dark:bg-emerald-500/10"></div>
-  </div>
-  <div class="flex min-h-screen flex-col">
-    <header class="sticky top-0 z-40 border-b border-slate-200/70 bg-white/80 backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
-      <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-        <div class="flex h-16 items-center gap-4">
-          <a href="{{ url_for('home') }}" class="group flex items-center gap-3 font-display text-lg font-semibold text-slate-900 dark:text-white">
-            <span class="grid h-9 w-9 place-items-center rounded-2xl bg-brand-600 text-white shadow-soft group-hover:shadow-glow transition">
-              <svg viewBox="0 0 48 48" fill="none" class="h-5 w-5">
-                <g clip-path="url(#clip0_6_535)">
-                  <path fill-rule="evenodd" clip-rule="evenodd" d="M47.2426 24L24 47.2426L0.757355 24L24 0.757355L47.2426 24ZM12.2426 21H35.7574L24 9.24264L12.2426 21Z" fill="currentColor"></path>
-                </g>
-                <defs>
-                  <clipPath id="clip0_6_535"><rect width="48" height="48" fill="white"/></clipPath>
-                </defs>
-              </svg>
-            </span>
-            <span class="tracking-tight">Somewheria</span>
-          </a>
-          <nav class="hidden lg:flex flex-1 items-center justify-center" aria-label="Main navigation">
-            <ul class="flex items-center gap-2">
-              <li><a href="{{ url_for('home') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Home</a></li>
-              <li><a href="{{ url_for('for_rent') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">For Rent</a></li>
-              <li><a href="{{ url_for('about') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">About</a></li>
-              <li><a href="{{ url_for('contact') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Contact</a></li>
-              <li><a href="{{ url_for('register') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Register</a></li>
-              {% if session.get('user') %}
-                <li><a href="{{ url_for('manage_listings') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Manage Listings</a></li>
-                {% set role = session.get('user', {}).get('role', '') %}
-                {% if role in ['renter', 'admin', 'high_admin'] %}
-                  <li><a href="{{ url_for('renter_dashboard') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Renter Portal</a></li>
-                {% endif %}
-                {% if role == 'high_admin' %}
-                  <li><a href="{{ url_for('admin_dashboard_combined') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Admin</a></li>
-                {% endif %}
-              {% else %}
-                <li><a href="{{ url_for('login') }}" class="rounded-full px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-900/5 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-white/10">Login</a></li>
-              {% endif %}
-            </ul>
-          </nav>
-          <div class="ml-auto flex items-center gap-3">
-            {% if session.get('user') %}
-            <div class="hidden sm:flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/70 px-3 py-1 text-sm text-slate-600 shadow-soft dark:border-slate-800/60 dark:bg-slate-900/70 dark:text-slate-200">
-              {% if session.get('user', {}).get('picture') %}
-                <img src="{{ session.get('user', {}).get('picture') }}" alt="Profile" class="h-7 w-7 rounded-full object-cover">
-              {% endif %}
-              <span>{{ session.get('user', {}).get('name', 'User') }}</span>
-            </div>
-            <a href="{{ url_for('logout') }}" class="hidden sm:inline-flex items-center rounded-full border border-transparent bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-800 dark:bg-white dark:text-slate-900">Logout</a>
-            {% endif %}
-            <button id="mobile-menu-button" type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200/70 bg-white/80 text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-900/80 dark:text-slate-200 lg:hidden" aria-expanded="false" aria-controls="mobile-menu">
-              <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-                <path d="M4 6h16"></path>
-                <path d="M4 12h16"></path>
-                <path d="M4 18h16"></path>
-              </svg>
-            </button>
-          </div>
+<body style='font-family:"Plus Jakarta Sans","Noto Sans",sans-serif;'>
+<div class="relative flex min-h-screen flex-col group/design-root overflow-x-hidden bg-neutral-100 dark:bg-neutral-950">
+  <div class="layout-container flex h-full grow flex-col">
+    <header class="flex items-center justify-between border-b px-4 sm:px-6 lg:px-10 py-3 w-full bg-neutral-100 dark:bg-neutral-900" style="position:relative;">
+      <a id="brand" href="{{ url_for('home') }}" class="flex items-center gap-4 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 rounded">
+        <div class="size-4">
+          <svg viewBox="0 0 48 48" fill="none"><g clip-path="url(#clip0_6_535)">
+          <path fill-rule="evenodd" clip-rule="evenodd"
+            d="M47.2426 24L24 47.2426L0.757355 24L24 0.757355L47.2426 24ZM12.2426 21H35.7574L24 9.24264L12.2426 21Z"
+            fill="currentColor"></path></g>
+            <defs><clipPath id="clip0_6_535"><rect width="48" height="48" fill="white"/></clipPath></defs>
+          </svg>
         </div>
-      </div>
-      <div id="mobile-menu" class="hidden border-t border-slate-200/70 bg-white/95 px-4 py-4 dark:border-slate-800/60 dark:bg-slate-950/95 lg:hidden">
-        <nav class="mx-auto max-w-6xl" aria-label="Mobile navigation">
-          <ul class="grid gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
-            <li><a href="{{ url_for('home') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Home</a></li>
-            <li><a href="{{ url_for('for_rent') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">For Rent</a></li>
-            <li><a href="{{ url_for('about') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">About</a></li>
-            <li><a href="{{ url_for('contact') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Contact</a></li>
-            <li><a href="{{ url_for('register') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Register</a></li>
+      </a>
+      <nav class="desktop-nav flex-1 hidden sm:block" aria-label="Main navigation">
+        <ul class="flex items-center gap-6 justify-center w-full">
+          <li><a href="{{ url_for('home') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Home</a></li>
+          <li><a href="{{ url_for('for_rent') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">For Rent</a></li>
+          <li><a href="{{ url_for('about') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">About Us</a></li>
+          <li><a href="{{ url_for('contact') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Contact Us</a></li>
+          <li><a href="{{ url_for('register') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Register</a></li>
+          {% if session.get('user') %}
+            <li><a href="{{ url_for('manage_listings') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Manage Listings</a></li>
+            {% set role = session.get('user', {}).get('role', '') %}
+            {% if role in ['renter', 'admin', 'high_admin'] %}
+              <li><a href="{{ url_for('renter_dashboard') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Renter Dashboard</a></li>
+            {% endif %}
+            {% if role in ['admin', 'high_admin'] %}
+              <li><a href="{{ url_for('admin_status') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Status</a></li>
+            {% endif %}
+            {% if role == 'high_admin' %}
+              <li><a href="{{ url_for('admin_dashboard_combined') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Admin Panel</a></li>
+            {% endif %}
+            <li class="flex items-center gap-2">
+              {% if session.get('user', {}).get('picture') %}
+                <img src="{{ session.get('user', {}).get('picture') }}" alt="Profile" class="w-6 h-6 rounded-full">
+              {% endif %}
+              <span class="text-[#111518] dark:text-white text-sm">{{ session.get('user', {}).get('name', 'User') }}</span>
+            </li>
+            <li><a href="{{ url_for('logout') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-red-600 dark:hover:text-red-400 px-3 py-2">Logout</a></li>
+          {% else %}
+            <li><a href="{{ url_for('login') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Login</a></li>
+          {% endif %}
+        </ul>
+      </nav>
+      <div class="flex flex-1 justify-end items-center">
+        <!-- Theme Toggle Button -->
+        <div class="theme-toggle mr-2" id="theme-toggle" title="Toggle theme">
+          <span class="theme-toggle-sr">Toggle theme</span>
+          <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="24" height="24" fill="currentColor" class="theme-toggle__around" viewBox="0 0 32 32">
+            <!-- Sun circle -->
+            <circle class="sun" cx="16" cy="16" r="8" />
+            <!-- Sun beams -->
+            <g class="sun-beams" stroke="currentColor" stroke-width="2" fill="none">
+              <line x1="16" y1="2" x2="16" y2="4" />
+              <line x1="16" y1="28" x2="16" y2="30" />
+              <line x1="2" y1="16" x2="4" y2="16" />
+              <line x1="28" y1="16" x2="30" y2="16" />
+              <line x1="5.66" y1="5.66" x2="7.07" y2="7.07" />
+              <line x1="24.93" y1="24.93" x2="26.34" y2="26.34" />
+              <line x1="5.66" y1="26.34" x2="7.07" y2="24.93" />
+              <line x1="24.93" y1="7.07" x2="26.34" y2="5.66" />
+            </g>
+            <!-- Moon (hidden by default) -->
+            <circle class="moon" cx="20" cy="12" r="6" />
+          </svg>
+        </div>
+        <div id="mobile-nav">
+          <button id="hamburger-icon" type="button" onclick="toggleMobileMenu(event)" aria-label="Open menu" aria-controls="mobile-menu" aria-expanded="false">
+          <div class="bar1"></div>
+          <div class="bar2"></div>
+          <div class="bar3"></div>
+          </button>
+          <ul id="mobile-menu" class="mobile-menu bg-white text-[#111518] dark:bg-neutral-900 dark:text-white" onclick="event.stopPropagation()">
+            <li><a href="{{ url_for('home') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Home</a></li>
+            <li><a href="{{ url_for('for_rent') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">For Rent</a></li>
+            <li><a href="{{ url_for('about') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">About Us</a></li>
+            <li><a href="{{ url_for('contact') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Contact Us</a></li>
+            <li><a href="{{ url_for('register') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Register</a></li>
             {% if session.get('user') %}
-              <li><a href="{{ url_for('manage_listings') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Manage Listings</a></li>
+              <li><a href="{{ url_for('manage_listings') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Manage Listings</a></li>
               {% set role = session.get('user', {}).get('role', '') %}
               {% if role in ['renter', 'admin', 'high_admin'] %}
-                <li><a href="{{ url_for('renter_dashboard') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Renter Portal</a></li>
+                <li><a href="{{ url_for('renter_dashboard') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
+              {% endif %}
+              {% if role in ['admin', 'high_admin'] %}
+                <li><a href="{{ url_for('admin_status') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Status</a></li>
               {% endif %}
               {% if role == 'high_admin' %}
-                <li><a href="{{ url_for('admin_dashboard_combined') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Admin</a></li>
+                <li><a href="{{ url_for('admin_dashboard_combined') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Admin Panel</a></li>
               {% endif %}
-              <li><a href="{{ url_for('logout') }}" class="block rounded-xl px-4 py-2 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">Logout</a></li>
+              <li class="flex items-center gap-2 justify-center py-2">
+                {% if session.get('user', {}).get('picture') %}
+                  <img src="{{ session.get('user', {}).get('picture') }}" alt="Profile" class="w-6 h-6 rounded-full">
+                {% endif %}
+                <span class="text-[#111518] dark:text-white text-sm">{{ session.get('user', {}).get('name', 'User') }}</span>
+              </li>
+              <li><a href="{{ url_for('logout') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Logout</a></li>
             {% else %}
-              <li><a href="{{ url_for('login') }}" class="block rounded-xl px-4 py-2 hover:bg-slate-900/5 dark:hover:bg-white/10">Login</a></li>
+              <li><a href="{{ url_for('login') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Login</a></li>
             {% endif %}
           </ul>
-        </nav>
+        </div>
       </div>
     </header>
-    <main class="mx-auto flex-1 max-w-6xl px-4 sm:px-6 lg:px-8 py-10">
-      {% block content %}{% endblock %}
-    </main>
-    <footer class="border-t border-slate-200/70 bg-white/80 backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
-      <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-8">
-        <div class="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p class="text-sm font-semibold text-slate-900 dark:text-white">Somewheria, LLC</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">&copy; 2024/25 All Rights Reserved.</p>
-          </div>
-          <div class="flex items-center gap-4 text-sm">
-            <a href="{{ url_for('privacy') }}" class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">Privacy</a>
-            <a href="{{ url_for('terms') }}" class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">Terms</a>
-            <a href="{{ url_for('report_issue_form') }}" class="text-brand-600 hover:text-brand-700 dark:text-brand-400">Report an issue</a>
-          </div>
-        </div>
+    <script>
+      function toggleMobileMenu(event) {
+        event.stopPropagation();
+        const mobileNav = document.getElementById('mobile-nav');
+        const menuButton = document.getElementById('hamburger-icon');
+        const isOpen = mobileNav.classList.toggle('open');
+        menuButton.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      }
+
+      function closeMobileMenu() {
+        const mobileNav = document.getElementById('mobile-nav');
+        const menuButton = document.getElementById('hamburger-icon');
+
+        if (!mobileNav || !menuButton) {
+          return;
+        }
+
+        mobileNav.classList.remove('open');
+        menuButton.setAttribute('aria-expanded', 'false');
+      }
+
+      document.addEventListener('click', function(event) {
+        const mobileNav = document.getElementById('mobile-nav');
+
+        if (mobileNav && !mobileNav.contains(event.target)) {
+          closeMobileMenu();
+        }
+      });
+
+      document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+          closeMobileMenu();
+        }
+      });
+    </script>
+    <main class="flex-1 bg-neutral-100 text-[#111518] dark:bg-neutral-950 dark:text-white">{% block content %}{% endblock %}</main>
+    <footer class="py-5 text-center bg-gray-100 text-gray-600 dark:bg-neutral-900 dark:text-gray-300">
+      <p class="mb-2">&copy; 2024/26 Somewheria, LLC. All Rights Reserved.</p>
+      <div>
+        <a href="{{ url_for('report_issue_form') }}" class="text-blue-600 dark:text-blue-400 underline text-sm">Report an issue</a>
       </div>
     </footer>
   </div>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('/service-worker.js').catch(function(err) {
-          console.log('SW registration failed', err);
-        });
+</div>
+<script>
+  // Attach CSRF header to all same-origin fetch() POSTs.
+  (function () {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    var token = meta ? meta.getAttribute('content') : '';
+    if (!token || !window.fetch) { return; }
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function (resource, init) {
+      init = init || {};
+      var method = (init.method || (resource && resource.method) || 'GET').toUpperCase();
+      if (['GET', 'HEAD', 'OPTIONS', 'TRACE'].indexOf(method) === -1) {
+        var headers = new Headers(init.headers || {});
+        if (!headers.has('X-CSRF-Token')) {
+          headers.set('X-CSRF-Token', token);
+        }
+        init.headers = headers;
+        if (init.credentials === undefined) {
+          init.credentials = 'same-origin';
+        }
+      }
+      return origFetch(resource, init);
+    };
+  })();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/service-worker.js').catch(function(err){
+        console.log('SW registration failed', err);
       });
+    });
+  }
+</script>
+<!-- Fixed Theme Toggle JavaScript -->
+<script>
+  const storageKey = 'theme-preference';
+  
+  const getColorPreference = () => {
+    if (localStorage.getItem(storageKey)) {
+      return localStorage.getItem(storageKey);
     }
-  </script>
-  <script>
-    const menuBtn = document.querySelector('#mobile-menu-button');
-    const menu = document.querySelector('#mobile-menu');
-    if (menuBtn && menu) {
-      menuBtn.addEventListener('click', () => {
-        const isOpen = menu.classList.toggle('hidden');
-        menuBtn.setAttribute('aria-expanded', (!isOpen).toString());
-      });
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  };
+  
+  const setPreference = (theme) => {
+    localStorage.setItem(storageKey, theme);
+    document.documentElement.setAttribute('data-theme', theme);
+    document.querySelector('#theme-toggle')?.setAttribute('aria-label', theme);
+    
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
     }
-  </script>
+  };
+  
+  const onClick = () => {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    setPreference(newTheme);
+  };
+  
+  // Initialize theme
+  const initialTheme = getColorPreference();
+  setPreference(initialTheme);
+  
+  // Add click listener
+  document.addEventListener('DOMContentLoaded', () => {
+    const toggleBtn = document.querySelector('#theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', onClick);
+    }
+  });
+  
+  // Listen for system theme changes
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ({matches: isDark}) => {
+    if (!localStorage.getItem(storageKey)) {
+      setPreference(isDark ? 'dark' : 'light');
+    }
+  });
+</script>
 </body>
 </html>
+

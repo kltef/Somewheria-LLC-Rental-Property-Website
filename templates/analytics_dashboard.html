@@ -1,56 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="space-y-6">
-  <div class="rounded-3xl border border-slate-200/70 bg-white/80 p-8 shadow-soft backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
-    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-brand-600">Analytics</p>
-    <h1 class="mt-3 font-display text-3xl font-semibold text-slate-900 dark:text-white">Site analytics</h1>
-    <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Welcome, {{ user.name or user.email }} (High-Level Admin)</p>
+<div class="max-w-3xl mx-auto py-10 px-4 bg-white dark:bg-neutral-950 rounded shadow">
+  <h1 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white">Site Analytics</h1>
+  <div class="mb-6 text-gray-700 dark:text-gray-300">
+    Welcome, {{ user.name or user.email }}! (High-Level Admin)
   </div>
-
-  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-5 text-sm shadow-soft dark:border-slate-800/60 dark:bg-slate-900/60">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Site Visits</div>
-      <div class="mt-3 text-3xl font-semibold text-brand-600">{{ metrics.site_visits }}</div>
+  <div class="grid grid-cols-2 gap-6 mb-8">
+    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
+      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.site_visits }}</div>
+      <div class="text-gray-500 dark:text-gray-400">Site Visits</div>
     </div>
-    <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-5 text-sm shadow-soft dark:border-slate-800/60 dark:bg-slate-900/60">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Unique Users</div>
-      <div class="mt-3 text-3xl font-semibold text-brand-600">{{ metrics.unique_users }}</div>
+    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
+      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.unique_users }}</div>
+      <div class="text-gray-500 dark:text-gray-400">Unique Users</div>
     </div>
-    <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-5 text-sm shadow-soft dark:border-slate-800/60 dark:bg-slate-900/60">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Properties Listed</div>
-      <div class="mt-3 text-3xl font-semibold text-brand-600">{{ metrics.properties_listed }}</div>
+    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
+      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.properties_listed }}</div>
+      <div class="text-gray-500 dark:text-gray-400">Properties Listed</div>
     </div>
-    <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-5 text-sm shadow-soft dark:border-slate-800/60 dark:bg-slate-900/60">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Logins Today</div>
-      <div class="mt-3 text-3xl font-semibold text-brand-600">{{ metrics.logins_today }}</div>
+    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
+      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.logins_today }}</div>
+      <div class="text-gray-500 dark:text-gray-400">Logins Today</div>
     </div>
-    <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-5 text-sm shadow-soft dark:border-slate-800/60 dark:bg-slate-900/60">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Errors (24h)</div>
-      <div class="mt-3 text-3xl font-semibold text-red-600">{{ metrics.errors_last_24h }}</div>
+    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
+      <div class="text-3xl font-bold text-red-600 dark:text-red-400">{{ metrics.errors_last_24h }}</div>
+      <div class="text-gray-500 dark:text-gray-400">Errors (24h)</div>
     </div>
   </div>
-
-  <div class="rounded-3xl border border-slate-200/70 bg-white/80 p-8 shadow-soft backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
-    <h2 class="font-display text-xl font-semibold text-slate-900 dark:text-white">Traffic & usage charts</h2>
-    <div id="analytics-charts" class="mt-6 space-y-8">
-      <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-4 shadow-sm dark:border-slate-800/60 dark:bg-slate-900/60">
-        <div class="font-semibold text-slate-900 dark:text-white">Site Visits (7 days)</div>
-        <div id="visits-chart" class="mt-3" style="height:300px;"></div>
+  <div class="bg-white dark:bg-neutral-900 rounded shadow p-6">
+    <h2 class="text-lg font-semibold mb-4">Traffic & Usage Charts</h2>
+    <div id="analytics-charts" class="space-y-8">
+      <div>
+        <div class="font-semibold mb-2">Site Visits (7 days)</div>
+        <div id="visits-chart" style="height:300px;"></div>
       </div>
-      <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-4 shadow-sm dark:border-slate-800/60 dark:bg-slate-900/60">
-        <div class="font-semibold text-slate-900 dark:text-white">Logins & Unique Users (7 days)</div>
-        <div id="logins-users-chart" class="mt-3" style="height:300px;"></div>
+      <div>
+        <div class="font-semibold mb-2">Logins & Unique Users (7 days)</div>
+        <div id="logins-users-chart" style="height:300px;"></div>
       </div>
-      <div class="rounded-2xl border border-slate-200/60 bg-white/70 p-4 shadow-sm dark:border-slate-800/60 dark:bg-slate-900/60">
-        <div class="font-semibold text-slate-900 dark:text-white">Errors (7 days)</div>
-        <div id="errors-chart" class="mt-3" style="height:300px;"></div>
+      <div>
+        <div class="font-semibold mb-2">Errors (7 days)</div>
+        <div id="errors-chart" style="height:300px;"></div>
       </div>
     </div>
   </div>
-</section>
+</div>
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <script>
 const chartData = {{ chart_data|tojson }};
+// Visits
 Plotly.newPlot('visits-chart', [{
   x: chartData.days,
   y: chartData.visits,
@@ -62,6 +60,7 @@ Plotly.newPlot('visits-chart', [{
   yaxis: {title: 'Visits'},
   xaxis: {title: 'Date'}
 });
+// Logins & Unique Users
 Plotly.newPlot('logins-users-chart', [
   {
     x: chartData.days,
@@ -77,13 +76,14 @@ Plotly.newPlot('logins-users-chart', [
     type: 'scatter',
     mode: 'lines+markers',
     name: 'Unique Users',
-    line: {color: '#f59e0b'}
+    line: {color: '#f59e42'}
   }
 ], {
   margin: {t: 30},
   yaxis: {title: 'Count'},
   xaxis: {title: 'Date'}
 });
+// Errors
 Plotly.newPlot('errors-chart', [{
   x: chartData.days,
   y: chartData.errors,

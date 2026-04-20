@@ -1,35 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="mx-auto max-w-2xl space-y-6">
-  <div class="rounded-3xl border border-slate-200/70 bg-white/80 p-8 text-center shadow-soft backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
-    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-brand-600">Support</p>
-    <h1 class="mt-3 font-display text-3xl font-semibold text-slate-900 dark:text-white">Report an issue</h1>
-    <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Tell us what's wrong and we'll take care of it quickly.</p>
-  </div>
-
+<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-10 max-w-full sm:max-w-2xl mx-auto">
+  <h2 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white text-center drop-shadow-lg">Report an Issue</h2>
   {% if confirmation %}
-  <div class="rounded-3xl border border-emerald-200/80 bg-emerald-50/80 p-6 text-sm text-emerald-700 shadow-soft dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
-    <div class="font-semibold">Thank you {{ name }}, your report has been submitted!</div>
-    <div class="mt-4 text-slate-700 dark:text-slate-200">
-      <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Submitted description</div>
-      <div class="mt-2 rounded-2xl border border-emerald-200/60 bg-white/80 px-4 py-3 text-sm text-slate-700 dark:border-emerald-500/20 dark:bg-slate-900/60 dark:text-slate-200">{{ desc }}</div>
-    </div>
+  <div class="bg-green-100 text-green-800 font-bold px-6 py-5 rounded mb-8 text-center">
+    Thank you {{ name }}, your report has been submitted!
+  </div>
+  <div class="text-gray-800 mb-6">
+    <div><strong>Submitted Description:</strong></div>
+    <div class="bg-gray-50 border px-4 py-2 rounded mt-2 mb-4">{{ desc }}</div>
   </div>
   {% endif %}
-
-  <form action="{{ url_for('report_issue') }}" method="POST" class="rounded-3xl border border-slate-200/70 bg-white/80 p-8 shadow-soft backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
+  <form action="{{ url_for('report_issue') }}" method="POST" class="bg-white dark:bg-neutral-900 rounded shadow p-6">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <div class="grid gap-4">
-      <label class="text-sm font-semibold text-slate-700 dark:text-slate-200">
-        Your Name
-        <input type="text" id="name" name="name" required class="mt-2 w-full rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-slate-900 shadow-sm focus:border-brand-500 focus:ring-brand-500 dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-white" />
-      </label>
-      <label class="text-sm font-semibold text-slate-700 dark:text-slate-200">
-        Issue Description
-        <textarea id="description" name="description" rows="5" required class="mt-2 w-full rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-slate-900 shadow-sm focus:border-brand-500 focus:ring-brand-500 dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-white"></textarea>
-      </label>
-      <button type="submit" class="mt-2 inline-flex items-center justify-center rounded-full bg-brand-600 px-6 py-3 text-sm font-semibold text-white shadow-soft transition hover:-translate-y-0.5 hover:bg-brand-700">Submit issue</button>
+    <div class="mb-4">
+      <label for="name" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Your Name</label>
+      <input type="text" id="name" name="name" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
     </div>
+    <div class="mb-4">
+      <label for="description" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Issue Description</label>
+      <textarea id="description" name="description" rows="5" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"></textarea>
+    </div>
+    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold shadow">Submit Issue</button>
   </form>
-</section>
+</div>
 {% endblock %}

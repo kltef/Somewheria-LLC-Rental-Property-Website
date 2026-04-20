@@ -1,0 +1,9 @@
+{% extends "error_base.html" %}
+{% set error_code = "503" %}
+{% set error_title = "Google Sign-In Isn't Ready Yet" %}
+{% set error_message = "Google OAuth is not configured on this server right now, so Google sign-in cannot be used yet." %}
+{% set primary_label = "Back To Login" %}
+{% set primary_href = url_for('login') %}
+{% set secondary_label = "Return Home" %}
+{% set secondary_href = url_for('home') %}
+{% set house_note = "The rental office is open, but the Google sign-in key has not been hung by the front door yet. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to turn this back on." %}

@@ -1,36 +1,31 @@
-# Secrets — never commit real values
-.env
-.env.*
-!.env.example
+# Python cache
+__pycache__/
+*.py[cod]
 
-# Runtime / logs
-*.log
+# Test and coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Local environment and machine-specific files
+.env
+.venv/
+venv/
+
+# App runtime artifacts
 application.log
 site_changes.log
 
-# User / runtime data
-renter_profiles.json
+# Local data files
 pending_registrations.json
-user_roles.json
+renter_profiles.json
 renter_contracts.json
+user_roles.json
 
-# User uploads
+# Local uploaded files
 static/uploads/
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.venv/
-venv/
-env/
-
-# Node
-node_modules/
-
-# OS / editor
+# OS/editor noise
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
