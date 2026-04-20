@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import base64
 import secrets
@@ -9,7 +10,9 @@ import json
 from io import BytesIO
 from PIL import Image, ImageOps
 from email.message import EmailMessage
-from flask import Flask, jsonify, render_template_string, request, g, url_for, redirect, session, send_from_directory
+from datetime import timedelta
+from flask import Flask, jsonify, render_template_string, request, g, url_for, redirect, session, send_from_directory, abort
+from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import Flow
 from google.oauth2 import id_token
@@ -20,6 +23,16 @@ import threading
 load_dotenv()
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(32))
+
+# Session / cookie hardening
+_is_production = os.getenv('FLASK_ENV', 'production').lower() not in ('development', 'dev', 'local')
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=_is_production,
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 16MB upload cap
+)
 
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -41,8 +54,64 @@ unique_users = collections.defaultdict(set)  # {date_str: set(user_id)}
 logins = collections.defaultdict(int)  # {date_str: count}
 errors = collections.defaultdict(int)  # {date_str: count}
 
-# Disable HTTPS requirement for local development
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# Disable HTTPS requirement for local development ONLY
+if not _is_production:
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
+# --- CSRF protection (session-scoped, no external deps) ---
+CSRF_EXEMPT_ENDPOINTS = {'google_callback'}  # external redirect — state param handles CSRF
+
+def _generate_csrf_token():
+    token = session.get('_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['_csrf_token'] = token
+    return token
+
+@app.context_processor
+def _inject_csrf_token():
+    return {'csrf_token': _generate_csrf_token}
+
+@app.before_request
+def _csrf_protect():
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return
+    if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+        return
+    expected = session.get('_csrf_token')
+    received = (
+        request.form.get('_csrf_token')
+        or request.headers.get('X-CSRF-Token')
+        or request.headers.get('X-CSRFToken')
+    )
+    if not expected or not received or not secrets.compare_digest(str(expected), str(received)):
+        return "CSRF token missing or invalid", 400
+
+# --- Simple in-memory rate limiter for unauthenticated SMTP-abusable endpoints ---
+_rate_lock = threading.Lock()
+_rate_buckets = collections.defaultdict(list)  # {(endpoint, ip): [timestamps]}
+
+def rate_limit(max_requests, window_seconds):
+    """Decorator — limits per client IP per endpoint over a sliding window."""
+    from functools import wraps
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if request.method in ('GET', 'HEAD', 'OPTIONS'):
+                return f(*args, **kwargs)
+            ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()
+            key = (request.endpoint, ip)
+            now = time.time()
+            cutoff = now - window_seconds
+            with _rate_lock:
+                bucket = _rate_buckets[key]
+                bucket[:] = [t for t in bucket if t > cutoff]
+                if len(bucket) >= max_requests:
+                    return jsonify(success=False, error="Too many requests. Please try again later."), 429
+                bucket.append(now)
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 # User session management
 def is_logged_in():
@@ -173,7 +242,13 @@ def google_login():
 def google_callback():
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return "Google OAuth not configured", 500
-    
+
+    # Verify OAuth state (CSRF / login-fixation protection)
+    expected_state = session.pop('state', None)
+    received_state = request.args.get('state')
+    if not expected_state or not received_state or not secrets.compare_digest(expected_state, received_state):
+        return render_template("login.html", title="Login", error="Authentication failed: invalid state."), 400
+
     try:
         flow = Flow.from_client_config(
             {
@@ -185,11 +260,12 @@ def google_callback():
                     "redirect_uris": [GOOGLE_REDIRECT_URI]
                 }
             },
-            scopes=['openid', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email']
+            scopes=['openid', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
+            state=expected_state
         )
-        
+
         flow.redirect_uri = GOOGLE_REDIRECT_URI
-        
+
         authorization_response = request.url
         flow.fetch_token(authorization_response=authorization_response)
         
@@ -238,23 +314,17 @@ def logout():
 
 @app.route("/auth/status")
 def auth_status():
-    """Check authentication status - useful for debugging"""
+    """Check authentication status. Returns minimal info; requires login for details."""
     if is_logged_in():
         user = get_current_user()
         return jsonify({
             'authenticated': True,
             'user': {
-                'id': user['id'],
-                'email': user['email'],
-                'name': user['name'],
-                'picture': user.get('picture', '')
+                'name': user.get('name', ''),
+                'role': user.get('role', 'guest'),
             }
         })
-    else:
-        return jsonify({
-            'authenticated': False,
-            'user': None
-        })
+    return jsonify({'authenticated': False, 'user': None})
 
 # Route for Manage Listings page
 @app.route("/manage-listings")
@@ -345,14 +415,6 @@ def send_email(subject, body):
     msg['Subject'] = subject
     msg['From'] = sender_email
     msg['To'] = recipient_email
-    import socket
-    try:
-        hostname = socket.gethostname()
-        ip_addr = socket.gethostbyname(hostname)
-        server_url = f"http://{ip_addr}:5000"
-    except Exception:
-        server_url = "http://localhost:5000"
-    body += f"\nView application logs here: {server_url}/logs"
     msg.set_content(body)
     try:
         with smtplib.SMTP(smtp_server, port) as server:
@@ -421,6 +483,8 @@ SHELL = '''
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>{{ title or 'Somewheria, LLC.' }}</title>
+  <link rel="icon" href="/static/logo-light.ico" type="image/x-icon">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Noto+Sans:wght@400;500;700;900&family=Plus+Jakarta+Sans:wght@400;500;700;800"/>
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script>
@@ -616,7 +680,7 @@ import time
 # --- Caching logic ---
 properties_cache = []
 cache_lock = threading.Lock()
-CACHE_REFRESH_INTERVAL = 600  # seconds (10 minutes)
+CACHE_REFRESH_INTERVAL = 60  # seconds (1 minute)
 
 def preset_fetch_properties():
     global properties_cache
@@ -693,7 +757,6 @@ threading.Thread(target=periodic_cache_refresh, daemon=True).start()
 
 @app.route("/for-rent")
 def for_rent():
-    # Use cache only, never block for refresh
     with cache_lock:
         properties = list(properties_cache)
     return render_template("for_rent.html", properties=properties, title="For Rent")
@@ -701,6 +764,128 @@ def for_rent():
 @app.route("/for-rent.json")
 def for_rent_json():
     # Use cache only, never block for refresh
+    with cache_lock:
+        properties = list(properties_cache)
+    def make_serializable(prop):
+        out = dict(prop)
+        for k, v in out.items():
+            if isinstance(v, set):
+                out[k] = list(v)
+        return out
+    return jsonify([make_serializable(p) for p in properties])
+
+import threading
+
+@app.route("/for-rent-refresh.json")
+def for_rent_refresh_json():
+    """
+    Triggers a background refresh of property data from the API.
+    Returns the latest data (may be old if refresh not finished yet).
+    """
+    def background_refresh():
+        try:
+            # Use the same logic as in /for-rent to fetch and update cache
+            def fetch_latest_properties():
+                base = "https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test"
+                try:
+                    resp = requests.get(f"{base}/propertiesforrent", timeout=20)
+                    resp.raise_for_status()
+                    uuids = resp.json().get("property_ids", [])
+                except Exception:
+                    uuids = []
+                def fetch_property(uuid):
+                    try:
+                        d = requests.get(f"{base}/properties/{uuid}/details", timeout=10).json()
+                        d["photos"] = []
+                        photo_urls = []
+                        try:
+                            photo_urls = requests.get(f"{base}/properties/{uuid}/photos", timeout=10).json()
+                        except Exception:
+                            pass
+                        for photourl in photo_urls:
+                            b64img = get_base64_image_from_url(photourl)
+                            if b64img:
+                                d["photos"].append(b64img)
+                        try:
+                            thumbnail_url = requests.get(f"{base}/properties/{uuid}/thumbnail", timeout=10).json()
+                        except Exception:
+                            thumbnail_url = None
+                        d["thumbnail"] = thumbnail_url or (d["photos"][0] if d["photos"] else "")
+                        d["id"] = uuid
+                        d.setdefault("included_amenities", d.get("included_utilities", []))
+                        d.setdefault("bedrooms", "N/A")
+                        d.setdefault("bathrooms", "N/A")
+                        d.setdefault("rent", "N/A")
+                        d.setdefault("sqft", "N/A")
+                        d.setdefault("deposit", "N/A")
+                        d.setdefault("address", "N/A")
+                        d["description"] = d.get("description", "")
+                        d.setdefault("blurb", d["description"])
+                        d.setdefault("lease_length", d.get("lease_length", "12 months"))
+                        pets_allowed = "Unknown"
+                        if "pets_allowed" in d:
+                            pets_allowed = "Yes" if d["pets_allowed"] else "No"
+                        elif "included_amenities" in d and any("pet" in str(a).lower() for a in d["included_amenities"]):
+                            pets_allowed = "Yes"
+                        elif "description" in d and "pet" in d["description"].lower():
+                            pets_allowed = "Yes"
+                        d["pets_allowed"] = pets_allowed
+                        return d
+                    except Exception as e:
+                        print(f"Property fetch for {uuid} failed: {e}")
+                        return None
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                    results = list(executor.map(fetch_property, uuids))
+                    return [p for p in results if p]
+            latest_properties = fetch_latest_properties()
+            import json
+            def get_id_set(props):
+                return set(p.get("id") for p in props if p and "id" in p)
+            def get_prop_by_id(props):
+                return {p.get("id"): p for p in props if p and "id" in p}
+            with cache_lock:
+                current_serialized = json.dumps(properties_cache, sort_keys=True)
+                latest_serialized = json.dumps(latest_properties, sort_keys=True)
+                if current_serialized != latest_serialized:
+                    old_ids = get_id_set(properties_cache)
+                    new_ids = get_id_set(latest_properties)
+                    added = new_ids - old_ids
+                    removed = old_ids - new_ids
+                    changed = []
+                    old_by_id = get_prop_by_id(properties_cache)
+                    new_by_id = get_prop_by_id(latest_properties)
+                    for pid in (old_ids & new_ids):
+                        old = old_by_id[pid]
+                        new = new_by_id[pid]
+                        diffs = []
+                        for k in set(old.keys()).union(new.keys()):
+                            if old.get(k) != new.get(k):
+                                diffs.append(k)
+                        if diffs:
+                            changed.append({"id": pid, "fields": diffs})
+                    log_details = {
+                        "added_ids": list(added),
+                        "removed_ids": list(removed),
+                        "changed": changed,
+                        "old_count": len(properties_cache),
+                        "new_count": len(latest_properties)
+                    }
+                    print(f"[for_rent_refresh] properties_cache updated from API. Details: {json.dumps(log_details, indent=2)}")
+                    try:
+                        user_email = get_current_user().get("email", "") if is_logged_in() else "anonymous"
+                    except Exception:
+                        user_email = "anonymous"
+                    log_site_change(user_email, "properties_cache_updated", log_details)
+                    properties_cache.clear()
+                    properties_cache.extend(latest_properties)
+        except Exception as e:
+            print(f"[for_rent_refresh] Background refresh failed: {e}")
+
+    # Start background refresh
+    threading.Thread(target=background_refresh, daemon=True).start()
+
+    # Return current cache immediately
     with cache_lock:
         properties = list(properties_cache)
     def make_serializable(prop):
@@ -755,6 +940,7 @@ def property_details(uuid):
         log_and_notify_error("Property Details Error", error_message)
         return "Internal server error", 500
 @app.route("/property/<uuid>/schedule", methods=["POST"])
+@rate_limit(max_requests=5, window_seconds=600)
 def schedule_appointment(uuid):
     data = request.get_json(force=True)
     name = (data.get("name") or "").strip()
@@ -792,7 +978,14 @@ def about():
 @app.route("/contact")
 def contact():
     return render_template("contact.html", title="Contact")
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", title="Privacy Policy")
+@app.route("/terms")
+def terms():
+    return render_template("terms.html", title="Terms of Service")
 @app.route("/logs")
+@high_admin_required
 def view_logs():
     log_entries = []
     if os.path.exists(LOG_FILE):
@@ -867,9 +1060,10 @@ def report_issue_form():
 
 # POST route to handle form submission
 @app.route("/report-issue", methods=["POST"])
+@rate_limit(max_requests=3, window_seconds=600)
 def report_issue():
-    user_name = request.form.get("name")
-    issue_description = request.form.get("description")
+    user_name = (request.form.get("name") or "").strip()[:100]
+    issue_description = (request.form.get("description") or "").strip()[:5000]
     if not user_name or not issue_description:
         return "Name and description are required fields.", 400
     email_body = f"Issue reported by {user_name}:\n\n{issue_description}"
@@ -941,7 +1135,7 @@ def save_edit(id):
             except Exception as e:
                 error_message = f"Failed to create property: {e}"
                 log_and_notify_error("Property Create Error", error_message)
-                return str(e), 500
+                return "Failed to create property", 500
             # Refresh cache so new property shows up
             threading.Thread(target=preset_fetch_properties, daemon=True).start()
             return redirect(url_for("manage_listings"))
@@ -997,37 +1191,61 @@ def save_edit(id):
         except Exception as e:
             print(f"[Update] Failed to PUT details for {id}: {e}")
 
+        # Refresh cache after update
+        threading.Thread(target=preset_fetch_properties, daemon=True).start()
+
         print(f"Edits saved for {id}: {prop}")
         log_site_change(user_email, "property_updated", {"property_id": id})
         return redirect(url_for("manage_listings"))
     except Exception as e:
         error_message = f"Error saving edits for {id}: {str(e)}"
         log_and_notify_error("Save Edit Error", error_message)
-        return str(e), 500
+        return "Failed to save edits", 500
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+UUID_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
 @app.route("/upload-image/<uuid>", methods=["POST"])
 @admin_required
 def upload_image(uuid):
+    # Validate property uuid shape to prevent path traversal
+    if not UUID_RE.match(uuid or ""):
+        return jsonify(success=False, message="Invalid property id"), 400
     if "file" not in request.files:
-        message = "No file part"
-        log_and_notify_error("Upload Error", message)
-        return jsonify(success=False, message=message), 400
+        return jsonify(success=False, message="No file part"), 400
     file = request.files["file"]
-    if file.filename == "":
-        message = "No selected file"
-        log_and_notify_error("Upload Error", message)
-        return jsonify(success=False, message=message), 400
-    file_ext = os.path.splitext(file.filename)[1]
+    if not file.filename:
+        return jsonify(success=False, message="No selected file"), 400
+
+    # Sanitize filename and validate extension against whitelist
+    safe_original = secure_filename(file.filename)
+    file_ext = os.path.splitext(safe_original)[1].lower()
+    if file_ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return jsonify(success=False, message="Unsupported file type"), 400
+
     new_filename = f"{uuid}_{secrets.token_hex(8)}{file_ext}"
-    save_path = os.path.join(UPLOAD_FOLDER, new_filename)
+    # Double-check resolved path stays within UPLOAD_FOLDER
+    upload_root = os.path.realpath(UPLOAD_FOLDER)
+    save_path = os.path.realpath(os.path.join(UPLOAD_FOLDER, new_filename))
+    if not (save_path == upload_root or save_path.startswith(upload_root + os.sep)):
+        return jsonify(success=False, message="Invalid path"), 400
+
     file.save(save_path)
     try:
+        with Image.open(save_path) as im:
+            im.verify()
+        # Re-open for processing (verify() consumes the file)
         with Image.open(save_path) as im:
             im = ImageOps.exif_transpose(im).convert("RGB")
             letterboxed = letterbox_to_16_9(im)
             letterboxed.save(save_path)
     except Exception as e:
-        error_message = f"Failed to process uploaded image: {e}"
-        log_and_notify_error("Image Processing Error", error_message)
+        # Image is not a valid image — delete and reject
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        logging.error(f"Rejected upload: failed to process image: {e}")
+        return jsonify(success=False, message="Invalid image"), 400
     new_image_url = url_for("static", filename=f"uploads/{new_filename}", _external=False)
     # Build absolute URL for notifications and API
     absolute_image_url = request.url_root.rstrip('/') + new_image_url
@@ -1038,6 +1256,9 @@ def upload_image(uuid):
         requests.post(f"{base}/properties/{uuid}/photos", json={"image_url": absolute_image_url}, timeout=20)
     except Exception as e:
         print(f"[Upload] Failed to POST photo to API: {e}")
+
+    # Refresh cache after image upload
+    threading.Thread(target=preset_fetch_properties, daemon=True).start()
 
     # --- Email notification ---
     try:
@@ -1219,11 +1440,12 @@ def save_renter_contracts(contracts):
     save_json_file(CONTRACTS_FILE, contracts)
 
 @app.route('/register', methods=['GET', 'POST'])
+@rate_limit(max_requests=3, window_seconds=600)
 def register():
     if request.method == 'POST':
-        name = request.form.get('name', '').strip()
-        email = request.form.get('email', '').strip().lower()
-        reason = request.form.get('reason', '').strip()
+        name = (request.form.get('name') or '').strip()[:100]
+        email = (request.form.get('email') or '').strip().lower()[:254]
+        reason = (request.form.get('reason') or '').strip()[:1000]
         if not name or not email:
             return render_template('register.html', error='Name and email are required.')
         reg = {'name': name, 'email': email, 'reason': reason}
@@ -1254,31 +1476,49 @@ def admin_registrations():
             return render_template('admin_registrations.html', pending=pending_registrations, title='Pending Registrations', error='Invalid action.')
     return render_template('admin_registrations.html', pending=pending_registrations, title='Pending Registrations')
 
+ROLE_RANK = {'guest': 0, 'renter': 1, 'admin': 2, 'high_admin': 3}
+
+def _allowed_assignable_roles(current_user):
+    """Roles an admin may assign — never above their own rank."""
+    current_rank = ROLE_RANK.get((current_user or {}).get('role', 'guest'), 0)
+    return [r for r, rank in ROLE_RANK.items() if 0 < rank <= current_rank and r != 'guest']
+
 @app.route('/admin/users', methods=['GET', 'POST'])
 @admin_required
 def admin_users():
     error = None
     success = None
-    # Load all users from user_roles.json
+    current = get_current_user() or {}
+    current_rank = ROLE_RANK.get(current.get('role', 'guest'), 0)
     users = list(user_roles.items())  # [(email, role)]
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         new_role = request.form.get('role', '').strip()
         action = request.form.get('action', '')
+        allowed = _allowed_assignable_roles(current)
         if not email:
             error = 'No email provided.'
         elif action == 'delete':
             if email in user_roles:
-                del user_roles[email]
-                save_json_file(USER_ROLES_FILE, user_roles)
-                success = f'User {email} removed.'
+                # Prevent deleting a user whose role is higher than yours
+                target_rank = ROLE_RANK.get(user_roles.get(email, 'guest'), 0)
+                if target_rank > current_rank:
+                    error = 'Cannot modify a user with a higher role than your own.'
+                else:
+                    del user_roles[email]
+                    save_json_file(USER_ROLES_FILE, user_roles)
+                    success = f'User {email} removed.'
             else:
                 error = 'User not found.'
-        elif new_role in ['renter', 'admin', 'high_admin']:
-            set_user_role(email, new_role)
-            success = f'Role for {email} updated to {new_role}.'
+        elif new_role in allowed:
+            target_rank = ROLE_RANK.get(user_roles.get(email, 'guest'), 0)
+            if target_rank > current_rank:
+                error = 'Cannot modify a user with a higher role than your own.'
+            else:
+                set_user_role(email, new_role)
+                success = f'Role for {email} updated to {new_role}.'
         else:
-            error = 'Invalid role.'
+            error = 'Invalid or disallowed role.'
         users = list(user_roles.items())
     return render_template('admin_users.html', users=users, error=error, success=success, title='User Management')
 
@@ -1369,7 +1609,7 @@ def delete_listing(id):
     except Exception as e:
         error_message = f"Failed to delete property {id} via API: {e}"
         log_and_notify_error("Property Delete Error", error_message)
-        return str(e), 500
+        return "Failed to delete property", 500
 
     # Remove from local cache
     with cache_lock:
@@ -1403,7 +1643,7 @@ def toggle_sale(id):
     except Exception as e:
         error_message = f"Failed to toggle for_sale for {id}: {e}"
         log_and_notify_error("Toggle Sale Error", error_message)
-        return str(e), 500
+        return "Failed to toggle sale status", 500
     # update cache
     with cache_lock:
         prop["for_sale"] = new_status
@@ -1436,7 +1676,19 @@ def offline():
     # Simple offline fallback page rendered when navigation fails
     return render_template('offline.html', title='Offline')
 
+def start_cache_refresh_thread():
+    def refresh_loop():
+        while True:
+            time.sleep(CACHE_REFRESH_INTERVAL)
+            try:
+                preset_fetch_properties()
+            except Exception as e:
+                print(f"[Cache Refresh] Error: {e}")
+    thread = threading.Thread(target=refresh_loop, daemon=True)
+    thread.start()
+
 if __name__ == "__main__":
     print("Warming property cache and processing images...")
     print_check_file(PROPERTY_APPTS_FILE, "Appointments file at startup")
+    start_cache_refresh_thread()
     app.run("0.0.0.0", port=5000, debug=False)

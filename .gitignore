@@ -1,0 +1,36 @@
+# Secrets — never commit real values
+.env
+.env.*
+!.env.example
+
+# Runtime / logs
+*.log
+application.log
+site_changes.log
+
+# User / runtime data
+renter_profiles.json
+pending_registrations.json
+user_roles.json
+renter_contracts.json
+
+# User uploads
+static/uploads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

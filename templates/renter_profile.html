@@ -1,18 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="max-w-md mx-auto py-10 px-4">
-  <h1 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white">Edit Profile</h1>
-  {% if success %}
-    <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">{{ success }}</div>
-  {% endif %}
-  <form method="post" class="bg-white dark:bg-neutral-900 rounded shadow p-6 flex flex-col gap-4">
-    <label class="font-semibold">Name
-      <input type="text" name="name" value="{{ profile.name }}" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" required>
-    </label>
-    <label class="font-semibold">Contact Info
-      <input type="text" name="contact" value="{{ profile.contact }}" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
-    </label>
-    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold">Save Changes</button>
-  </form>
+<div class="mx-auto max-w-lg">
+  <div class="rounded-3xl border border-slate-200/70 bg-white/80 p-8 shadow-soft backdrop-blur dark:border-slate-800/60 dark:bg-slate-950/70">
+    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-brand-600">Profile</p>
+    <h1 class="mt-3 font-display text-3xl font-semibold text-slate-900 dark:text-white">Edit profile</h1>
+
+    {% if success %}
+      <div class="mt-6 rounded-2xl border border-emerald-200/80 bg-emerald-50/80 p-4 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">{{ success }}</div>
+    {% endif %}
+
+    <form method="post" class="mt-6 grid gap-4">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <label class="text-sm font-semibold text-slate-700 dark:text-slate-200">
+        Name
+        <input type="text" name="name" value="{{ profile.name }}" class="mt-2 w-full rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-slate-900 shadow-sm focus:border-brand-500 focus:ring-brand-500 dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-white" required>
+      </label>
+      <label class="text-sm font-semibold text-slate-700 dark:text-slate-200">
+        Contact Info
+        <input type="text" name="contact" value="{{ profile.contact }}" class="mt-2 w-full rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-3 text-slate-900 shadow-sm focus:border-brand-500 focus:ring-brand-500 dark:border-slate-800/60 dark:bg-slate-900/60 dark:text-white">
+      </label>
+      <button type="submit" class="mt-2 inline-flex items-center justify-center rounded-full bg-brand-600 px-6 py-3 text-sm font-semibold text-white shadow-soft transition hover:-translate-y-0.5 hover:bg-brand-700">Save changes</button>
+    </form>
+  </div>
 </div>
-{% endblock %} 
+{% endblock %}
