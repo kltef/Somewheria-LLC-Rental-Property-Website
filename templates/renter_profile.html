@@ -13,6 +13,23 @@
     <label class="font-semibold">Contact Info
       <input type="text" name="contact" value="{{ profile.contact }}" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
     </label>
+
+    <div class="border-t border-neutral-200 dark:border-neutral-800 pt-4">
+      <p class="text-xs uppercase tracking-wide font-semibold text-gray-600 dark:text-gray-300 mb-2">Notifications</p>
+      <label class="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" name="email_status_updates" value="1"
+               {% if profile.email_status_updates %}checked{% endif %}
+               class="mt-1 rounded border-neutral-300 dark:border-neutral-600 text-blue-600 focus:ring-blue-500">
+        <span class="font-normal text-sm text-[#111518] dark:text-white">
+          Email me status updates on my repair tickets
+          <span class="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            We'll email you when a ticket's status changes, its severity is updated, it's assigned, or staff leaves a note.
+            This setting is the default for new tickets — you can still override it per ticket.
+          </span>
+        </span>
+      </label>
+    </div>
+
     <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold">Save Changes</button>
   </form>
 </div>

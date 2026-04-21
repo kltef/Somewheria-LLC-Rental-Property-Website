@@ -8,6 +8,7 @@ from .routes.admin_routes import register_admin_routes
 from .routes.auth_routes import register_auth_routes
 from .routes.public_routes import register_public_routes
 from .routes.pwa_routes import register_pwa_routes
+from .routes.ticket_routes import register_ticket_routes
 from .services.analytics import AnalyticsTracker
 from .services.appointments import AppointmentService
 from .services.auth import AuthService
@@ -17,6 +18,7 @@ from .services.properties import PropertyService
 from .services.registry import Services, set_services
 from .services.security import register_csrf, register_security_headers
 from .services.storage import FileStorageService
+from .services.tickets import TicketService
 
 
 def _is_development() -> bool:
@@ -57,6 +59,7 @@ def create_app() -> Flask:
     appointments = AppointmentService(config)
     auth = AuthService(config, storage)
     properties = PropertyService(config, notifications)
+    tickets = TicketService(config, storage, notifications)
 
     set_services(
         app,
@@ -68,6 +71,7 @@ def create_app() -> Flask:
             appointments=appointments,
             auth=auth,
             properties=properties,
+            tickets=tickets,
         ),
     )
 
@@ -81,6 +85,7 @@ def create_app() -> Flask:
     register_public_routes(app)
     register_admin_routes(app)
     register_pwa_routes(app)
+    register_ticket_routes(app)
 
     @app.errorhandler(404)
     def page_not_found(_error):

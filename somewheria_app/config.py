@@ -51,6 +51,7 @@ class AppConfig:
         self.user_roles_file = self.base_dir / "user_roles.json"
         self.renter_profile_file = self.base_dir / "renter_profiles.json"
         self.contracts_file = self.base_dir / "renter_contracts.json"
+        self.tickets_file = self.base_dir / "tickets.json"
 
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)

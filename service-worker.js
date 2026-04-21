@@ -25,6 +25,21 @@ async function safeAddAll(cache, urls) {
   }
 }
 
+// Re-fetch every core asset from the network and overwrite the cached copy.
+async function refreshCoreAssets() {
+  const cache = await caches.open(STATIC_CACHE);
+  await Promise.all(CORE_ASSETS.map(async (url) => {
+    try {
+      const resp = await fetch(url, { cache: 'reload' });
+      if (resp && resp.ok) {
+        await cache.put(url, resp.clone());
+      }
+    } catch (e) {
+      // network failure — keep whatever is already cached
+    }
+  }));
+}
+
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(STATIC_CACHE);
@@ -45,6 +60,13 @@ self.addEventListener('activate', event => {
     );
     await self.clients.claim();
   })());
+});
+
+self.addEventListener('message', event => {
+  const data = event.data;
+  if (data && data.type === 'refresh-cache') {
+    event.waitUntil(refreshCoreAssets());
+  }
 });
 
 self.addEventListener('fetch', event => {

@@ -405,6 +405,7 @@
             {% set role = session.get('user', {}).get('role', '') %}
             {% if role in ['renter', 'admin', 'high_admin'] %}
               <li><a href="{{ url_for('renter_dashboard') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Renter Dashboard</a></li>
+              <li><a href="{{ url_for('ticket_list_mine') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Tickets</a></li>
             {% endif %}
             {% if role in ['admin', 'high_admin'] %}
               <li><a href="{{ url_for('admin_status') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Status</a></li>
@@ -463,6 +464,7 @@
               {% set role = session.get('user', {}).get('role', '') %}
               {% if role in ['renter', 'admin', 'high_admin'] %}
                 <li><a href="{{ url_for('renter_dashboard') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
+                <li><a href="{{ url_for('ticket_list_mine') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Tickets</a></li>
               {% endif %}
               {% if role in ['admin', 'high_admin'] %}
                 <li><a href="{{ url_for('admin_status') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Status</a></li>
@@ -554,7 +556,22 @@
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
-      navigator.serviceWorker.register('/service-worker.js').catch(function(err){
+      navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
+        // Only refresh the cache when the user loads the For Rent page.
+        var path = window.location.pathname.replace(/\/+$/, '') || '/';
+        if (path !== '/for-rent') return;
+        registration.update().catch(function(){});
+        function requestRefresh() {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'refresh-cache' });
+          }
+        }
+        if (navigator.serviceWorker.controller) {
+          requestRefresh();
+        } else {
+          navigator.serviceWorker.addEventListener('controllerchange', requestRefresh, { once: true });
+        }
+      }).catch(function(err){
         console.log('SW registration failed', err);
       });
     });

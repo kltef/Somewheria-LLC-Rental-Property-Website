@@ -12,6 +12,7 @@ class Services:
     appointments: object
     auth: object
     properties: object
+    tickets: object
 
 
 def set_services(app, services: Services) -> None:

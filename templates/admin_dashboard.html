@@ -1,92 +1,290 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-6 py-6 max-w-7xl mx-auto bg-white dark:bg-neutral-950 rounded shadow">
-  <h1 class="text-3xl font-bold mb-6 text-[#111518] dark:text-white">Admin Dashboard</h1>
-
-  {# --- Analytics Summary --- #}
-  <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">Site Analytics (Today)</h2>
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
-      <p class="text-sm text-gray-500">Visits</p>
-      <p class="text-2xl font-bold">{{ metrics.site_visits }}</p>
+<div class="px-6 py-6 max-w-7xl mx-auto">
+  {# --- Header --- #}
+  <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div>
+      <h1 class="text-3xl font-bold text-[#111518] dark:text-white">Admin Dashboard</h1>
+      {% if user %}
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Signed in as
+          <span class="font-medium text-[#111518] dark:text-white">{{ user.name or user.email }}</span>
+        </p>
+      {% endif %}
     </div>
-    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
-      <p class="text-sm text-gray-500">Unique Users</p>
-      <p class="text-2xl font-bold">{{ metrics.unique_users }}</p>
-    </div>
-    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
-      <p class="text-sm text-gray-500">Properties Listed</p>
-      <p class="text-2xl font-bold">{{ metrics.properties_listed }}</p>
-    </div>
-    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
-      <p class="text-sm text-gray-500">Errors (24h)</p>
-      <p class="text-2xl font-bold">{{ metrics.errors_last_24h }}</p>
-    </div>
+    <nav class="flex flex-wrap gap-2" aria-label="Admin quick links">
+      <a href="{{ url_for('analytics_dashboard') }}"
+         class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">Full Analytics</a>
+      <a href="{{ url_for('admin_status') }}"
+         class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">System Status</a>
+      <a href="{{ url_for('admin_registrations') }}"
+         class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">Registrations</a>
+      <a href="{{ url_for('admin_contracts') }}"
+         class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">Contracts</a>
+      <a href="{{ url_for('admin_ticket_list') }}"
+         class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">Tickets</a>
+    </nav>
   </div>
 
-  {# --- User Management Section --- #}
-  <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">User Management</h2>
-  <form method="post" class="mb-6 flex flex-wrap items-end gap-4 p-4 bg-white dark:bg-neutral-800 rounded shadow">
-    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="add">
-    <label class="flex flex-col">
-      <span class="text-sm mb-1 text-[#111518] dark:text-white">Email</span>
-      <input type="email" name="email" required class="border rounded px-3 py-2 dark:bg-neutral-900 dark:text-white">
-    </label>
-    <label class="flex flex-col">
-      <span class="text-sm mb-1 text-[#111518] dark:text-white">Role</span>
-      <select name="role" class="border rounded px-3 py-2 dark:bg-neutral-900 dark:text-white">
-        <option value="renter">Employee</option>
-        <option value="admin">Admin</option>
-        <option value="high_admin">High Admin</option>
-      </select>
-    </label>
-    <button type="submit" class="px-4 py-2 bg-emerald-600 dark:bg-emerald-400 text-white dark:text-[#111518] rounded self-end transition-colors">Add User</button>
-  </form>
+  {# --- Flash messages surfaced at the top --- #}
   {% if error %}
-    <div class="mb-4 p-3 bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200 rounded">{{ error }}</div>
+    <div role="alert"
+         class="mb-4 p-3 rounded border bg-red-100 dark:bg-red-900/40 border-red-300 dark:border-red-800 text-red-800 dark:text-red-200">
+      {{ error }}
+    </div>
   {% endif %}
   {% if success %}
-    <div class="mb-4 p-3 bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">{{ success }}</div>
+    <div role="status"
+         class="mb-4 p-3 rounded border bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-800 text-green-800 dark:text-green-200">
+      {{ success }}
+    </div>
   {% endif %}
-  <div class="overflow-x-auto bg-white dark:bg-neutral-800 rounded shadow">
-    <table class="w-full text-left">
-      <thead>
-        <tr class="border-b dark:border-neutral-700">
-          <th class="p-3">Email</th>
-          <th class="p-3">Role</th>
-          <th class="p-3">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for email, role in users %}
-          <tr class="border-b dark:border-neutral-700">
-            <td class="p-3">{{ email }}</td>
-            <td class="p-3">
-              <form method="post" class="flex items-center gap-2">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="email" value="{{ email }}">
-                <input type="hidden" name="action" value="update">
-                <select name="role" class="border rounded px-2 py-1 dark:bg-neutral-900 dark:text-white">
-                  <option value="renter" {% if role == 'renter' %}selected{% endif %}>Employee</option>
-                  <option value="admin" {% if role == 'admin' %}selected{% endif %}>Admin</option>
-                  <option value="high_admin" {% if role == 'high_admin' %}selected{% endif %}>High Admin</option>
-                </select>
-                <button type="submit" class="px-3 py-1 bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] rounded transition-colors">Save</button>
-              </form>
-            </td>
-            <td class="p-3">
-              <form method="post" onsubmit="return confirm('Delete user {{ email }}?');">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="email" value="{{ email }}">
-                <input type="hidden" name="action" value="delete">
-                <button type="submit" class="px-3 py-1 bg-red-600 dark:bg-red-400 text-white dark:text-[#111518] rounded transition-colors">Delete</button>
-              </form>
-            </td>
+
+  {# --- Analytics Summary --- #}
+  <section aria-labelledby="analytics-heading" class="mb-8">
+    <div class="flex items-end justify-between mb-3">
+      <h2 id="analytics-heading"
+          class="text-xl font-semibold text-[#111518] dark:text-white">Site Analytics (Today)</h2>
+      <a href="{{ url_for('analytics_dashboard') }}"
+         class="text-sm text-blue-600 dark:text-blue-400 hover:underline">View details &rarr;</a>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Visits</p>
+        <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ metrics.site_visits }}</p>
+        <svg id="visits-sparkline"
+             class="mt-2 w-full h-8 text-blue-600 dark:text-blue-400"
+             viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+          <polyline fill="none" stroke="currentColor" stroke-width="1.5" points=""></polyline>
+        </svg>
+      </div>
+      <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Unique Users</p>
+        <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ metrics.unique_users }}</p>
+      </div>
+      <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Logins Today</p>
+        <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ metrics.logins_today or 0 }}</p>
+      </div>
+      <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Properties Listed</p>
+        <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ metrics.properties_listed }}</p>
+      </div>
+      <div class="p-4 rounded shadow border
+                  {% if (metrics.errors_last_24h or 0) > 0 %}
+                    bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-800
+                  {% else %}
+                    bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800
+                  {% endif %}">
+        <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Errors (24h)</p>
+        <p class="text-2xl font-bold
+                  {% if (metrics.errors_last_24h or 0) > 0 %}
+                    text-red-700 dark:text-red-300
+                  {% else %}
+                    text-[#111518] dark:text-white
+                  {% endif %}">
+          {{ metrics.errors_last_24h }}
+        </p>
+      </div>
+    </div>
+  </section>
+
+  {# --- Repair Tickets Summary --- #}
+  {% if ticket_summary is defined %}
+    <section aria-labelledby="tickets-heading" class="mb-8">
+      <div class="flex items-end justify-between mb-3">
+        <h2 id="tickets-heading"
+            class="text-xl font-semibold text-[#111518] dark:text-white">Repair Tickets</h2>
+        <a href="{{ url_for('admin_ticket_list') }}"
+           class="text-sm text-blue-600 dark:text-blue-400 hover:underline">Manage tickets &rarr;</a>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Open</p>
+          <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ ticket_summary.open }}</p>
+        </div>
+        <div class="p-4 rounded shadow border
+                    {% if ticket_summary.urgent > 0 %}
+                      bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-800
+                    {% else %}
+                      bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800
+                    {% endif %}">
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Urgent (open)</p>
+          <p class="text-2xl font-bold
+                    {% if ticket_summary.urgent > 0 %}
+                      text-red-700 dark:text-red-300
+                    {% else %}
+                      text-[#111518] dark:text-white
+                    {% endif %}">{{ ticket_summary.urgent }}</p>
+        </div>
+        <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+          <p class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Total</p>
+          <p class="text-2xl font-bold text-[#111518] dark:text-white">{{ ticket_summary.total }}</p>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {# --- User Management Section --- #}
+  <section aria-labelledby="users-heading">
+    <div class="flex items-end justify-between mb-3">
+      <h2 id="users-heading"
+          class="text-xl font-semibold text-[#111518] dark:text-white">User Management</h2>
+      <a href="{{ url_for('admin_users') }}"
+         class="text-sm text-blue-600 dark:text-blue-400 hover:underline">Open full user manager &rarr;</a>
+    </div>
+
+    {# Add-user card #}
+    <form method="post"
+          class="mb-4 grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add">
+      <label class="flex flex-col">
+        <span class="text-xs uppercase tracking-wide mb-1 text-gray-500 dark:text-gray-400">Email</span>
+        <input type="email" name="email" required autocomplete="off"
+               placeholder="user@example.com"
+               class="border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 bg-white dark:bg-neutral-900 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </label>
+      <label class="flex flex-col">
+        <span class="text-xs uppercase tracking-wide mb-1 text-gray-500 dark:text-gray-400">Role</span>
+        <select name="role"
+                class="border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 bg-white dark:bg-neutral-900 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="renter">Employee</option>
+          <option value="admin">Admin</option>
+          <option value="high_admin">High Admin</option>
+        </select>
+      </label>
+      <button type="submit"
+              class="self-end px-4 py-2 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-400 dark:hover:bg-emerald-300 text-white dark:text-[#111518] rounded font-medium transition-colors">
+        Add User
+      </button>
+    </form>
+
+    {# Filter + count #}
+    <div class="mb-3 flex flex-wrap items-center gap-3">
+      <label class="flex-1 min-w-[220px]">
+        <span class="sr-only">Filter users</span>
+        <input id="user-filter" type="search" placeholder="Filter by email or role&hellip;"
+               class="w-full border border-neutral-300 dark:border-neutral-700 rounded px-3 py-2 bg-white dark:bg-neutral-900 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </label>
+      <span class="text-sm text-gray-500 dark:text-gray-400">
+        <span id="user-count">{{ users|length }}</span> user(s)
+      </span>
+    </div>
+
+    <div class="overflow-x-auto bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+      <table class="w-full text-left">
+        <thead class="bg-neutral-50 dark:bg-neutral-800">
+          <tr class="border-b border-neutral-200 dark:border-neutral-700 text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            <th class="p-3 font-medium">Email</th>
+            <th class="p-3 font-medium">Current Role</th>
+            <th class="p-3 font-medium">Change Role</th>
+            <th class="p-3 font-medium text-right">Actions</th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+        </thead>
+        <tbody id="user-tbody">
+          {% for email, role in users %}
+            {% set badge_class = 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100' %}
+            {% if role == 'admin' %}{% set badge_class = 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200' %}{% endif %}
+            {% if role == 'high_admin' %}{% set badge_class = 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200' %}{% endif %}
+            {% if role == 'renter' %}{% set badge_class = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' %}{% endif %}
+            <tr class="border-b border-neutral-200 dark:border-neutral-700 last:border-0 hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
+                data-user="{{ email }}" data-role="{{ role }}">
+              <td class="p-3 text-[#111518] dark:text-white align-middle">{{ email }}</td>
+              <td class="p-3 align-middle">
+                <span class="inline-block px-2 py-0.5 rounded text-xs font-medium {{ badge_class }}">{{ role }}</span>
+              </td>
+              <td class="p-3 align-middle">
+                <form method="post" class="flex items-center gap-2">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="email" value="{{ email }}">
+                  <input type="hidden" name="action" value="update">
+                  <select name="role"
+                          class="border border-neutral-300 dark:border-neutral-700 rounded px-2 py-1 bg-white dark:bg-neutral-900 text-[#111518] dark:text-white text-sm">
+                    <option value="renter" {% if role == 'renter' %}selected{% endif %}>Employee</option>
+                    <option value="admin" {% if role == 'admin' %}selected{% endif %}>Admin</option>
+                    <option value="high_admin" {% if role == 'high_admin' %}selected{% endif %}>High Admin</option>
+                  </select>
+                  <button type="submit"
+                          class="px-3 py-1 bg-blue-600 hover:bg-blue-700 dark:bg-blue-400 dark:hover:bg-blue-300 text-white dark:text-[#111518] rounded text-sm font-medium transition-colors">Save</button>
+                </form>
+              </td>
+              <td class="p-3 align-middle text-right">
+                <form method="post" class="inline"
+                      onsubmit="return confirm('Delete user {{ email }}? This cannot be undone.');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="email" value="{{ email }}">
+                  <input type="hidden" name="action" value="delete">
+                  <button type="submit"
+                          class="px-3 py-1 bg-red-600 hover:bg-red-700 dark:bg-red-400 dark:hover:bg-red-300 text-white dark:text-[#111518] rounded text-sm font-medium transition-colors">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="4" class="p-6 text-center text-gray-500 dark:text-gray-400">No users yet.</td>
+            </tr>
+          {% endfor %}
+          <tr id="user-empty-row" class="hidden">
+            <td colspan="4" class="p-6 text-center text-gray-500 dark:text-gray-400">No users match that filter.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 </div>
+
+<script>
+(function() {
+  // Sparkline for 7-day visits
+  try {
+    var data = {{ chart_data|tojson }};
+    var visits = (data && data.visits) ? data.visits : [];
+    if (visits.length >= 2) {
+      var max = Math.max.apply(null, visits);
+      var min = Math.min.apply(null, visits);
+      var range = (max - min) || 1;
+      var w = 100, h = 24, pad = 1;
+      var step = (w - pad * 2) / (visits.length - 1);
+      var points = visits.map(function(v, i) {
+        var x = pad + step * i;
+        var y = h - pad - ((v - min) / range) * (h - pad * 2);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var poly = document.querySelector('#visits-sparkline polyline');
+      if (poly) poly.setAttribute('points', points);
+    }
+  } catch (e) { /* ignore */ }
+
+  // Live user filter
+  var filter = document.getElementById('user-filter');
+  var tbody = document.getElementById('user-tbody');
+  var countEl = document.getElementById('user-count');
+  var emptyRow = document.getElementById('user-empty-row');
+  if (filter && tbody) {
+    var rows = tbody.querySelectorAll('tr[data-user]');
+    filter.addEventListener('input', function() {
+      var q = filter.value.trim().toLowerCase();
+      var visible = 0;
+      rows.forEach(function(row) {
+        var hay = ((row.getAttribute('data-user') || '') + ' ' + (row.getAttribute('data-role') || '')).toLowerCase();
+        var show = !q || hay.indexOf(q) !== -1;
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      if (countEl) countEl.textContent = visible;
+      if (emptyRow) emptyRow.classList.toggle('hidden', visible !== 0 || rows.length === 0);
+    });
+  }
+
+  // Auto-dismiss flash messages after 4s
+  setTimeout(function() {
+    document.querySelectorAll('[role="status"],[role="alert"]').forEach(function(el) {
+      el.style.transition = 'opacity 400ms';
+      el.style.opacity = '0';
+      setTimeout(function() { el.remove(); }, 450);
+    });
+  }, 4000);
+})();
+</script>
 {% endblock %}

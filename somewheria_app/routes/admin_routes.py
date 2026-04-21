@@ -121,7 +121,20 @@ def renter_dashboard():
     user = get_current_user()
     email = user["email"].lower()
     contracts = services.storage.get_renter_contracts().get(email, [])
-    return render_template("renter_dashboard.html", user=user, contracts=contracts, title="Renter Dashboard")
+    my_tickets = services.tickets.list_tickets(submitter=email)
+    open_ticket_count = sum(
+        1 for t in my_tickets if t.get("status") in {"open", "in_progress", "awaiting_parts"}
+    )
+    recent_tickets = my_tickets[:3]
+    return render_template(
+        "renter_dashboard.html",
+        user=user,
+        contracts=contracts,
+        recent_tickets=recent_tickets,
+        open_ticket_count=open_ticket_count,
+        total_ticket_count=len(my_tickets),
+        title="Renter Dashboard",
+    )
 
 
 @high_admin_required
@@ -238,8 +251,14 @@ def admin_status():
         },
         {
             "label": "Admin Tools",
-            "detail": "Status, users, contracts, and registrations pages are registered",
-            "ok": route_ready("admin_status", "admin_users", "admin_contracts", "admin_registrations"),
+            "detail": "Status, users, contracts, registrations, and tickets pages are registered",
+            "ok": route_ready(
+                "admin_status",
+                "admin_users",
+                "admin_contracts",
+                "admin_registrations",
+                "admin_ticket_list",
+            ),
         },
         {
             "label": "PWA Support",
@@ -317,12 +336,14 @@ def admin_dashboard_combined():
                     {"email": email, "role": new_role},
                 )
     metrics, chart_data = services.analytics.dashboard_data(len(services.properties.get_cached_properties()))
+    ticket_summary = services.tickets.summary()
     return render_template(
         "admin_dashboard.html",
         user=get_current_user(),
         metrics=metrics,
         chart_data=chart_data,
         users=list(services.storage.get_user_roles().items()),
+        ticket_summary=ticket_summary,
         error=error,
         success=success,
         title="Admin Dashboard",
@@ -431,11 +452,17 @@ def renter_profile():
     user = get_current_user()
     email = user["email"].lower()
     profiles = services.storage.get_renter_profiles()
-    profile = profiles.get(email, {"name": user.get("name", ""), "contact": ""})
+    profile = profiles.get(
+        email,
+        {"name": user.get("name", ""), "contact": "", "email_status_updates": True},
+    )
+    # Backfill the field for profiles created before the preference existed.
+    profile.setdefault("email_status_updates", True)
     success = None
     if request.method == "POST":
         profile["name"] = request.form.get("name", "").strip()[:120]
         profile["contact"] = request.form.get("contact", "").strip()[:200]
+        profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
         profiles[email] = profile
         services.storage.save_renter_profiles(profiles)
         success = "Profile updated."

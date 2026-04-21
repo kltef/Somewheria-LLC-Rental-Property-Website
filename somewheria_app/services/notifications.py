@@ -14,16 +14,21 @@ class NotificationService:
         self.analytics = analytics
         self.console = get_console_logger("notify")
 
-    def send_email(self, subject: str, body: str) -> bool:
+    def send_email(self, subject: str, body: str, to: str | None = None) -> bool:
         app_password = self._email_password()
         if not app_password:
             self.console.warning("EMAIL_APP_PASSWORD is not configured; skipping email '%s'", subject)
             return False
 
+        recipient = (to or self.config.email_recipient or "").strip()
+        if not recipient or "@" not in recipient:
+            self.console.warning("No valid recipient for email '%s' (to=%r); skipping.", subject, to)
+            return False
+
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self.config.email_sender
-        message["To"] = self.config.email_recipient
+        message["To"] = recipient
         message.set_content(body)
         message.add_alternative(self._html_email_body(subject, body), subtype="html")
 
@@ -32,7 +37,7 @@ class NotificationService:
                 server.starttls()
                 server.login(self.config.email_sender, app_password)
                 server.send_message(message)
-            self.console.info("Sent email '%s' to %s", subject, self.config.email_recipient)
+            self.console.info("Sent email '%s' to %s", subject, recipient)
             return True
         except Exception as exc:
             self.console.error("Failed to send email '%s': %s", subject, exc)
