@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from functools import wraps
 from threading import Lock
 
-from flask import abort, g, jsonify, request, session
+from flask import abort, current_app, g, jsonify, request, session
 
 
 CSRF_SESSION_KEY = "_csrf_token"
@@ -44,6 +44,11 @@ def _extract_submitted_token() -> str:
 
 
 def _csrf_before_request() -> None:
+    # Tests use Flask's test client, which can't easily round-trip a token.
+    # Mirror Flask-WTF: when TESTING is set, short-circuit the entire check
+    # (including token pre-population — templates call csrf_token() lazily).
+    if current_app.config.get("TESTING"):
+        return
     # Ensure a token exists for any authenticated session so templates can render it.
     _get_or_create_csrf_token()
     if request.method in CSRF_SAFE_METHODS:

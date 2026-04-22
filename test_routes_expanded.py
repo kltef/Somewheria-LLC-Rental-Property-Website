@@ -532,8 +532,26 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Profile updated.", response.data)
+        # The profile now carries a ticket-email preference; an unchecked box
+        # submits nothing, which the route interprets as False.
         save_profiles_mock.assert_called_once_with(
-            {"renter@example.com": {"name": "Jamie", "contact": "555-0100"}}
+            {"renter@example.com": {"name": "Jamie", "contact": "555-0100", "email_status_updates": False}}
+        )
+
+    def test_renter_profile_post_honors_email_status_updates_checkbox(self):
+        self.login_as("renter", email="renter@example.com")
+        with patch.object(self.services.storage, "get_renter_profiles", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_profiles",
+        ) as save_profiles_mock:
+            response = self.client.post(
+                "/renter/profile",
+                data={"name": "Jamie", "contact": "555-0100", "email_status_updates": "1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        save_profiles_mock.assert_called_once_with(
+            {"renter@example.com": {"name": "Jamie", "contact": "555-0100", "email_status_updates": True}}
         )
 
     def test_admin_contracts_add_requires_all_fields(self):
