@@ -99,7 +99,8 @@
       top: 68px;
       left: 12px;
       right: 12px;
-      height: calc(100vh - 88px);
+      height: calc(100vh - 88px);            /* fallback */
+      height: calc(100dvh - 88px);           /* respects mobile browser chrome */
       width: auto;
       background: #fff;
       color: #111518;
@@ -107,7 +108,24 @@
       border: 1px solid rgba(17, 21, 24, 0.08);
       box-shadow: 0 24px 60px rgba(17, 21, 24, 0.18);
       padding: 20px 18px 28px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
       transition: background 0.3s, color 0.3s;
+    }
+    /* Lock body scroll while the mobile menu is open. */
+    body.mobile-menu-open {
+      overflow: hidden;
+    }
+    /* Honor users who've asked for reduced motion. */
+    @media (prefers-reduced-motion: reduce) {
+      .bar1, .bar2, .bar3,
+      #hamburger-icon,
+      #mobile-nav.open .bar1,
+      #mobile-nav.open .bar2,
+      #mobile-nav.open .bar3 {
+        transition: none !important;
+      }
     }
     #mobile-nav.open .mobile-menu {
       display: flex;
@@ -493,6 +511,8 @@
         const menuButton = document.getElementById('hamburger-icon');
         const isOpen = mobileNav.classList.toggle('open');
         menuButton.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        menuButton.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu');
+        document.body.classList.toggle('mobile-menu-open', isOpen);
       }
 
       function closeMobileMenu() {
@@ -505,6 +525,8 @@
 
         mobileNav.classList.remove('open');
         menuButton.setAttribute('aria-expanded', 'false');
+        menuButton.setAttribute('aria-label', 'Open menu');
+        document.body.classList.remove('mobile-menu-open');
       }
 
       document.addEventListener('click', function(event) {
@@ -517,7 +539,15 @@
 
       document.addEventListener('keydown', function(event) {
         if (event.key === 'Escape') {
+          const mobileNav = document.getElementById('mobile-nav');
+          const wasOpen = mobileNav && mobileNav.classList.contains('open');
           closeMobileMenu();
+          if (wasOpen) {
+            const menuButton = document.getElementById('hamburger-icon');
+            if (menuButton) {
+              menuButton.focus();
+            }
+          }
         }
       });
     </script>
