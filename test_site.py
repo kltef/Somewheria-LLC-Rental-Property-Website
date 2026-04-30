@@ -75,7 +75,7 @@ class SiteRoutesTestCase(unittest.TestCase):
                 "id": "admin-1",
                 "email": "admin@example.com",
                 "name": "Admin User",
-                "role": "admin",
+                "role": "high_admin",
             }
 
         response = self.client.get("/admin/status")

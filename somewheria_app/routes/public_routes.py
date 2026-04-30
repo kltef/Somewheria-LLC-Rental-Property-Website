@@ -71,7 +71,6 @@ def for_rent_json():
     return jsonify(services.properties.serialize_properties(properties))
 
 
-@renter_required
 @rate_limit(limit=6, window_seconds=60, methods=("GET", "POST"))
 def for_rent_refresh_json():
     services = get_services()

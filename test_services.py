@@ -143,7 +143,7 @@ class FileStorageServiceTestCase(unittest.TestCase):
             removed = self.service.delete_user_role("admin@example.com")
 
         self.assertTrue(removed)
-        save_json_mock.assert_called_once_with(self.config.user_roles_file, {})
+        save_json_mock.assert_called_once_with(self.config.user_roles_file, {"admin@example.com": "revoked"})
 
     def test_delete_user_role_returns_false_when_missing(self):
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
@@ -153,7 +153,7 @@ class FileStorageServiceTestCase(unittest.TestCase):
             removed = self.service.delete_user_role("missing@example.com")
 
         self.assertFalse(removed)
-        save_json_mock.assert_called_once_with(self.config.user_roles_file, {})
+        save_json_mock.assert_called_once_with(self.config.user_roles_file, {"missing@example.com": "revoked"})
 
     def test_save_renter_profiles_delegates_to_save_json_file(self):
         profiles = {"renter@example.com": {"name": "Jamie"}}
@@ -345,11 +345,9 @@ class NotificationServiceTestCase(unittest.TestCase):
         smtp_context.__enter__ = Mock(return_value=smtp_instance)
         smtp_context.__exit__ = Mock(return_value=None)
 
-        with patch.object(self.service, "_email_password", return_value="app-pass"), patch.object(
-            self.service,
-            "_server_url",
-            return_value="http://localhost:5000",
-        ), patch("somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context):
+        with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
+            "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
+        ):
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertTrue(result)
@@ -363,8 +361,6 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertIsNotNone(html_part)
         self.assertIsNotNone(text_part)
         self.assertIn("Somewheria LLC", html_part.get_content())
-        self.assertIn("Open Application Logs", html_part.get_content())
-        self.assertIn("View application logs here: http://localhost:5000/logs", text_part.get_content())
 
     def test_send_email_returns_false_on_smtp_failure(self):
         smtp_instance = Mock()
@@ -373,11 +369,9 @@ class NotificationServiceTestCase(unittest.TestCase):
         smtp_context.__enter__ = Mock(return_value=smtp_instance)
         smtp_context.__exit__ = Mock(return_value=None)
 
-        with patch.object(self.service, "_email_password", return_value="app-pass"), patch.object(
-            self.service,
-            "_server_url",
-            return_value="http://localhost:5000",
-        ), patch("somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context):
+        with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
+            "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
+        ):
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertFalse(result)
@@ -386,19 +380,11 @@ class NotificationServiceTestCase(unittest.TestCase):
         html_body = self.service._html_email_body(
             "Image Edited Notification",
             "The following image(s) have been edited:\nhttps://example.com/a.jpg",
-            "http://localhost:5000",
         )
 
         self.assertIn("Image Edited Notification", html_body)
         self.assertIn("Somewheria LLC", html_body)
         self.assertIn("https://example.com/a.jpg", html_body)
-        self.assertIn("http://localhost:5000/logs", html_body)
-
-    def test_server_url_falls_back_to_localhost_on_lookup_failure(self):
-        with patch("somewheria_app.services.notifications.socket.gethostbyname", side_effect=RuntimeError("dns")):
-            server_url = self.service._server_url()
-
-        self.assertEqual(server_url, "http://localhost:5000")
 
     def test_log_and_notify_error_records_error_and_sends_email(self):
         with patch.object(self.service, "send_email") as send_email_mock:

@@ -117,7 +117,8 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
     def test_for_rent_page_loads(self):
         self.seed_property()
 
-        response = self.client.get("/for-rent")
+        with patch.object(self.services.properties, "refresh_cache"):
+            response = self.client.get("/for-rent")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Maple House", response.data)
@@ -135,7 +136,8 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
     def test_for_rent_json_returns_cached_properties(self):
         self.seed_property(included_amenities={"Parking", "Laundry"})
 
-        response = self.client.get("/for-rent.json")
+        with patch.object(self.services.properties, "refresh_cache"):
+            response = self.client.get("/for-rent.json")
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
@@ -255,6 +257,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Contact", response.data)
 
     def test_logs_page_loads(self):
+        self.login_as("high_admin")
         with patch.object(self.services.notifications, "read_logs", return_value=[]):
             response = self.client.get("/logs")
 
@@ -301,10 +304,13 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.post("/register", data={"name": "", "email": ""})
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Name and email are required.", response.data)
+        self.assertIn(b"Name and a valid email are required.", response.data)
 
     def test_register_saves_pending_registration_and_sends_email(self):
-        with patch.object(self.services.storage, "add_pending_registration") as add_pending_mock, patch.object(
+        with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
+            self.services.storage,
+            "add_pending_registration",
+        ) as add_pending_mock, patch.object(
             self.services.notifications,
             "send_email",
         ) as send_email_mock:
@@ -444,16 +450,16 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         with patch.object(self.services.storage, "set_user_role") as set_user_role_mock, patch.object(
             self.services.storage,
             "get_user_roles",
-            return_value={"user@example.com": "admin"},
+            return_value={"user@example.com": "renter"},
         ):
             response = self.client.post(
                 "/admin/users",
-                data={"email": "user@example.com", "role": "admin", "action": "update"},
+                data={"email": "user@example.com", "role": "renter", "action": "update"},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"updated to admin", response.data)
-        set_user_role_mock.assert_called_once_with("user@example.com", "admin")
+        self.assertIn(b"updated to renter", response.data)
+        set_user_role_mock.assert_called_once_with("user@example.com", "renter")
 
     def test_admin_dashboard_forbids_standard_admin(self):
         self.login_as("admin")
@@ -720,7 +726,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["message"], "Notification sent.")
-        notify_mock.assert_called_once_with(["https://example.com/a.jpg"])
+        notify_mock.assert_called_once_with(["(See admin console for details.)"])
 
     def test_image_edit_notify_handles_failure(self):
         self.login_as("admin", email="admin@example.com")
@@ -774,7 +780,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("https://accounts.google.com/o/oauth2/auth?mock=1", response.headers["Location"])
         with self.client.session_transaction() as session:
-            self.assertEqual(session["state"], "state-123")
+            self.assertEqual(session["oauth_state"], "state-123")
 
     def test_offline_page_loads(self):
         response = self.client.get("/offline")

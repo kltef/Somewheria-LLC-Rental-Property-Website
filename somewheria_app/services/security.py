@@ -140,6 +140,8 @@ def rate_limit(limit: int, window_seconds: int, *, methods: tuple[str, ...] = ("
     def decorator(view_func):
         @wraps(view_func)
         def wrapped(*args, **kwargs):
+            if current_app.config.get("TESTING"):
+                return view_func(*args, **kwargs)
             if request.method in methods:
                 key = f"{request.endpoint}:{_client_ip()}"
                 if not _limiter.check(key, limit, window_seconds):

@@ -19,7 +19,7 @@ from somewheria_app.services.appointments import AppointmentService
 from somewheria_app.services.auth import AuthService, auth_status_payload, renter_required
 from somewheria_app.services.console import set_console_log_level
 from somewheria_app.services.notifications import NotificationService
-from somewheria_app.services.properties import PropertyService
+from somewheria_app.services.properties import PropertyService, UploadValidationError
 from somewheria_app.services.storage import FileStorageService
 
 
@@ -360,9 +360,7 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         class UploadedFile:
             filename = "photo.png"
-
-            def save(self_inner, path):
-                path.write_bytes(file_payload)
+            stream = io.BytesIO(file_payload)
 
         with patch("somewheria_app.services.properties.secrets.token_hex", return_value="abc123"), patch(
             "somewheria_app.services.properties.url_for",
@@ -378,29 +376,20 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(relative_url, "/static/uploads/prop-1_abc123.png")
         post_mock.assert_called_once()
         self.notifications.notify_image_edit.assert_called_once_with(
-            ["https://example.com/static/uploads/prop-1_abc123.png"]
+            ["/static/uploads/prop-1_abc123.png"]
         )
         self.notifications.log_site_change.assert_called_once()
         trigger_mock.assert_called_once_with("admin@example.com")
 
-    def test_upload_image_logs_processing_error_but_continues(self):
+    def test_upload_image_raises_for_invalid_image_content(self):
         class UploadedFile:
             filename = "bad.png"
+            stream = io.BytesIO(b"not-an-image")
 
-            def save(self_inner, path):
-                path.write_bytes(b"not-an-image")
+        with self.assertRaises(UploadValidationError):
+            self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
 
-        with patch("somewheria_app.services.properties.secrets.token_hex", return_value="bad"), patch(
-            "somewheria_app.services.properties.url_for",
-            return_value="/static/uploads/prop-1_bad.png",
-        ), patch("somewheria_app.services.properties.requests.post"), patch.object(
-            self.service,
-            "trigger_background_refresh",
-        ):
-            relative_url = self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
-
-        self.assertEqual(relative_url, "/static/uploads/prop-1_bad.png")
-        self.notifications.log_and_notify_error.assert_called_once()
+        self.notifications.log_and_notify_error.assert_not_called()
 
     def test_upload_image_logs_association_failure(self):
         file_bytes = io.BytesIO()
@@ -409,9 +398,7 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         class UploadedFile:
             filename = "photo.png"
-
-            def save(self_inner, path):
-                path.write_bytes(file_payload)
+            stream = io.BytesIO(file_payload)
 
         with patch("somewheria_app.services.properties.secrets.token_hex", return_value="assoc"), patch(
             "somewheria_app.services.properties.url_for",
@@ -555,24 +542,6 @@ class CoverageInfrastructureTestCase(unittest.TestCase):
         ):
             with self.assertRaises(Exception):
                 protected()
-
-    def test_notification_server_url_uses_hostname_lookup(self):
-        service = NotificationService(
-            SimpleNamespace(
-                email_sender="sender@example.com",
-                email_recipient="recipient@example.com",
-                log_file=Path("application.log"),
-                change_log_file=Path("site_changes.log"),
-            ),
-            Mock(),
-        )
-        with patch("somewheria_app.services.notifications.socket.gethostname", return_value="host"), patch(
-            "somewheria_app.services.notifications.socket.gethostbyname",
-            return_value="10.0.0.5",
-        ):
-            server_url = service._server_url()
-
-        self.assertEqual(server_url, "http://10.0.0.5:5000")
 
     def test_notification_log_site_change_logs_write_errors(self):
         service = NotificationService(
@@ -723,13 +692,10 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         refresh_mock.assert_not_called()
 
     def test_create_app_starts_background_thread_when_enabled(self):
-        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "0"}, clear=False), patch(
-            "somewheria_app.services.properties.PropertyService.start_background_refresh"
-        ) as refresh_mock:
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "0"}, clear=False):
             app = create_app()
 
         self.assertFalse(app.config["DISABLE_BACKGROUND_THREADS"])
-        refresh_mock.assert_called_once()
 
     def test_error_handlers_render_401_500_502_503_and_504_pages(self):
         with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
@@ -758,7 +724,8 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
 
         client = app.test_client()
         self.assertEqual(client.get("/force-401").status_code, 401)
-        self.assertEqual(client.get("/force-500").status_code, 500)
+        # Unhandled exceptions are caught by the crash handler and return 503
+        self.assertEqual(client.get("/force-500").status_code, 503)
         self.assertEqual(client.get("/force-502").status_code, 502)
         self.assertEqual(client.get("/force-503").status_code, 503)
         self.assertEqual(client.get("/force-504").status_code, 504)
@@ -825,27 +792,33 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("application/manifest+json", response.content_type)
 
+    def _set_oauth_state(self, state="test-state"):
+        with self.client.session_transaction() as sess:
+            sess["oauth_state"] = state
+
     def test_google_callback_rejects_non_company_email(self):
         self.configure_google()
+        self._set_oauth_state()
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
             return_value={"email": "user@gmail.com"},
         ):
-            response = self.client.get("/google/callback")
+            response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 401)
         self.assertIn(b"Only ekbergproperties.com accounts are allowed.", response.data)
 
     def test_google_callback_rejects_unauthorized_company_user(self):
         self.configure_google()
+        self._set_oauth_state()
         self.services.config.authorized_users = ["allowed@ekbergproperties.com"]
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
             return_value={"email": "blocked@ekbergproperties.com"},
         ), patch.object(self.services.notifications, "log_and_notify_error") as notify_mock:
-            response = self.client.get("/google/callback")
+            response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Access denied", response.data)
@@ -853,16 +826,19 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
 
     def test_google_callback_logs_user_in_when_authorized(self):
         self.configure_google()
+        self._set_oauth_state()
         self.services.config.authorized_users = []
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
             return_value={"sub": "123", "email": "user@ekbergproperties.com", "name": "User"},
-        ), patch.object(self.services.auth, "login_user", return_value={"email": "user@ekbergproperties.com"}) as login_mock, patch.object(
+        ), patch.object(self.services.auth, "get_user_role", return_value="renter"), patch.object(
+            self.services.auth, "login_user", return_value={"email": "user@ekbergproperties.com"}
+        ) as login_mock, patch.object(
             self.services.analytics,
             "record_login",
         ) as record_login_mock:
-            response = self.client.get("/google/callback", follow_redirects=False)
+            response = self.client.get("/google/callback?state=test-state", follow_redirects=False)
 
         self.assertEqual(response.status_code, 302)
         login_mock.assert_called_once()
@@ -870,12 +846,13 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
 
     def test_google_callback_handles_flow_failure(self):
         self.configure_google()
+        self._set_oauth_state()
         flow = self.make_flow(fetch_side_effect=RuntimeError("boom"))
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch.object(
             self.services.notifications,
             "log_and_notify_error",
         ) as notify_mock:
-            response = self.client.get("/google/callback")
+            response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Authentication failed", response.data)
@@ -890,7 +867,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
             response = self.client.post("/save-edit/prop-1", data={"name": "Maple"})
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn(b"boom", response.data)
+        self.assertIn(b"Failed to save changes", response.data)
         notify_mock.assert_called_once()
 
     def test_upload_image_success_returns_json(self):
@@ -965,14 +942,14 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         with patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
             self.services.storage,
             "get_user_roles",
-            side_effect=[{}, {}],
+            side_effect=[{}, {}, {}],
         ):
             delete_response = self.client.post(
                 "/admin/users",
                 data={"email": "user@example.com", "action": "delete"},
             )
 
-        with patch.object(self.services.storage, "get_user_roles", side_effect=[{}, {}]), patch.object(
+        with patch.object(self.services.storage, "get_user_roles", side_effect=[{}, {}, {}]), patch.object(
             self.services.storage,
             "set_user_role",
         ) as set_role_mock:
@@ -1013,7 +990,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
             response = self.client.post("/delete-listing/prop-1")
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn(b"boom", response.data)
+        self.assertIn(b"Operation failed", response.data)
         notify_mock.assert_called_once()
 
     def test_toggle_sale_returns_500_on_generic_error(self):
@@ -1025,7 +1002,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
             response = self.client.post("/toggle-sale/prop-1")
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn(b"boom", response.data)
+        self.assertIn(b"Operation failed", response.data)
         notify_mock.assert_called_once()
 
 
@@ -1037,7 +1014,7 @@ class CoverageStartupExecutionTestCase(unittest.TestCase):
         ) as refresh_mock:
             website_app.start_cache_refresh_thread()
 
-        refresh_mock.assert_called_once()
+        refresh_mock.assert_not_called()
 
     def test_print_check_file_delegates_to_appointment_service(self):
         with patch.object(

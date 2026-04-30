@@ -117,6 +117,7 @@ def auth_status_payload():
             {
                 "authenticated": True,
                 "user": {
+                    "email": user.get("email", ""),
                     "name": user.get("name", ""),
                     "role": user.get("role", "guest"),
                 },
