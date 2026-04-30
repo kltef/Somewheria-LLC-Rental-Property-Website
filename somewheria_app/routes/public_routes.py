@@ -42,6 +42,14 @@ def report_issue_complete():
 
 def for_rent():
     services = get_services()
+    # Refresh property data from upstream on every page load.
+    # Falls back to whatever is in cache if the upstream call fails.
+    try:
+        services.properties.refresh_cache()
+    except Exception as exc:
+        services.properties.logger.warning(
+            "Synchronous refresh failed on /for-rent, serving cache: %s", exc
+        )
     return render_template(
         "for_rent.html",
         properties=services.properties.get_cached_properties(),
@@ -51,6 +59,14 @@ def for_rent():
 
 def for_rent_json():
     services = get_services()
+    # Refresh property data from upstream on every call.
+    # Falls back to whatever is in cache if the upstream call fails.
+    try:
+        services.properties.refresh_cache()
+    except Exception as exc:
+        services.properties.logger.warning(
+            "Synchronous refresh failed on /for-rent.json, serving cache: %s", exc
+        )
     properties = services.properties.get_cached_properties()
     return jsonify(services.properties.serialize_properties(properties))
 

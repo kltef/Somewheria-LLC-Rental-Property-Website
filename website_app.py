@@ -9,7 +9,11 @@ logger = get_console_logger("startup")
 
 
 def start_cache_refresh_thread() -> None:
-    app.extensions["somewheria_services"].properties.start_background_refresh()
+    # Periodic background cache refresh disabled to cut AWS API Gateway / Lambda
+    # costs. The cache is now populated on demand by /for-rent and /for-rent.json.
+    # This shim is kept so external callers (and the __main__ block below) don't
+    # break, but it deliberately does nothing.
+    return
 
 
 def print_check_file(path, purpose) -> None:
