@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 from somewheria_app.services.appointments import AppointmentService
 from somewheria_app.services.auth import AuthService
@@ -172,33 +172,50 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
 class AppointmentServiceTestCase(unittest.TestCase):
     def setUp(self):
-        self.config = SimpleNamespace(property_appointments_file=Path("appointments.txt"))
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.appointments_path = Path(self.tmpdir.name) / "appointments.txt"
+        self.config = SimpleNamespace(property_appointments_file=self.appointments_path)
         self.service = AppointmentService(self.config)
 
     def test_load_returns_empty_when_file_missing(self):
-        with patch.object(Path, "exists", return_value=False):
-            self.assertEqual(self.service.load(), {})
+        self.assertEqual(self.service.load(), {})
 
     def test_save_and_load_round_trip(self):
-        handle = mock_open()
-        with patch.object(Path, "open", handle), patch.object(
-            self.service,
-            "print_check_file",
-        ) as print_check_mock:
-            self.service.save({"prop-1": {"2030-01-11", "2030-01-10"}})
+        self.service.save({"prop-1": {"2030-01-11", "2030-01-10"}, "prop-2": {"2030-02-01"}})
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-01-10", "2030-01-11"})
+        self.assertEqual(loaded["prop-2"], {"2030-02-01"})
+        # Dates should be persisted in sorted order on disk.
+        on_disk = self.appointments_path.read_text(encoding="utf-8")
+        self.assertIn("prop-1:2030-01-10,2030-01-11", on_disk)
 
-        written = "".join(call.args[0] for call in handle().write.call_args_list)
-        self.assertIn("prop-1:2030-01-10,2030-01-11", written)
-        print_check_mock.assert_called_once()
+    def test_save_is_atomic_no_temp_files_left_behind(self):
+        self.service.save({"prop-1": {"2030-01-10"}})
+        leftovers = [p for p in self.appointments_path.parent.iterdir() if p.name != "appointments.txt"]
+        self.assertEqual(leftovers, [], f"Unexpected temp files: {leftovers}")
+
+    def test_save_failure_preserves_existing_file(self):
+        # First save establishes the original contents we want preserved.
+        self.service.save({"prop-1": {"2030-01-10"}})
+        original = self.appointments_path.read_text(encoding="utf-8")
+
+        # Force the os.replace step to fail; the original file must survive
+        # untouched and no leftover temp file may remain.
+        with patch("somewheria_app.services.appointments.os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.service.save({"prop-1": {"2099-12-31"}})
+
+        self.assertEqual(self.appointments_path.read_text(encoding="utf-8"), original)
+        leftovers = [p for p in self.appointments_path.parent.iterdir() if p.name != "appointments.txt"]
+        self.assertEqual(leftovers, [], f"Temp file leaked after failed save: {leftovers}")
 
     def test_load_ignores_malformed_lines(self):
-        with patch.object(Path, "exists", return_value=True), patch.object(
-            Path,
-            "open",
-            mock_open(read_data="prop-1:2030-01-10,2030-01-11\nmalformed\nprop-2:2030-02-01\n"),
-        ):
-            loaded = self.service.load()
-
+        self.appointments_path.write_text(
+            "prop-1:2030-01-10,2030-01-11\nmalformed\nprop-2:2030-02-01\n",
+            encoding="utf-8",
+        )
+        loaded = self.service.load()
         self.assertEqual(loaded["prop-1"], {"2030-01-10", "2030-01-11"})
         self.assertEqual(loaded["prop-2"], {"2030-02-01"})
 
@@ -320,6 +337,60 @@ class PropertyServiceTestCase(unittest.TestCase):
             name = self.service.fetch_live_property_name("prop-1")
 
         self.assertIsNone(name)
+
+    def test_fetch_property_record_returns_none_on_http_error(self):
+        # Upstream returns valid JSON but with a 5xx status code. Without
+        # raise_for_status() the error body would be passed through as a
+        # property record.
+        from requests import HTTPError
+
+        details_response = Mock()
+        details_response.raise_for_status.side_effect = HTTPError("500")
+        details_response.json.return_value = {"error": "boom"}
+
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            return_value=details_response,
+        ):
+            self.assertIsNone(self.service.fetch_property_record("prop-1"))
+
+    def test_fetch_property_record_skips_non_dict_payload(self):
+        details_response = Mock()
+        details_response.raise_for_status.return_value = None
+        details_response.json.return_value = ["not", "a", "dict"]
+
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            return_value=details_response,
+        ):
+            self.assertIsNone(self.service.fetch_property_record("prop-1"))
+
+    def test_get_base64_image_from_url_rejects_oversize_content_length(self):
+        from somewheria_app.services.properties import MAX_IMAGE_BYTES
+
+        oversize = MAX_IMAGE_BYTES + 1
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Length": str(oversize)}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([])
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            self.assertIsNone(self.service.get_base64_image_from_url("https://example.com/big.jpg"))
+
+    def test_get_base64_image_from_url_rejects_oversize_streamed(self):
+        from somewheria_app.services.properties import MAX_IMAGE_BYTES
+
+        # No Content-Length header (chunked / unknown size); the cap must be
+        # enforced while iterating chunks.
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([b"x" * (MAX_IMAGE_BYTES + 1)])
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            self.assertIsNone(self.service.get_base64_image_from_url("https://example.com/big.jpg"))
 
 
 class NotificationServiceTestCase(unittest.TestCase):

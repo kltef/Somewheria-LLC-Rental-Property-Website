@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 from flask import Flask, Response, abort
 from PIL import Image
@@ -275,7 +275,12 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         image = Image.new("RGB", (16, 9), color="green")
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
-        response = Mock(content=buffer.getvalue())
+        payload = buffer.getvalue()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Length": str(len(payload))}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([payload])
 
         with patch("somewheria_app.services.properties.requests.get", return_value=response):
             encoded = self.service.get_base64_image_from_url("https://example.com/image.png")

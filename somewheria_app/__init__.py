@@ -128,11 +128,21 @@ def create_app() -> Flask:
 
     def _send_crash_email_async(subject: str, body: str, fingerprint: str) -> None:
         now = time.time()
+        cooldown = crash_email_state["cooldown_seconds"]
         with crash_email_state["lock"]:
-            last = crash_email_state["last_sent_by_key"].get(fingerprint, 0)
-            if now - last < crash_email_state["cooldown_seconds"]:
+            sent = crash_email_state["last_sent_by_key"]
+            last = sent.get(fingerprint, 0)
+            if now - last < cooldown:
                 return  # Already alerted on this error recently; skip.
-            crash_email_state["last_sent_by_key"][fingerprint] = now
+            # Bound the dict so a long-running process that hits many distinct
+            # error fingerprints can't grow this map without limit. Anything
+            # older than the cooldown window can no longer suppress emails, so
+            # it's safe to drop.
+            cutoff = now - cooldown
+            stale = [key for key, ts in sent.items() if ts < cutoff]
+            for key in stale:
+                del sent[key]
+            sent[fingerprint] = now
 
         def _worker() -> None:
             try:
