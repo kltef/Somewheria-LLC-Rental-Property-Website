@@ -26,10 +26,3 @@ jobs:
 
       - name: Run Playwright Tests
         run: pytest tests/  # This is where your codegen scripts go
-
-  deploy:
-    needs: test # THIS IS THE KEY: It only runs if tests pass
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Deploy
-        run: curl ${{ secrets.RENDER_DEPLOY_HOOK }} # A simple URL Render gives you
