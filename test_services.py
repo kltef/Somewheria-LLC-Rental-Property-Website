@@ -436,5 +436,123 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertIn("[http] GET /admin/status -> 200", entries[1]["message"])
 
 
+class PropertyWritePathTestCase(unittest.TestCase):
+    def setUp(self):
+        self.notifications = Mock()
+        self.config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        self.service = PropertyService(self.config, self.notifications)
+
+    def test_property_payload_from_form_includes_sqft(self):
+        form = DummyForm(values={"name": "Maple", "sqft": "1200"})
+
+        payload = self.service.property_payload_from_form(form)
+
+        self.assertEqual(payload["sqft"], "1200")
+
+    def test_update_property_forwards_sqft_to_upstream(self):
+        current = {
+            "id": "prop-1",
+            "name": "Maple",
+            "address": "123 Main",
+            "rent": "1000",
+            "deposit": "1000",
+            "sqft": "900",
+            "bedrooms": "2",
+            "bathrooms": "1",
+            "lease_length": "12 months",
+            "pets_allowed": "No",
+            "blurb": "Old",
+            "description": "Old description",
+        }
+        form = DummyForm(values={"sqft": "1500"})
+
+        with patch.object(self.service, "get_property", return_value=current), patch(
+            "somewheria_app.services.properties.requests.put"
+        ) as put_mock, patch.object(self.service, "trigger_background_refresh"):
+            self.service.update_property("prop-1", form, "admin@example.com")
+
+        self.assertEqual(put_mock.call_args.kwargs["json"]["sqft"], "1500")
+
+    def test_update_property_raises_when_upstream_rejects(self):
+        current = {"id": "prop-1", "name": "Maple"}
+        form = DummyForm(values={"name": "Updated"})
+        response = Mock()
+        response.raise_for_status.side_effect = RuntimeError("upstream 500")
+
+        with patch.object(self.service, "get_property", return_value=current), patch(
+            "somewheria_app.services.properties.requests.put",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh") as trigger_mock:
+            with self.assertRaises(RuntimeError):
+                self.service.update_property("prop-1", form, "admin@example.com")
+
+        # The upstream rejected, so we must NOT log the change or kick a refresh.
+        self.notifications.log_site_change.assert_not_called()
+        trigger_mock.assert_not_called()
+
+    def test_toggle_sale_does_not_update_cache_when_upstream_fails(self):
+        self.service.cache = [{"id": "prop-1", "for_sale": False, "status": "Active"}]
+        response = Mock()
+        response.raise_for_status.side_effect = RuntimeError("upstream 500")
+
+        with patch(
+            "somewheria_app.services.properties.requests.put",
+            return_value=response,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.toggle_sale("prop-1", "admin@example.com")
+
+        self.assertFalse(self.service.cache[0]["for_sale"])
+        self.assertEqual(self.service.cache[0]["status"], "Active")
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_safe_json_returns_default_on_http_error_status(self):
+        response = Mock()
+        response.raise_for_status.side_effect = RuntimeError("404")
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            return_value=response,
+        ):
+            payload = self.service._safe_json("https://example.com/data", ["fallback"])
+
+        self.assertEqual(payload, ["fallback"])
+
+
+class AnalyticsPruningTestCase(unittest.TestCase):
+    def test_prune_drops_buckets_outside_window(self):
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        tracker = AnalyticsTracker(analytics_days=3)
+        tracker.site_visits["2024-01-01"] = 5  # well outside the 3-day window
+        tracker.unique_users["2024-01-01"] = {"old@example.com"}
+        tracker.logins["2024-01-01"] = 1
+        tracker.errors["2024-01-01"] = 2
+
+        # Today happens to be 2026-05-01 in this test environment but the
+        # prune logic uses whatever string we pass in, so this is independent
+        # of wall-clock time.
+        tracker._prune_old_buckets("2030-01-10")
+
+        self.assertNotIn("2024-01-01", tracker.site_visits)
+        self.assertNotIn("2024-01-01", tracker.unique_users)
+        self.assertNotIn("2024-01-01", tracker.logins)
+        self.assertNotIn("2024-01-01", tracker.errors)
+
+    def test_prune_keeps_recent_days(self):
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        tracker = AnalyticsTracker(analytics_days=7)
+        tracker.site_visits["2030-01-08"] = 4  # 2 days before "today"
+        tracker.site_visits["2030-01-10"] = 1  # the test "today"
+
+        tracker._prune_old_buckets("2030-01-10")
+
+        self.assertEqual(tracker.site_visits["2030-01-08"], 4)
+        self.assertEqual(tracker.site_visits["2030-01-10"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
