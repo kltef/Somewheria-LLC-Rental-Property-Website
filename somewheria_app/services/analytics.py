@@ -16,11 +16,26 @@ class AnalyticsTracker:
         self.logins = collections.defaultdict(int)
         self.errors = collections.defaultdict(int)
 
+    def _prune_old_buckets(self, today: str) -> None:
+        # Keep only the rolling window of ``analytics_days`` so the counters
+        # don't grow unbounded over the lifetime of the process.
+        try:
+            cutoff = (
+                datetime.date.fromisoformat(today)
+                - datetime.timedelta(days=max(0, self.analytics_days))
+            ).isoformat()
+        except ValueError:
+            return
+        for bucket in (self.site_visits, self.unique_users, self.logins, self.errors):
+            for day in [d for d in bucket.keys() if d < cutoff]:
+                del bucket[day]
+
     def before_request(self) -> None:
         g.start_time = time.time()
         if request.endpoint == "static":
             return
         today = datetime.date.today().isoformat()
+        self._prune_old_buckets(today)
         self.site_visits[today] += 1
         user = session.get("user") or {}
         visitor = user.get("email") or request.remote_addr or "anonymous"
@@ -44,11 +59,13 @@ class AnalyticsTracker:
 
     def record_login(self, user_identifier: str) -> None:
         today = datetime.date.today().isoformat()
+        self._prune_old_buckets(today)
         self.logins[today] += 1
         self.unique_users[today].add(user_identifier)
 
     def record_error(self) -> None:
         today = datetime.date.today().isoformat()
+        self._prune_old_buckets(today)
         self.errors[today] += 1
 
     def dashboard_data(self, property_count: int) -> tuple[dict, dict]:

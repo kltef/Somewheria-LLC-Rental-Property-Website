@@ -180,7 +180,9 @@ class PropertyService:
 
     def _safe_json(self, url: str, default):
         try:
-            return requests.get(url, timeout=10).json()
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.json()
         except Exception:
             return default
 
@@ -282,6 +284,7 @@ class PropertyService:
             "address": form.get("address", ""),
             "rent": form.get("rent", ""),
             "deposit": form.get("deposit", ""),
+            "sqft": form.get("sqft", ""),
             "bedrooms": form.get("bedrooms", ""),
             "bathrooms": form.get("bathrooms", ""),
             "lease_length": form.get("lease_length", "12 months"),
@@ -315,6 +318,7 @@ class PropertyService:
                 "address": form.get("address", current_property.get("address")),
                 "rent": form.get("rent", current_property.get("rent")),
                 "deposit": form.get("deposit", current_property.get("deposit")),
+                "sqft": form.get("sqft", current_property.get("sqft", "")),
                 "bedrooms": form.get("bedrooms", current_property.get("bedrooms")),
                 "bathrooms": form.get("bathrooms", current_property.get("bathrooms")),
                 "lease_length": form.get("lease_length", current_property.get("lease_length")),
@@ -338,6 +342,7 @@ class PropertyService:
             "address": updated_property.get("address"),
             "rent": updated_property.get("rent"),
             "deposit": updated_property.get("deposit"),
+            "sqft": updated_property.get("sqft", ""),
             "bedrooms": updated_property.get("bedrooms"),
             "bathrooms": updated_property.get("bathrooms"),
             "lease_length": updated_property.get("lease_length"),
@@ -346,11 +351,14 @@ class PropertyService:
             "description": updated_property.get("description"),
             "included_amenities": updated_property.get("included_amenities", []),
         }
-        requests.put(
+        # Verify the upstream accepted the change before logging it as an
+        # update — otherwise a 4xx/5xx silently records a phantom change.
+        response = requests.put(
             f"{self.config.api_base_url}/properties/{property_id}/details",
             json=update_payload,
             timeout=20,
         )
+        response.raise_for_status()
         self.notifications.log_site_change(actor_email, "property_updated", {"property_id": property_id})
         self.trigger_background_refresh(actor_email)
 
@@ -367,11 +375,14 @@ class PropertyService:
         if not property_info:
             raise KeyError("Property not found")
         new_status = not property_info.get("for_sale", False)
-        requests.put(
+        # Apply upstream first; if the API rejects the change, we must NOT
+        # update the local cache, otherwise the UI would show stale state.
+        response = requests.put(
             f"{self.config.api_base_url}/properties/{property_id}/details",
             json={"for_sale": new_status},
             timeout=20,
         )
+        response.raise_for_status()
         with self.cache_lock:
             for item in self.cache:
                 if item.get("id") == property_id:
