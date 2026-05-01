@@ -160,9 +160,19 @@ class PropertyService:
 
     def fetch_property_record(self, property_id: str):
         try:
-            details = requests.get(
+            details_response = requests.get(
                 f"{self.config.api_base_url}/properties/{property_id}/details", timeout=10
-            ).json()
+            )
+            # Without raise_for_status() a 4xx/5xx JSON error body would be
+            # silently passed through as a property record.
+            details_response.raise_for_status()
+            details = details_response.json()
+            if not isinstance(details, dict):
+                self.logger.warning(
+                    "Property %s details endpoint returned non-object payload; skipping",
+                    property_id,
+                )
+                return None
             photo_urls = self._safe_json(f"{self.config.api_base_url}/properties/{property_id}/photos", [])
             thumbnail_url = self._safe_json(
                 f"{self.config.api_base_url}/properties/{property_id}/thumbnail", None
@@ -262,13 +272,31 @@ class PropertyService:
 
     def get_base64_image_from_url(self, url: str):
         try:
-            image_response = requests.get(url, timeout=10)
-            image_response.raise_for_status()
-            with Image.open(BytesIO(image_response.content)) as image:
-                processed = self.letterbox_to_16_9(ImageOps.exif_transpose(image).convert("RGB"))
+            # Stream the download with a hard byte cap so a misbehaving or
+            # hostile upstream can't exhaust memory by serving an enormous
+            # payload. Reject early via Content-Length when present, then
+            # enforce the cap during streaming for chunked / unknown-length
+            # responses.
+            with requests.get(url, timeout=10, stream=True) as image_response:
+                image_response.raise_for_status()
+                advertised = image_response.headers.get("Content-Length")
+                if advertised and advertised.isdigit() and int(advertised) > MAX_IMAGE_BYTES:
+                    raise ValueError(f"Image exceeds {MAX_IMAGE_BYTES} byte limit")
                 buffer = BytesIO()
-                processed.save(buffer, format="JPEG")
-                encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                total = 0
+                for chunk in image_response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_IMAGE_BYTES:
+                        raise ValueError(f"Image exceeds {MAX_IMAGE_BYTES} byte limit")
+                    buffer.write(chunk)
+                raw = buffer.getvalue()
+            with Image.open(BytesIO(raw)) as image:
+                processed = self.letterbox_to_16_9(ImageOps.exif_transpose(image).convert("RGB"))
+                out = BytesIO()
+                processed.save(out, format="JPEG")
+                encoded = base64.b64encode(out.getvalue()).decode("utf-8")
                 return f"data:image/jpeg;base64,{encoded}"
         except Exception as exc:
             self.logger.warning("Could not process image %s: %s", url, exc)

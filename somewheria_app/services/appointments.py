@@ -1,3 +1,5 @@
+import os
+import tempfile
 import threading
 
 from .console import get_console_logger
@@ -37,10 +39,26 @@ class AppointmentService:
         return appointments
 
     def save(self, appointments: dict[str, set[str]]) -> None:
-        abs_path = self.config.property_appointments_file.resolve()
+        # Atomic write: render the full payload to a sibling temp file, fsync,
+        # then os.replace() over the destination. A crash mid-write leaves the
+        # original file intact instead of a half-written, truncated one.
+        path = self.config.property_appointments_file
+        abs_path = path.resolve()
         self.logger.info("Saving %s appointment sets to %s", len(appointments), abs_path)
         with self._lock:
-            with self.config.property_appointments_file.open("w", encoding="utf-8") as handle:
-                for property_id, date_set in appointments.items():
-                    print(f"{property_id}:{','.join(sorted(date_set))}", file=handle)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    for property_id, date_set in appointments.items():
+                        print(f"{property_id}:{','.join(sorted(date_set))}", file=handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_name, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
         self.print_check_file(self.config.property_appointments_file, "Appointments saved")
