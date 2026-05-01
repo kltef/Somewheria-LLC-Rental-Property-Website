@@ -1,5 +1,7 @@
 name: Flask CI/CD
 on: [push]
+permissions:
+  contents: read
 
 jobs:
   test:
