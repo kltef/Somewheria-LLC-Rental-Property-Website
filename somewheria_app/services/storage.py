@@ -12,12 +12,25 @@ class FileStorageService:
         self.file_lock = threading.Lock()
         self.logger = get_console_logger("storage")
 
-    def load_json_file(self, path, default):
+    def load_json_file(self, path, default, *, expected_type: type | tuple[type, ...] | None = None):
         try:
             with self.file_lock:
                 if path.exists():
                     with path.open("r", encoding="utf-8") as handle:
-                        return json.load(handle)
+                        loaded = json.load(handle)
+                    # If the caller declared an expected shape, fall back to
+                    # the default when the file's contents don't match. Without
+                    # this, a corrupted or hand-edited file holding a dict
+                    # where a list is expected would crash callers that do
+                    # ``.append`` or list-iteration on the return value.
+                    if expected_type is not None and not isinstance(loaded, expected_type):
+                        self.logger.warning(
+                            "Unexpected JSON shape in %s (got %s); using default",
+                            path,
+                            type(loaded).__name__,
+                        )
+                        return default
+                    return loaded
         except Exception as exc:
             self.logger.error("Failed to load %s: %s", path, exc)
         return default
@@ -45,7 +58,7 @@ class FileStorageService:
             self.logger.error("Failed to save %s: %s", path, exc)
 
     def get_pending_registrations(self) -> list[dict]:
-        return self.load_json_file(self.config.registration_file, [])
+        return self.load_json_file(self.config.registration_file, [], expected_type=list)
 
     def add_pending_registration(self, registration: dict) -> None:
         registrations = self.get_pending_registrations()
@@ -59,7 +72,7 @@ class FileStorageService:
         self.save_json_file(self.config.registration_file, registrations)
 
     def get_user_roles(self) -> dict:
-        return self.load_json_file(self.config.user_roles_file, {})
+        return self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)
 
     def set_user_role(self, email: str, role: str) -> None:
         roles = self.get_user_roles()
@@ -78,13 +91,13 @@ class FileStorageService:
         return previous is not None and previous != "revoked"
 
     def get_renter_profiles(self) -> dict:
-        return self.load_json_file(self.config.renter_profile_file, {})
+        return self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)
 
     def save_renter_profiles(self, profiles: dict) -> None:
         self.save_json_file(self.config.renter_profile_file, profiles)
 
     def get_renter_contracts(self) -> dict:
-        return self.load_json_file(self.config.contracts_file, {})
+        return self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
 
     def save_renter_contracts(self, contracts: dict) -> None:
         self.save_json_file(self.config.contracts_file, contracts)
