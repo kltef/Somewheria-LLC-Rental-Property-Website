@@ -1,3 +1,4 @@
+import collections
 import datetime
 import html
 import json
@@ -106,10 +107,13 @@ class NotificationService:
             self.console.error("Failed to record site change '%s': %s", action, exc)
 
     def read_logs(self) -> list[dict]:
-        entries = []
         if not self.config.log_file.exists():
-            return entries
+            return []
         ansi_escape = re.compile(r"\x1B\[[0-9;]*[mK]")
+        # Bound peak memory: a long-running process can produce a multi-MB
+        # log file, but the UI only ever shows the last 500 entries. A deque
+        # keeps just the tail in memory instead of the entire history.
+        entries: collections.deque[dict] = collections.deque(maxlen=500)
         with self.config.log_file.open("r", encoding="utf-8", errors="replace") as handle:
             for raw_line in handle:
                 line = raw_line.strip()
@@ -139,4 +143,4 @@ class NotificationService:
                         "message": ansi_escape.sub("", message),
                     }
                 )
-        return list(reversed(entries[-500:]))
+        return list(reversed(entries))

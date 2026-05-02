@@ -159,6 +159,12 @@ class PropertyService:
             return []
 
     def fetch_property_record(self, property_id: str):
+        # Defense in depth: refuse property IDs that don't match the expected
+        # shape so a malformed upstream response can't smuggle traversal
+        # sequences ("../") into our outbound HTTP paths.
+        if not PROPERTY_ID_PATTERN.match(property_id or ""):
+            self.logger.warning("Refusing to fetch property with invalid id: %r", property_id)
+            return None
         try:
             details_response = requests.get(
                 f"{self.config.api_base_url}/properties/{property_id}/details", timeout=10
@@ -173,12 +179,20 @@ class PropertyService:
                     property_id,
                 )
                 return None
-            photo_urls = self._safe_json(f"{self.config.api_base_url}/properties/{property_id}/photos", [])
+            photo_urls = self._safe_json(
+                f"{self.config.api_base_url}/properties/{property_id}/photos",
+                [],
+                expected_type=list,
+            )
             thumbnail_url = self._safe_json(
-                f"{self.config.api_base_url}/properties/{property_id}/thumbnail", None
+                f"{self.config.api_base_url}/properties/{property_id}/thumbnail",
+                None,
+                expected_type=str,
             )
             details["photos"] = []
             for photo_url in photo_urls:
+                if not isinstance(photo_url, str):
+                    continue
                 encoded = self.get_base64_image_from_url(photo_url)
                 if encoded:
                     details["photos"].append(encoded)
@@ -188,13 +202,16 @@ class PropertyService:
             self.logger.warning("Failed to fetch property %s: %s", property_id, exc)
             return None
 
-    def _safe_json(self, url: str, default):
+    def _safe_json(self, url: str, default, *, expected_type: type | tuple[type, ...] | None = None):
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            payload = response.json()
         except Exception:
             return default
+        if expected_type is not None and not isinstance(payload, expected_type):
+            return default
+        return payload
 
     def normalize_property(self, property_info: dict, property_id: str | None = None) -> dict:
         normalized = dict(property_info or {})
@@ -494,11 +511,25 @@ class PropertyService:
         return relative_url
 
     def fetch_live_property_name(self, property_id: str) -> str | None:
+        # Validate the id at the boundary so unsanitized values can't smuggle
+        # path-traversal sequences ("../") into the outbound URL.
+        if not PROPERTY_ID_PATTERN.match(property_id or ""):
+            return None
         try:
-            property_info = requests.get(
+            response = requests.get(
                 f"{self.config.api_base_url}/properties/{property_id}/details",
                 timeout=10,
-            ).json()
-            return property_info.get("name", "(Unknown Property)")
+            )
+            # Without raise_for_status() a 404/5xx JSON error body would be
+            # treated as a real property and the caller would proceed as if
+            # the property existed.
+            response.raise_for_status()
+            property_info = response.json()
         except Exception:
             return None
+        if not isinstance(property_info, dict):
+            return None
+        name = property_info.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        return name

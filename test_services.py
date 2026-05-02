@@ -98,6 +98,33 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
         self.assertEqual(loaded, {"admin@example.com": "admin"})
 
+    def test_load_json_file_falls_back_when_expected_type_does_not_match(self):
+        # File exists and contains valid JSON, but it's a dict where the
+        # caller asked for a list. Without the type check, downstream code
+        # that does ``.append`` on the return value would crash.
+        with patch.object(Path, "exists", return_value=True), patch.object(
+            Path,
+            "open",
+            mock_open(read_data='{"oops": "wrong shape"}'),
+        ):
+            loaded = self.service.load_json_file(
+                self.config.registration_file, [], expected_type=list
+            )
+
+        self.assertEqual(loaded, [])
+
+    def test_load_json_file_returns_loaded_value_when_type_matches(self):
+        with patch.object(Path, "exists", return_value=True), patch.object(
+            Path,
+            "open",
+            mock_open(read_data='[{"email": "a@example.com"}]'),
+        ):
+            loaded = self.service.load_json_file(
+                self.config.registration_file, [], expected_type=list
+            )
+
+        self.assertEqual(loaded, [{"email": "a@example.com"}])
+
     def test_add_pending_registration_appends_and_saves(self):
         with patch.object(self.service, "get_pending_registrations", return_value=[{"email": "keep@example.com"}]), patch.object(
             self.service,
@@ -338,6 +365,49 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         self.assertIsNone(name)
 
+    def test_fetch_live_property_name_returns_none_for_invalid_id(self):
+        # A traversal-style id must be rejected at the boundary so the
+        # outbound URL can never reach an unintended upstream path.
+        with patch("somewheria_app.services.properties.requests.get") as get_mock:
+            name = self.service.fetch_live_property_name("../../etc/passwd")
+
+        self.assertIsNone(name)
+        get_mock.assert_not_called()
+
+    def test_fetch_live_property_name_returns_none_on_http_error_status(self):
+        # A 404/5xx with a JSON error body must not be treated as a real
+        # property name. Without raise_for_status() this would have leaked
+        # through and the caller would have proceeded as if the property
+        # existed.
+        from requests import HTTPError
+
+        response = Mock()
+        response.raise_for_status.side_effect = HTTPError("404")
+        response.json.return_value = {"name": "Should Be Ignored"}
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            name = self.service.fetch_live_property_name("prop-1")
+
+        self.assertIsNone(name)
+
+    def test_fetch_live_property_name_returns_none_when_name_missing(self):
+        # Upstream answered 200 but the JSON has no usable name; we must
+        # signal "not found" rather than fall back to a generic placeholder
+        # that callers would treat as a successful lookup.
+        response = Mock()
+        response.json.return_value = {"address": "123 Main"}
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            name = self.service.fetch_live_property_name("prop-1")
+
+        self.assertIsNone(name)
+
+    def test_fetch_live_property_name_returns_none_when_payload_not_a_dict(self):
+        response = Mock()
+        response.json.return_value = ["unexpected", "list"]
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            name = self.service.fetch_live_property_name("prop-1")
+
+        self.assertIsNone(name)
+
     def test_fetch_property_record_returns_none_on_http_error(self):
         # Upstream returns valid JSON but with a 5xx status code. Without
         # raise_for_status() the error body would be passed through as a
@@ -506,6 +576,28 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertEqual(entries[1]["level"], "INFO")
         self.assertIn("[http] GET /admin/status -> 200", entries[1]["message"])
 
+    def test_read_logs_caps_returned_entries_to_500(self):
+        # A log file with more than 500 entries should still return only the
+        # last 500, in newest-first order. The implementation streams the
+        # file through a bounded deque so memory does not grow with the
+        # number of historical lines.
+        log_text = "".join(
+            f"2026-03-23 18:47:{i % 60:02d}|INFO|http|line {i}\n"
+            for i in range(700)
+        )
+        with patch.object(Path, "exists", return_value=True), patch.object(
+            Path,
+            "open",
+            mock_open(read_data=log_text),
+        ):
+            entries = self.service.read_logs()
+
+        self.assertEqual(len(entries), 500)
+        # Newest entry first.
+        self.assertIn("line 699", entries[0]["message"])
+        # Oldest retained entry is index 200 (700 - 500).
+        self.assertIn("line 200", entries[-1]["message"])
+
 
 class PropertyWritePathTestCase(unittest.TestCase):
     def setUp(self):
@@ -590,6 +682,73 @@ class PropertyWritePathTestCase(unittest.TestCase):
             payload = self.service._safe_json("https://example.com/data", ["fallback"])
 
         self.assertEqual(payload, ["fallback"])
+
+    def test_safe_json_returns_default_when_type_does_not_match(self):
+        # Caller asked for a list but the API answered with an object. The
+        # default must be returned so downstream iteration doesn't quietly
+        # walk the dict's keys.
+        response = Mock()
+        response.json.return_value = {"oops": "object"}
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            return_value=response,
+        ):
+            payload = self.service._safe_json(
+                "https://example.com/photos", ["fallback"], expected_type=list
+            )
+
+        self.assertEqual(payload, ["fallback"])
+
+    def test_safe_json_returns_payload_when_type_matches(self):
+        response = Mock()
+        response.json.return_value = ["a", "b"]
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            return_value=response,
+        ):
+            payload = self.service._safe_json(
+                "https://example.com/photos", [], expected_type=list
+            )
+
+        self.assertEqual(payload, ["a", "b"])
+
+    def test_fetch_property_record_skips_invalid_property_id(self):
+        # Defense in depth: even if upstream somehow returned a malformed
+        # id, we must not relay it into an outbound URL.
+        with patch("somewheria_app.services.properties.requests.get") as get_mock:
+            result = self.service.fetch_property_record("../etc")
+
+        self.assertIsNone(result)
+        get_mock.assert_not_called()
+
+    def test_fetch_property_record_ignores_non_string_photo_urls(self):
+        details_response = Mock()
+        details_response.json.return_value = {"name": "House"}
+        photos_response = Mock()
+        # A misbehaving upstream returns a list with non-string entries.
+        # Those must be skipped instead of crashing the image pipeline.
+        photos_response.json.return_value = [42, None, "https://example.com/p.jpg"]
+        thumb_response = Mock()
+        thumb_response.json.return_value = "https://example.com/thumb.jpg"
+
+        responses = {
+            f"{self.service.config.api_base_url}/properties/prop-1/details": details_response,
+            f"{self.service.config.api_base_url}/properties/prop-1/photos": photos_response,
+            f"{self.service.config.api_base_url}/properties/prop-1/thumbnail": thumb_response,
+        }
+
+        def fake_get(url, *args, **kwargs):
+            return responses[url]
+
+        with patch("somewheria_app.services.properties.requests.get", side_effect=fake_get), patch.object(
+            self.service, "get_base64_image_from_url", return_value="data:image/jpeg;base64,xxx"
+        ) as encode_mock:
+            record = self.service.fetch_property_record("prop-1")
+
+        # Only the single string URL should reach the encoder.
+        encode_mock.assert_called_once_with("https://example.com/p.jpg")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["photos"], ["data:image/jpeg;base64,xxx"])
 
 
 class AnalyticsPruningTestCase(unittest.TestCase):
