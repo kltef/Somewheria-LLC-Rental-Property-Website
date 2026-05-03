@@ -1,5 +1,7 @@
 import tempfile
+import time
 import unittest
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
@@ -782,6 +784,69 @@ class AnalyticsPruningTestCase(unittest.TestCase):
 
         self.assertEqual(tracker.site_visits["2030-01-08"], 4)
         self.assertEqual(tracker.site_visits["2030-01-10"], 1)
+
+
+class RateLimiterTestCase(unittest.TestCase):
+    def _make_limiter(self):
+        from somewheria_app.services.security import _RateLimiter
+
+        return _RateLimiter()
+
+    def test_check_allows_until_limit_then_blocks_within_window(self):
+        limiter = self._make_limiter()
+
+        self.assertTrue(limiter.check("k", limit=2, window_seconds=60))
+        self.assertTrue(limiter.check("k", limit=2, window_seconds=60))
+        self.assertFalse(limiter.check("k", limit=2, window_seconds=60))
+
+    def test_unseen_key_lookup_does_not_create_entry(self):
+        limiter = self._make_limiter()
+
+        # Reading the internal map must not auto-create empty buckets — the
+        # earlier ``defaultdict(deque)`` implementation leaked one entry per
+        # unique (endpoint, IP) pair seen.
+        self.assertEqual(len(limiter._hits), 0)
+        _ = limiter._hits.get("never-seen")
+        self.assertEqual(len(limiter._hits), 0)
+
+    def test_blocked_request_does_not_extend_bucket(self):
+        limiter = self._make_limiter()
+
+        self.assertTrue(limiter.check("k", limit=1, window_seconds=60))
+        self.assertFalse(limiter.check("k", limit=1, window_seconds=60))
+
+        # A blocked check must not append a new timestamp; otherwise a flood
+        # of denied requests would keep extending the window indefinitely.
+        self.assertEqual(len(limiter._hits["k"]), 1)
+
+    def test_sweep_drops_stale_keys_only(self):
+        limiter = self._make_limiter()
+        limiter.check("active", limit=5, window_seconds=60)
+        limiter.check("stale", limit=5, window_seconds=60)
+
+        # Backdate the "stale" key's only timestamp past the TTL.
+        limiter._hits["stale"][-1] = (
+            limiter._hits["active"][-1] - limiter._STALE_KEY_TTL_SECONDS - 10
+        )
+
+        with limiter._lock:
+            limiter._sweep_stale_keys(limiter._hits["active"][-1])
+
+        self.assertIn("active", limiter._hits)
+        self.assertNotIn("stale", limiter._hits)
+
+    def test_sweep_runs_periodically_during_check(self):
+        limiter = self._make_limiter()
+        old = time.monotonic() - limiter._STALE_KEY_TTL_SECONDS - 100
+        limiter._hits["stale"] = deque([old])
+
+        # Drive enough check() calls on a *different* key to trigger one
+        # full sweep cycle without refreshing the stale bucket.
+        for _ in range(limiter._SWEEP_INTERVAL_CALLS):
+            limiter.check("active", limit=10**9, window_seconds=60)
+
+        self.assertNotIn("stale", limiter._hits)
+        self.assertIn("active", limiter._hits)
 
 
 if __name__ == "__main__":

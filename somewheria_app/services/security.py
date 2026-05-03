@@ -1,6 +1,6 @@
 import secrets
 import time
-from collections import defaultdict, deque
+from collections import deque
 from functools import wraps
 from threading import Lock
 
@@ -109,21 +109,51 @@ def register_security_headers(app) -> None:
 
 
 class _RateLimiter:
+    # Drop keys whose newest hit is older than this. Comfortably exceeds the
+    # longest configured rate-limit window (currently 600s / 10 min) so an
+    # active client's bucket is never sweep-evicted while still throttling.
+    _STALE_KEY_TTL_SECONDS = 3600
+    # How often (in check() calls) to sweep stale keys. Keeps the amortized
+    # cost of memory hygiene at O(1) per request.
+    _SWEEP_INTERVAL_CALLS = 1024
+
     def __init__(self) -> None:
-        self._hits: dict[str, deque] = defaultdict(deque)
+        # Plain dict so unseen keys don't auto-create empty buckets that would
+        # otherwise leak: the rate limiter is keyed by ``endpoint:client_ip``,
+        # and a busy public site sees a long tail of one-shot IPs that would
+        # otherwise grow this map without bound.
+        self._hits: dict[str, deque] = {}
         self._lock = Lock()
+        self._calls_since_sweep = 0
 
     def check(self, key: str, limit: int, window_seconds: int) -> bool:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            bucket = self._hits[key]
+            bucket = self._hits.get(key)
+            if bucket is None:
+                bucket = deque()
+                self._hits[key] = bucket
             while bucket and bucket[0] < cutoff:
                 bucket.popleft()
-            if len(bucket) >= limit:
-                return False
-            bucket.append(now)
-            return True
+            allowed = len(bucket) < limit
+            if allowed:
+                bucket.append(now)
+
+            self._calls_since_sweep += 1
+            if self._calls_since_sweep >= self._SWEEP_INTERVAL_CALLS:
+                self._calls_since_sweep = 0
+                self._sweep_stale_keys(now)
+            return allowed
+
+    def _sweep_stale_keys(self, now: float) -> None:
+        # Caller holds self._lock. Drop buckets whose newest entry has aged
+        # beyond the TTL; their owning clients can't be rate-limited anymore
+        # so the state has no value.
+        cutoff = now - self._STALE_KEY_TTL_SECONDS
+        stale = [k for k, b in self._hits.items() if not b or b[-1] < cutoff]
+        for key in stale:
+            del self._hits[key]
 
 
 _limiter = _RateLimiter()
