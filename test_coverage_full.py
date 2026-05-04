@@ -396,6 +396,63 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.notifications.log_and_notify_error.assert_not_called()
 
+    def test_upload_image_rejects_oversized_dimensions(self):
+        from somewheria_app.services.properties import MAX_IMAGE_DIMENSION
+
+        file_bytes = io.BytesIO()
+        # Tiny on disk but past the per-side dimension cap.
+        Image.new("RGB", (MAX_IMAGE_DIMENSION + 1, 10), color="white").save(
+            file_bytes, format="PNG"
+        )
+
+        class UploadedFile:
+            filename = "huge.png"
+            stream = io.BytesIO(file_bytes.getvalue())
+
+        with self.assertRaises(UploadValidationError) as ctx:
+            self.service.upload_image(
+                "prop-1", UploadedFile(), "https://example.com", "admin@example.com"
+            )
+        self.assertIn(str(MAX_IMAGE_DIMENSION), str(ctx.exception))
+        # Nothing should have been written to disk for a rejected upload.
+        for entry in self.upload_dir.iterdir():
+            self.assertFalse(entry.name.startswith("prop-1_"))
+
+    def test_letterbox_rejects_extreme_aspect_ratio(self):
+        from somewheria_app.services.properties import MAX_IMAGE_DIMENSION
+
+        # A tall, narrow input within the per-side dimension cap whose 16:9
+        # letterbox would amplify pixel count past MAX_IMAGE_PIXELS. Using a
+        # mock keeps the test from actually allocating that buffer.
+        image = Mock()
+        image.size = (100, MAX_IMAGE_DIMENSION)
+        with self.assertRaises(UploadValidationError):
+            self.service.letterbox_to_16_9(image)
+
+    def test_get_base64_image_from_url_rejects_oversized_dimensions(self):
+        from somewheria_app.services.properties import MAX_IMAGE_DIMENSION
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (MAX_IMAGE_DIMENSION + 1, 10), color="white").save(
+            buffer, format="PNG"
+        )
+        payload = buffer.getvalue()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Length": str(len(payload))}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([payload])
+
+        with patch(
+            "somewheria_app.services.properties.requests.get", return_value=response
+        ), patch.object(self.service.logger, "warning") as warning_mock:
+            encoded = self.service.get_base64_image_from_url(
+                "https://example.com/huge.png"
+            )
+
+        self.assertIsNone(encoded)
+        warning_mock.assert_called_once()
+
     def test_upload_image_logs_association_failure(self):
         file_bytes = io.BytesIO()
         Image.new("RGB", (16, 9), color="yellow").save(file_bytes, format="PNG")
