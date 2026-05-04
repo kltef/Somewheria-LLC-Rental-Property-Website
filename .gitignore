@@ -26,6 +26,9 @@ user_roles.json
 # Local uploaded files
 static/uploads/
 
+# Node
+node_modules/
+
 # OS/editor noise
 .DS_Store
 Thumbs.db
