@@ -10,7 +10,7 @@ import time
 from io import BytesIO
 
 import requests
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 from flask import url_for
 from werkzeug.utils import secure_filename
 
@@ -19,11 +19,36 @@ from .console import get_console_logger
 
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
+# Bound the decoded raster so a hostile / malformed file can't trigger a
+# multi-gigabyte allocation. A highly-compressed PNG well under MAX_IMAGE_BYTES
+# can decode to tens of thousands of pixels per side, and letterboxing on
+# extreme aspect ratios amplifies that further. 24MP comfortably exceeds any
+# real property photo from a phone or DSLR.
+MAX_IMAGE_PIXELS = 24_000_000
+# Cap any single dimension so an extreme aspect ratio can't blow up the
+# letterbox output even when total pixel count is within MAX_IMAGE_PIXELS.
+MAX_IMAGE_DIMENSION = 6000
 PROPERTY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Tighten Pillow's own decompression-bomb threshold so even if our explicit
+# checks miss a code path, decoding raises rather than silently allocating.
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 class UploadValidationError(ValueError):
     pass
+
+
+def _ensure_safe_image_dimensions(image: Image.Image) -> None:
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise UploadValidationError("Image has invalid dimensions.")
+    if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
+        raise UploadValidationError(
+            f"Image dimensions exceed {MAX_IMAGE_DIMENSION}px limit."
+        )
+    if width * height > MAX_IMAGE_PIXELS:
+        raise UploadValidationError("Image pixel count exceeds safe limit.")
 
 
 BLANK_PROPERTY = {
@@ -283,6 +308,13 @@ class PropertyService:
         else:
             new_height = height
             new_width = int(height * target_ratio)
+        # Defense in depth: an extreme aspect-ratio input (e.g. very tall)
+        # whose own pixel count is within MAX_IMAGE_PIXELS can still letterbox
+        # to a much larger canvas. Reject rather than allocate the buffer.
+        if new_width * new_height > MAX_IMAGE_PIXELS:
+            raise UploadValidationError(
+                "Image aspect ratio would produce an oversized letterbox."
+            )
         new_image = Image.new("RGB", (new_width, new_height), color=(0, 0, 0))
         new_image.paste(image, ((new_width - width) // 2, (new_height - height) // 2))
         return new_image
@@ -310,6 +342,7 @@ class PropertyService:
                     buffer.write(chunk)
                 raw = buffer.getvalue()
             with Image.open(BytesIO(raw)) as image:
+                _ensure_safe_image_dimensions(image)
                 processed = self.letterbox_to_16_9(ImageOps.exif_transpose(image).convert("RGB"))
                 out = BytesIO()
                 processed.save(out, format="JPEG")
@@ -460,8 +493,11 @@ class PropertyService:
             raise UploadValidationError("Image exceeds maximum allowed size.")
         try:
             with Image.open(BytesIO(raw)) as probe:
+                _ensure_safe_image_dimensions(probe)
                 probe.verify()
-        except (UnidentifiedImageError, Exception) as exc:
+        except UploadValidationError:
+            raise
+        except Exception as exc:
             raise UploadValidationError("File is not a valid image.") from exc
 
         new_filename = f"{property_id}_{secrets.token_hex(8)}.{ext}"
