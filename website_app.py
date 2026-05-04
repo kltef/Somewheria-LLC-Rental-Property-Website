@@ -1,3 +1,4 @@
+import os
 import sys
 
 from somewheria_app import create_app
@@ -55,14 +56,23 @@ def _prompt_port(default: int) -> int:
         print("Please enter a valid port number between 1 and 65535.")
 
 
+def _env_port() -> int:
+    val = os.environ.get("PORT", "").strip()
+    if val.isdigit():
+        port = int(val)
+        if 1 <= port <= 65535:
+            return port
+    return 5000
+
+
 def run_startup_questions() -> dict[str, object]:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return {
-            "console_level": "INFO",
+            "console_level": os.environ.get("LOG_LEVEL", "INFO"),
             "show_request_logs": True,
             "warm_cache": True,
-            "host": "0.0.0.0",
-            "port": 5000,
+            "host": os.environ.get("HOST", "0.0.0.0"),
+            "port": _env_port(),
             "show_startup_summary": True,
         }
 
@@ -89,7 +99,7 @@ def run_startup_questions() -> dict[str, object]:
 
     print()
     print("5. Which port should the server run on?")
-    port = _prompt_port(5000)
+    port = _prompt_port(_env_port())
 
     print()
     print("6. Do you want a quick startup summary with useful URLs?")
