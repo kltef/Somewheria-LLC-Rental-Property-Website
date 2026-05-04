@@ -46,7 +46,7 @@ class AppConfig:
         self.upload_dir = self.static_dir / "uploads"
         self.log_file = self.base_dir / "application.log"
         self.change_log_file = self.base_dir / "site_changes.log"
-        self.property_appointments_file = self.static_dir / "property_appointments.txt"
+        self.property_appointments_file = self.base_dir / "property_appointments.txt"
         self.registration_file = self.base_dir / "pending_registrations.json"
         self.user_roles_file = self.base_dir / "user_roles.json"
         self.renter_profile_file = self.base_dir / "renter_profiles.json"
