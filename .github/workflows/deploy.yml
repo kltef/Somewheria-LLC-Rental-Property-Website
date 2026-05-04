@@ -17,6 +17,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pytest
 
       - name: Run Flask in background
         run: |
@@ -24,4 +25,4 @@ jobs:
           sleep 5 # Wait for Flask to start
 
       - name: Run Playwright Tests
-        run: pytest tests/  # This is where your codegen scripts go
+        run: pytest . # This is where your codegen scripts go
