@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-10 max-w-6xl mx-auto">
+  <section class="relative overflow-hidden rounded-3xl border border-[#e8dfd2] bg-gradient-to-br from-[#fffaf2] via-[#fffdf9] to-[#eef6ff] px-6 py-10 shadow-[0_18px_45px_rgba(31,59,87,0.10)] ring-1 ring-[#fffaf2] dark:border-neutral-800 dark:from-neutral-950 dark:via-neutral-900 dark:to-neutral-950 dark:ring-neutral-900/70">
+    <div class="absolute -top-16 -right-10 h-40 w-40 rounded-full bg-[#f4d7a1]/60 blur-2xl dark:bg-[#1f3b57]/40"></div>
+    <div class="absolute -bottom-16 -left-10 h-40 w-40 rounded-full bg-[#c8e2ff]/70 blur-2xl dark:bg-[#3f2a1c]/40"></div>
+    <div class="relative grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
+      <div>
+        <div class="mb-4 inline-flex items-center rounded-full bg-[#1f3b57] px-4 py-1 text-sm font-semibold text-white dark:bg-[#d4a85c] dark:text-[#1f1408]">
+          Rental House Status
+        </div>
+        <h1 class="mb-3 text-5xl font-black tracking-tight text-[#1a2b3a] dark:text-[#f9f6ef]">{{ error_code }}</h1>
+        <h2 class="mb-4 text-3xl font-bold text-[#7a4f1d] dark:text-[#f2c785]">{{ error_title }}</h2>
+        <p class="max-w-2xl text-lg leading-8 text-[#394b59] dark:text-neutral-300">{{ error_message }}</p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="{{ primary_href or url_for('home') }}" class="rounded-xl bg-[#1f3b57] px-5 py-3 text-sm font-semibold text-white shadow transition hover:bg-[#163047] dark:bg-[#d4a85c] dark:text-[#1f1408] dark:hover:bg-[#e0b76f]">
+            {{ primary_label or "Back Home" }}
+          </a>
+          <a href="{{ secondary_href or url_for('for_rent') }}" class="rounded-xl border border-[#b8c5d1] bg-white px-5 py-3 text-sm font-semibold text-[#1f3b57] transition hover:bg-[#f5f8fb] dark:border-neutral-700 dark:bg-neutral-900 dark:text-[#f5d7a1] dark:hover:bg-neutral-800">
+            {{ secondary_label or "Browse Rentals" }}
+          </a>
+        </div>
+      </div>
+      <div class="relative mx-auto w-full max-w-md">
+        <div class="rounded-[2rem] border border-[#eadcc4] bg-[#fff9f0] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.95)] dark:border-neutral-700 dark:bg-neutral-900">
+          <div class="mx-auto w-full max-w-xs">
+            <div class="relative">
+              <div class="mx-auto h-0 w-0 border-l-[110px] border-r-[110px] border-b-[95px] border-l-transparent border-r-transparent border-b-[#a05c2b] dark:border-b-[#8f5f38]"></div>
+              <div class="mx-auto -mt-1 h-40 w-56 rounded-b-[2rem] border-4 border-[#7c4a27] bg-[#f7e4c4] shadow-lg dark:border-[#9a7446] dark:bg-[#2b241c]">
+                <div class="grid grid-cols-2 gap-4 px-8 pt-8">
+                  <div class="h-12 rounded-xl border-4 border-[#7c4a27] bg-[#c7e5ff] dark:border-[#9a7446] dark:bg-[#4c6985]"></div>
+                  <div class="h-12 rounded-xl border-4 border-[#7c4a27] bg-[#c7e5ff] dark:border-[#9a7446] dark:bg-[#4c6985]"></div>
+                </div>
+                <div class="mx-auto mt-6 h-20 w-16 rounded-t-2xl border-4 border-[#7c4a27] bg-[#9c6334] dark:border-[#9a7446] dark:bg-[#6f4d30]"></div>
+              </div>
+              <div class="mx-auto mt-4 h-4 w-64 rounded-full bg-[#d9c7a4] dark:bg-neutral-700"></div>
+            </div>
+            <div class="mt-6 rounded-2xl border border-[#eee3d3] bg-white/88 p-4 text-left shadow-sm dark:border-neutral-800 dark:bg-neutral-950/80">
+              <p class="text-sm font-semibold uppercase tracking-[0.18em] text-[#7a4f1d] dark:text-[#f2c785]">House Note</p>
+              <p class="mt-2 text-sm leading-6 text-[#445868] dark:text-neutral-300">
+                {{ house_note or "This page is temporarily unavailable, but the front porch is open and we'll help you get back inside." }}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

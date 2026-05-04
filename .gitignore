@@ -1,0 +1,34 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Test and coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Local environment and machine-specific files
+.env
+.venv/
+venv/
+
+# App runtime artifacts
+application.log
+site_changes.log
+
+# Local data files
+pending_registrations.json
+renter_profiles.json
+renter_contracts.json
+user_roles.json
+
+# Local uploaded files
+static/uploads/
+
+# Node
+node_modules/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

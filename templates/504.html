@@ -1,0 +1,7 @@
+{% extends "error_base.html" %}
+{% set error_code = "504" %}
+{% set error_title = "The House Took Too Long To Answer" %}
+{% set error_message = "We waited for a dependent service to answer, but the timeout expired before it came back with the page data." %}
+{% set primary_label = "Try Again" %}
+{% set secondary_label = "Browse Rentals" %}
+{% set house_note = "Timeout errors often happen when external property services are slow. A refresh usually works once they recover." %}

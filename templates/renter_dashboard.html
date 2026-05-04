@@ -1,25 +1,97 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="max-w-2xl mx-auto py-10 px-4 bg-white dark:bg-neutral-950 rounded shadow">
-  <h1 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white">Renter Dashboard</h1>
-  <div class="mb-4 text-gray-700 dark:text-gray-300">
-    Welcome, {{ user.name or user.email }}!
-    <a href="{{ url_for('renter_profile') }}" class="ml-4 bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] px-3 py-1 rounded hover:bg-blue-700 dark:hover:bg-blue-600 text-sm transition-colors">Edit Profile</a>
+<div class="max-w-3xl mx-auto py-10 px-4 space-y-6">
+  {# --- Greeting --- #}
+  <div class="bg-white dark:bg-neutral-950 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold text-[#111518] dark:text-white">Renter Dashboard</h1>
+        <p class="text-gray-600 dark:text-gray-300 mt-1">
+          Welcome, <span class="font-medium text-[#111518] dark:text-white">{{ user.name or user.email }}</span>!
+        </p>
+      </div>
+      <a href="{{ url_for('renter_profile') }}"
+         class="bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] px-3 py-2 rounded text-sm font-medium hover:bg-blue-700 dark:hover:bg-blue-500 transition-colors">
+        Edit Profile
+      </a>
+    </div>
   </div>
-  <h2 class="text-lg font-semibold mb-2">Your Rental Contracts</h2>
-  {% if contracts and contracts|length > 0 %}
-    <ul class="divide-y divide-gray-200 dark:divide-neutral-800">
-      {% for contract in contracts %}
-        <li class="py-3">
-          <div class="font-medium">Property: {{ contract.property_name }}</div>
-          <div class="text-sm">Lease Dates: {{ contract.start_date }} – {{ contract.end_date }}</div>
-          <div class="text-sm">Status: {{ contract.status }}</div>
-          <a href="{{ contract.download_url }}" class="text-blue-600 dark:text-blue-400 underline text-sm">Download PDF</a>
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <div class="text-gray-500 dark:text-gray-400">No rental contracts found.</div>
-  {% endif %}
+
+  {# --- Repairs / Tickets --- #}
+  <div class="bg-white dark:bg-neutral-950 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="text-lg font-semibold text-[#111518] dark:text-white">Repairs &amp; Maintenance</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300 mt-1">
+          Something broken, leaking, or not working right? Submit a ticket and we'll get on it.
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="{{ url_for('ticket_new_form') }}"
+           class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold shadow transition-colors">
+          + Submit a Repair Ticket
+        </a>
+        {% if total_ticket_count and total_ticket_count > 0 %}
+          <a href="{{ url_for('ticket_list_mine') }}"
+             class="px-4 py-2 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white rounded font-medium transition-colors">
+            View all ({{ total_ticket_count }})
+          </a>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if open_ticket_count and open_ticket_count > 0 %}
+      <div class="mb-4 p-3 rounded border bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-100 text-sm">
+        You have <strong>{{ open_ticket_count }}</strong> ticket{{ '' if open_ticket_count == 1 else 's' }} currently open or in progress.
+      </div>
+    {% endif %}
+
+    {% if recent_tickets %}
+      <h3 class="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Your recent tickets</h3>
+      <ul class="divide-y divide-neutral-200 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded">
+        {% for t in recent_tickets %}
+          {% set badge = 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100' %}
+          {% if t.status == 'open' %}{% set badge = 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200' %}{% endif %}
+          {% if t.status == 'in_progress' %}{% set badge = 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' %}{% endif %}
+          {% if t.status == 'awaiting_parts' %}{% set badge = 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200' %}{% endif %}
+          {% if t.status == 'resolved' %}{% set badge = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' %}{% endif %}
+          {% if t.status == 'closed' %}{% set badge = 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300' %}{% endif %}
+          <li class="p-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <a href="{{ url_for('ticket_detail', ticket_id=t.id) }}"
+                 class="font-medium text-blue-600 dark:text-blue-400 hover:underline truncate block">{{ t.title }}</a>
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t.category|capitalize }}
+                {% if t.property_name %} &middot; {{ t.property_name }}{% endif %}
+                {% if t.updated_at %} &middot; updated {{ t.updated_at[:10] }}{% endif %}
+              </div>
+            </div>
+            <span class="inline-block px-2 py-0.5 rounded text-xs font-medium {{ badge }}">{{ t.status.replace('_', ' ') }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-sm text-gray-500 dark:text-gray-400">No tickets yet — hopefully everything's working!</p>
+    {% endif %}
+  </div>
+
+  {# --- Contracts --- #}
+  <div class="bg-white dark:bg-neutral-950 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6">
+    <h2 class="text-lg font-semibold mb-3 text-[#111518] dark:text-white">Your Rental Contracts</h2>
+    {% if contracts and contracts|length > 0 %}
+      <ul class="divide-y divide-gray-200 dark:divide-neutral-800">
+        {% for contract in contracts %}
+          <li class="py-3">
+            <div class="font-medium text-[#111518] dark:text-white">Property: {{ contract.property_name }}</div>
+            <div class="text-sm text-gray-600 dark:text-gray-300">Lease Dates: {{ contract.start_date }} – {{ contract.end_date }}</div>
+            <div class="text-sm text-gray-600 dark:text-gray-300">Status: {{ contract.status }}</div>
+            <a href="{{ contract.download_url }}" class="text-blue-600 dark:text-blue-400 underline text-sm">Download PDF</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="text-gray-500 dark:text-gray-400">No rental contracts found.</div>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

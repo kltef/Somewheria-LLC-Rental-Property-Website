@@ -4,14 +4,14 @@
   <div class="max-w-[960px] w-full relative">
     <div class="bg-white dark:bg-neutral-900 rounded-xl mb-5 relative">
       <!-- Carousel -->
-      <div class="relative flex justify-center items-center" style="height: 360px; overflow:hidden;">
+      <div id="carouselFrame" class="relative flex justify-center items-center" style="height: 360px; overflow:hidden; touch-action: pan-y;">
         {% set image_count = property.photos | length %}
         <img 
           id="carouselImg" 
           src="{{ property.thumbnail }}" 
           alt="Property Image" 
           class="rounded object-cover w-full h-80 transition-all duration-300 bg-neutral-100 dark:bg-neutral-950"
-          style="max-height: 340px;"
+          style="max-height: 340px; touch-action: pan-y; will-change: transform;"
         />
         <button id="carouselPrev" class="absolute left-1 top-1/2 -translate-y-1/2 px-2 py-2 rounded-full bg-neutral-200 dark:bg-neutral-800 hover:bg-blue-100 dark:hover:bg-blue-900 text-[#111518] dark:text-white" style="z-index:15;">
           &#8249;
@@ -19,6 +19,9 @@
         <button id="carouselNext" class="absolute right-1 top-1/2 -translate-y-1/2 px-2 py-2 rounded-full bg-neutral-200 dark:bg-neutral-800 hover:bg-blue-100 dark:hover:bg-blue-900 text-[#111518] dark:text-white" style="z-index:15;">
           &#8250;
         </button>
+        <div id="carouselCounter" class="absolute top-3 right-4 px-3 py-1 rounded-full bg-black/55 text-white text-xs font-semibold tracking-wide" style="z-index:15;">
+          1 / {{ image_count if image_count > 0 else 1 }}
+        </div>
         <div class="absolute bottom-2 right-5 flex gap-1">
           {% for idx in range(image_count) %}
             <span class="block w-2 h-2 rounded-full {% if idx==0 %}bg-blue-500{% else %}bg-neutral-300 dark:bg-neutral-700{% endif %} carousel-dot" data-idx="{{ idx }}"></span>
@@ -43,6 +46,15 @@
         <p class="text-[#111518] dark:text-white text-sm">
           {% if property.pets_allowed is defined %}
             {{ property.pets_allowed }}
+          {% else %}
+            Unknown
+          {% endif %}
+        </p>
+      </div>
+      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">ADA Accessible</p>
+        <p class="text-[#111518] dark:text-white text-sm">
+          {% if property.ada_accessible is defined %}
+            {{ property.ada_accessible }}
           {% else %}
             Unknown
           {% endif %}
@@ -90,22 +102,31 @@
 document.addEventListener('DOMContentLoaded', function() {
   // Carousel with swipe support
   // eslint-disable-next-line
-  var photos = JSON.parse('{{ (property.photos or [])|tojson|safe }}');
+  var photos = {{ (property.photos or [])|tojson }};
   let currentIdx = 0;
   const imgEl = document.getElementById('carouselImg');
   const prevBtn = document.getElementById('carouselPrev');
   const nextBtn = document.getElementById('carouselNext');
+  const counterEl = document.getElementById('carouselCounter');
   const dots = document.querySelectorAll('.carousel-dot');
   
-  // Touch/swipe variables
-  let startX = 0;
-  let endX = 0;
-  let isDragging = false;
+  const carouselFrame = document.getElementById('carouselFrame');
+  let pointerStartX = null;
+  let pointerStartY = null;
+  let pointerCurrentX = null;
+  let isPointerActive = false;
+  let isSwipeLocked = false;
+  const swipeThreshold = 45;
+  const swipeVerticalAllowance = 70;
   
   function updateCarousel() {
     if (photos.length === 0) return;
     
     const photo = photos[currentIdx];
+    imgEl.style.transform = 'translateX(0)';
+    imgEl.style.opacity = '1';
+    imgEl.style.transition = 'transform 0.3s ease, opacity 0.25s ease';
+
     if (photo && photo.startsWith('data:image')) {
       imgEl.src = photo;
     } else if (photo) {
@@ -122,6 +143,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update button states
     prevBtn.style.display = currentIdx === 0 ? 'none' : 'block';
     nextBtn.style.display = currentIdx === photos.length - 1 ? 'none' : 'block';
+
+    if (counterEl) {
+      const totalPhotos = photos.length || 1;
+      const currentPhoto = photos.length === 0 ? 1 : currentIdx + 1;
+      counterEl.textContent = `${currentPhoto} / ${totalPhotos}`;
+    }
   }
   
   function nextSlide() {
@@ -150,65 +177,109 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
   
-  // Touch/swipe support
-  if (imgEl) {
-    imgEl.addEventListener('touchstart', (e) => {
-      startX = e.touches[0].clientX;
-      isDragging = true;
-    });
-    
-    imgEl.addEventListener('touchmove', (e) => {
-      if (!isDragging) return;
-      e.preventDefault();
-      endX = e.touches[0].clientX;
-    });
-    
-    imgEl.addEventListener('touchend', () => {
-      if (!isDragging) return;
-      isDragging = false;
-      
-      const diffX = startX - endX;
-      const threshold = 50;
-      
-      if (Math.abs(diffX) > threshold) {
-        if (diffX > 0) {
-          nextSlide();
-        } else {
-          prevSlide();
-        }
+  function resetSwipeState() {
+    if (imgEl) {
+      imgEl.style.transform = 'translateX(0)';
+      imgEl.style.opacity = '1';
+      imgEl.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
+    }
+    pointerStartX = null;
+    pointerStartY = null;
+    pointerCurrentX = null;
+    isPointerActive = false;
+    isSwipeLocked = false;
+  }
+
+  function startSwipe(clientX, clientY) {
+    pointerStartX = clientX;
+    pointerStartY = clientY;
+    pointerCurrentX = clientX;
+    isPointerActive = true;
+    isSwipeLocked = false;
+  }
+
+  function trackSwipe(clientX, clientY) {
+    if (!isPointerActive || pointerStartX === null || pointerStartY === null) {
+      return false;
+    }
+
+    const deltaX = clientX - pointerStartX;
+    const deltaY = clientY - pointerStartY;
+    pointerCurrentX = clientX;
+
+    if (!isSwipeLocked) {
+      isSwipeLocked = Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaY) < swipeVerticalAllowance;
+    }
+
+    if (isSwipeLocked && imgEl) {
+      const limitedDeltaX = Math.max(-72, Math.min(72, deltaX * 0.35));
+      const opacityShift = Math.max(0.82, 1 - (Math.abs(limitedDeltaX) / 220));
+      imgEl.style.transition = 'none';
+      imgEl.style.transform = `translateX(${limitedDeltaX}px)`;
+      imgEl.style.opacity = String(opacityShift);
+    }
+
+    return isSwipeLocked;
+  }
+
+  function finishSwipe() {
+    if (!isPointerActive || pointerStartX === null || pointerCurrentX === null) {
+      resetSwipeState();
+      return;
+    }
+
+    const totalDeltaX = pointerCurrentX - pointerStartX;
+
+    if (Math.abs(totalDeltaX) >= swipeThreshold) {
+      if (totalDeltaX < 0) {
+        nextSlide();
+      } else {
+        prevSlide();
       }
-    });
-    
-    // Mouse drag support
-    imgEl.addEventListener('mousedown', (e) => {
-      startX = e.clientX;
-      isDragging = true;
-    });
-    
-    imgEl.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      endX = e.clientX;
-    });
-    
-    imgEl.addEventListener('mouseup', () => {
-      if (!isDragging) return;
-      isDragging = false;
-      
-      const diffX = startX - endX;
-      const threshold = 50;
-      
-      if (Math.abs(diffX) > threshold) {
-        if (diffX > 0) {
-          nextSlide();
-        } else {
-          prevSlide();
-        }
+    }
+
+    resetSwipeState();
+  }
+
+  // Touch and drag support
+  if (carouselFrame) {
+    carouselFrame.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      if (!touch) {
+        return;
       }
+
+      startSwipe(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    carouselFrame.addEventListener('touchmove', (e) => {
+      const touch = e.touches[0];
+      if (!touch) {
+        return;
+      }
+
+      if (trackSwipe(touch.clientX, touch.clientY)) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    carouselFrame.addEventListener('touchend', finishSwipe);
+    carouselFrame.addEventListener('touchcancel', resetSwipeState);
+
+    carouselFrame.addEventListener('mousedown', (e) => {
+      startSwipe(e.clientX, e.clientY);
     });
-    
-    imgEl.addEventListener('mouseleave', () => {
-      isDragging = false;
+
+    carouselFrame.addEventListener('mousemove', (e) => {
+      if (!isPointerActive) {
+        return;
+      }
+
+      trackSwipe(e.clientX, e.clientY);
     });
+
+    carouselFrame.addEventListener('mouseup', finishSwipe);
+    carouselFrame.addEventListener('mouseleave', resetSwipeState);
   }
   
   // Keyboard navigation
@@ -237,7 +308,7 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Booked dates from server
   // eslint-disable-next-line
-  const bookedDates = JSON.parse('{{ booked_dates|tojson|safe }}');
+  const bookedDates = {{ booked_dates|tojson }};
   
   function openCalModal() {
     modal.classList.remove('hidden');

@@ -2,13 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{{ title or 'Somewheria, LLC.' }}</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Noto+Sans:wght@400;500;700;900&family=Plus+Jakarta+Sans:wght@400;500;700;800"/>
-  <link rel="stylesheet" href="https://unpkg.com/@theme-toggles/react/css/Around.css" />
-  <script>
-    tailwind = { config: { darkMode: 'class' } }
-  </script>
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
   <script>
     // Initialize theme immediately to prevent flash
     (function() {
@@ -30,78 +27,180 @@
     })();
   </script>
   <style>
+    /* @theme-toggles/react Around.css (inlined to satisfy CSP style-src) */
+    .theme-toggle.theme-toggle--reversed .theme-toggle__around{transform:scaleX(-1)}.theme-toggle{--theme-toggle__around--duration:.5s}.theme-toggle__around *{transform-origin:center;transition:transform calc(var(--theme-toggle__around--duration) * .6) ease}.theme-toggle__around>g g circle{transition-duration:calc(var(--theme-toggle__around--duration) * .2)}.theme-toggle__around>g g :nth-child(1){transition-delay:calc(var(--theme-toggle__around--duration)*.253)}.theme-toggle__around>g g :nth-child(2){transition-delay:calc(var(--theme-toggle__around--duration)*.348)}.theme-toggle__around>g g :nth-child(3){transition-delay:calc(var(--theme-toggle__around--duration)*.443)}.theme-toggle__around>g g :nth-child(4){transition-delay:calc(var(--theme-toggle__around--duration)*.538)}.theme-toggle__around>g g :nth-child(5){transition-delay:calc(var(--theme-toggle__around--duration)*.633)}.theme-toggle__around>g g :nth-child(6){transition-delay:calc(var(--theme-toggle__around--duration)*.728)}.theme-toggle__around>:first-child path{transition-property:transform,d}.theme-toggle--toggled.theme-toggle .theme-toggle__around *{transition-delay:0s;transition-duration:var(--theme-toggle__around--duration)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>g>circle{transform:scale(1.4)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>g g circle{transform:scale(0);transition-duration:calc(var(--theme-toggle__around--duration) * .4)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>:first-child{transform:rotate(-90deg)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>:first-child path{d:path("M-12-14h42v30a1 1 0 00-16 13H0Z")}@supports not (d:path("")){.theme-toggle--toggled.theme-toggle .theme-toggle__around:first-child path{transform:translate3d(-12px,-14px,0)}}.theme-toggle{border:none;background:0 0;cursor:pointer}@media (prefers-reduced-motion:reduce){.theme-toggle:not(.theme-toggle--force-motion) *{transition:none!important}}
     @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap");
     .bar1, .bar2, .bar3 {
-      width: 35px;
-      height: 3px;
+      width: 24px;
+      height: 2.5px;
       background-color: #111518;
-      margin: 6px 0;
-      transition: 0.4s;
+      margin: 4px auto;
+      border-radius: 9999px;
+      transform-origin: center;
+      transition: transform 0.3s ease, opacity 0.25s ease, background-color 0.25s ease, width 0.25s ease;
+    }
+    .bar2 {
+      width: 18px;
+    }
+    #mobile-nav {
+      display: none;
+      position: relative;
+      margin-left: auto;
+      z-index: 30;
     }
     #hamburger-icon {
       margin: auto 0;
-      display: none;
-      cursor: pointer;
-    }
-    #hamburger-icon.open .bar1 {
-      -webkit-transform: rotate(-45deg) translate(-6px, 6px);
-      transform: rotate(-45deg) translate(-6px, 6px);
-    }
-    #hamburger-icon.open .bar2 {
-      opacity: 0;
-    }
-    #hamburger-icon.open .bar3 {
-      -webkit-transform: rotate(45deg) translate(-6px, -8px);
-      transform: rotate(45deg) translate(-6px, -8px);
-    }
-    #hamburger-icon .mobile-menu {
-      display: none;
-      position: absolute;
-      top: 50px;
-      left: 0;
-      height: calc(100vh - 50px);
-      width: 100%;
-      background: #fff;
-      color: #111518;
-      transition: background 0.3s, color 0.3s;
-    }
-    #hamburger-icon.open .mobile-menu {
       display: flex;
       flex-direction: column;
       align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 10px 8px;
+      border-radius: 9999px;
+      border: 1px solid rgba(17, 21, 24, 0.12);
+      background: rgba(255, 255, 255, 0.85);
+      box-shadow: 0 8px 24px rgba(17, 21, 24, 0.08);
+      transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
+    }
+    #hamburger-icon:hover,
+    #hamburger-icon:focus-visible {
+      background: rgba(234, 237, 241, 0.98);
+      border-color: rgba(37, 99, 235, 0.22);
+      box-shadow: 0 10px 28px rgba(37, 99, 235, 0.14);
+      outline: none;
+    }
+    #hamburger-icon:active {
+      transform: scale(0.97);
+    }
+    #mobile-nav.open #hamburger-icon {
+      background: rgba(31, 59, 87, 0.08);
+      border-color: rgba(31, 59, 87, 0.18);
+      box-shadow: 0 12px 30px rgba(17, 21, 24, 0.12);
+    }
+    #mobile-nav.open .bar1 {
+      -webkit-transform: translateY(6.5px) rotate(-45deg);
+      transform: translateY(6.5px) rotate(-45deg);
+      width: 24px;
+    }
+    #mobile-nav.open .bar2 {
+      opacity: 0;
+      width: 24px;
+    }
+    #mobile-nav.open .bar3 {
+      -webkit-transform: translateY(-6.5px) rotate(45deg);
+      transform: translateY(-6.5px) rotate(45deg);
+      width: 24px;
+    }
+    #mobile-nav .mobile-menu {
+      display: none;
+      position: absolute;
+      top: 68px;
+      left: 12px;
+      right: 12px;
+      height: calc(100vh - 88px);            /* fallback */
+      height: calc(100dvh - 88px);           /* respects mobile browser chrome */
+      width: auto;
+      background: #fff;
+      color: #111518;
+      border-radius: 24px;
+      border: 1px solid rgba(17, 21, 24, 0.08);
+      box-shadow: 0 24px 60px rgba(17, 21, 24, 0.18);
+      padding: 20px 18px 28px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      transition: background 0.3s, color 0.3s;
+    }
+    /* Lock body scroll while the mobile menu is open. */
+    body.mobile-menu-open {
+      overflow: hidden;
+    }
+    /* Honor users who've asked for reduced motion. */
+    @media (prefers-reduced-motion: reduce) {
+      .bar1, .bar2, .bar3,
+      #hamburger-icon,
+      #mobile-nav.open .bar1,
+      #mobile-nav.open .bar2,
+      #mobile-nav.open .bar3 {
+        transition: none !important;
+      }
+    }
+    #mobile-nav.open .mobile-menu {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
       justify-content: flex-start;
       background: #fff;
       color: #111518;
     }
     .mobile-menu li {
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .mobile-menu a {
+      display: block;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      font-weight: 600;
       transition: color 0.3s, background 0.3s;
     }
-    @media (prefers-color-scheme: dark) {
-      #hamburger-icon .mobile-menu {
-        background: #18181b !important;
-        color: #fff !important;
-      }
-      #hamburger-icon.open .mobile-menu {
-        background: #18181b !important;
-        color: #fff !important;
-      }
-      .mobile-menu a {
-        color: #fff !important;
-      }
+    .mobile-menu a:hover,
+    .mobile-menu a:focus-visible {
+      background: #eaedf1;
+      color: #2563eb !important;
+      outline: none;
     }
-    @media only screen and (max-width: 600px) {
+    html[data-theme="dark"] #hamburger-icon {
+      background: rgba(24, 24, 27, 0.95);
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+    }
+    html[data-theme="dark"] #hamburger-icon:hover,
+    html[data-theme="dark"] #hamburger-icon:focus-visible {
+      background: rgba(39, 39, 42, 0.98);
+      border-color: rgba(96, 165, 250, 0.26);
+    }
+    html[data-theme="dark"] #mobile-nav.open #hamburger-icon {
+      background: rgba(39, 39, 42, 1);
+    }
+    html[data-theme="dark"] #mobile-nav .mobile-menu {
+      background: #18181b !important;
+      color: #fff !important;
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    }
+    html[data-theme="dark"] #mobile-nav.open .mobile-menu {
+      background: #18181b !important;
+      color: #fff !important;
+    }
+    html[data-theme="dark"] .mobile-menu a {
+      color: #fff !important;
+    }
+    html[data-theme="dark"] .mobile-menu a:hover,
+    html[data-theme="dark"] .mobile-menu a:focus-visible {
+      background: #27272a !important;
+      color: #60a5fa !important;
+    }
+    html[data-theme="light"] .bar1,
+    html[data-theme="light"] .bar2,
+    html[data-theme="light"] .bar3 {
+      background-color: #111518 !important;
+    }
+    html[data-theme="dark"] .bar1,
+    html[data-theme="dark"] .bar2,
+    html[data-theme="dark"] .bar3 {
+      background-color: #ffffff !important;
+    }
+    @media only screen and (max-width: 640px) {
       header nav.desktop-nav {
         display: none;
       }
-      #hamburger-icon {
+      #mobile-nav {
         display: block;
       }
     }
-    @media only screen and (min-width: 601px) {
-      #hamburger-icon {
+    @media only screen and (min-width: 641px) {
+      #mobile-nav {
         display: none !important;
       }
       nav.desktop-nav {
@@ -128,11 +227,6 @@
         background: #27272a;
         color: #fff;
         border-color: #2563eb;
-      }
-    }
-    @media (prefers-color-scheme: dark) {
-      .bar1, .bar2, .bar3 {
-        background-color: #fff !important;
       }
     }
     /* Theme Toggle Styles - Sun to Moon transformation */
@@ -327,6 +421,10 @@
             {% set role = session.get('user', {}).get('role', '') %}
             {% if role in ['renter', 'admin', 'high_admin'] %}
               <li><a href="{{ url_for('renter_dashboard') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Renter Dashboard</a></li>
+              <li><a href="{{ url_for('ticket_list_mine') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Tickets</a></li>
+            {% endif %}
+            {% if role in ['admin', 'high_admin'] %}
+              <li><a href="{{ url_for('admin_status') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Status</a></li>
             {% endif %}
             {% if role == 'high_admin' %}
               <li><a href="{{ url_for('admin_dashboard_combined') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Admin Panel</a></li>
@@ -365,24 +463,30 @@
             <circle class="moon" cx="20" cy="12" r="6" />
           </svg>
         </div>
-        <div id="hamburger-icon" onclick="toggleMobileMenu(this)" aria-label="Open menu" tabindex="0" style="margin-left:auto;">
+        <div id="mobile-nav">
+          <button id="hamburger-icon" type="button" onclick="toggleMobileMenu(event)" aria-label="Open menu" aria-controls="mobile-menu" aria-expanded="false">
           <div class="bar1"></div>
           <div class="bar2"></div>
           <div class="bar3"></div>
-          <ul class="mobile-menu bg-white text-[#111518] dark:bg-neutral-900 dark:text-white">
-            <li><a href="{{ url_for('home') }}" class="text-[#111518] dark:text-white">Home</a></li>
-            <li><a href="{{ url_for('for_rent') }}" class="text-[#111518] dark:text-white">For Rent</a></li>
-            <li><a href="{{ url_for('about') }}" class="text-[#111518] dark:text-white">About Us</a></li>
-            <li><a href="{{ url_for('contact') }}" class="text-[#111518] dark:text-white">Contact Us</a></li>
-            <li><a href="{{ url_for('register') }}" class="text-[#111518] dark:text-white">Register</a></li>
+          </button>
+          <ul id="mobile-menu" class="mobile-menu bg-white text-[#111518] dark:bg-neutral-900 dark:text-white" onclick="event.stopPropagation()">
+            <li><a href="{{ url_for('home') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Home</a></li>
+            <li><a href="{{ url_for('for_rent') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">For Rent</a></li>
+            <li><a href="{{ url_for('about') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">About Us</a></li>
+            <li><a href="{{ url_for('contact') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Contact Us</a></li>
+            <li><a href="{{ url_for('register') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Register</a></li>
             {% if session.get('user') %}
-              <li><a href="{{ url_for('manage_listings') }}" class="text-[#111518] dark:text-white">Manage Listings</a></li>
+              <li><a href="{{ url_for('manage_listings') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Manage Listings</a></li>
               {% set role = session.get('user', {}).get('role', '') %}
               {% if role in ['renter', 'admin', 'high_admin'] %}
-                <li><a href="{{ url_for('renter_dashboard') }}" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
+                <li><a href="{{ url_for('renter_dashboard') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
+                <li><a href="{{ url_for('ticket_list_mine') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Tickets</a></li>
+              {% endif %}
+              {% if role in ['admin', 'high_admin'] %}
+                <li><a href="{{ url_for('admin_status') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Status</a></li>
               {% endif %}
               {% if role == 'high_admin' %}
-                <li><a href="{{ url_for('admin_dashboard_combined') }}" class="text-[#111518] dark:text-white">Admin Panel</a></li>
+                <li><a href="{{ url_for('admin_dashboard_combined') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Admin Panel</a></li>
               {% endif %}
               <li class="flex items-center gap-2 justify-center py-2">
                 {% if session.get('user', {}).get('picture') %}
@@ -390,18 +494,60 @@
                 {% endif %}
                 <span class="text-[#111518] dark:text-white text-sm">{{ session.get('user', {}).get('name', 'User') }}</span>
               </li>
-              <li><a href="{{ url_for('logout') }}" class="text-[#111518] dark:text-white">Logout</a></li>
+              <li><a href="{{ url_for('logout') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Logout</a></li>
             {% else %}
-              <li><a href="{{ url_for('login') }}" class="text-[#111518] dark:text-white">Login</a></li>
+              <li><a href="{{ url_for('login') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Login</a></li>
             {% endif %}
           </ul>
         </div>
       </div>
     </header>
     <script>
-      function toggleMobileMenu(menu) {
-        menu.classList.toggle('open');
+      function toggleMobileMenu(event) {
+        event.stopPropagation();
+        const mobileNav = document.getElementById('mobile-nav');
+        const menuButton = document.getElementById('hamburger-icon');
+        const isOpen = mobileNav.classList.toggle('open');
+        menuButton.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        menuButton.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu');
+        document.body.classList.toggle('mobile-menu-open', isOpen);
       }
+
+      function closeMobileMenu() {
+        const mobileNav = document.getElementById('mobile-nav');
+        const menuButton = document.getElementById('hamburger-icon');
+
+        if (!mobileNav || !menuButton) {
+          return;
+        }
+
+        mobileNav.classList.remove('open');
+        menuButton.setAttribute('aria-expanded', 'false');
+        menuButton.setAttribute('aria-label', 'Open menu');
+        document.body.classList.remove('mobile-menu-open');
+      }
+
+      document.addEventListener('click', function(event) {
+        const mobileNav = document.getElementById('mobile-nav');
+
+        if (mobileNav && !mobileNav.contains(event.target)) {
+          closeMobileMenu();
+        }
+      });
+
+      document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+          const mobileNav = document.getElementById('mobile-nav');
+          const wasOpen = mobileNav && mobileNav.classList.contains('open');
+          closeMobileMenu();
+          if (wasOpen) {
+            const menuButton = document.getElementById('hamburger-icon');
+            if (menuButton) {
+              menuButton.focus();
+            }
+          }
+        }
+      });
     </script>
     <main class="flex-1 bg-neutral-100 text-[#111518] dark:bg-neutral-950 dark:text-white">{% block content %}{% endblock %}</main>
     <footer class="py-5 text-center bg-gray-100 text-gray-600 dark:bg-neutral-900 dark:text-gray-300">
@@ -413,9 +559,47 @@
   </div>
 </div>
 <script>
+  // Attach CSRF header to all same-origin fetch() POSTs.
+  (function () {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    var token = meta ? meta.getAttribute('content') : '';
+    if (!token || !window.fetch) { return; }
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function (resource, init) {
+      init = init || {};
+      var method = (init.method || (resource && resource.method) || 'GET').toUpperCase();
+      if (['GET', 'HEAD', 'OPTIONS', 'TRACE'].indexOf(method) === -1) {
+        var headers = new Headers(init.headers || {});
+        if (!headers.has('X-CSRF-Token')) {
+          headers.set('X-CSRF-Token', token);
+        }
+        init.headers = headers;
+        if (init.credentials === undefined) {
+          init.credentials = 'same-origin';
+        }
+      }
+      return origFetch(resource, init);
+    };
+  })();
+
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
-      navigator.serviceWorker.register('/service-worker.js').catch(function(err){
+      navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
+        // Only refresh the cache when the user loads the For Rent page.
+        var path = window.location.pathname.replace(/\/+$/, '') || '/';
+        if (path !== '/for-rent') return;
+        registration.update().catch(function(){});
+        function requestRefresh() {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'refresh-cache' });
+          }
+        }
+        if (navigator.serviceWorker.controller) {
+          requestRefresh();
+        } else {
+          navigator.serviceWorker.addEventListener('controllerchange', requestRefresh, { once: true });
+        }
+      }).catch(function(err){
         console.log('SW registration failed', err);
       });
     });

@@ -4,6 +4,7 @@
   <div class="layout-content-container flex flex-col max-w-[960px] flex-1">
     <div class="flex flex-wrap justify-between gap-3 p-4"><p class="text-[#181111] dark:text-white tracking-light text-[32px] font-bold leading-tight min-w-72">Edit your listing</p></div>
     <form id="edit-listing-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
         <label class="flex flex-col min-w-40 flex-1">
           <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Address</p>

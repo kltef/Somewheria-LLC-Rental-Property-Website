@@ -13,6 +13,7 @@
   <div class="bg-white dark:bg-neutral-900 rounded shadow p-6 mb-6">
     <h2 class="text-lg font-semibold mb-4">Add New Contract</h2>
     <form method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add">
       <label class="font-semibold">Renter Email
         <input type="email" name="renter_email" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" required>
@@ -56,6 +57,7 @@
                 </div>
               </div>
               <form method="post" class="inline">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="renter_email" value="{{ email }}">
                 <input type="hidden" name="contract_index" value="{{ loop.index0 }}">

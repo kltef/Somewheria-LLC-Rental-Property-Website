@@ -1,0 +1,8 @@
+{% extends "error_base.html" %}
+{% set error_code = "403" %}
+{% set error_title = "Front Door Locked" %}
+{% set error_message = "This area of the rental house is reserved for approved staff only. Your account can see the neighborhood, but not this room." %}
+{% set primary_label = "Return Home" %}
+{% set secondary_label = "Go to Login" %}
+{% set secondary_href = url_for('login') %}
+{% set house_note = "If you should have access, check your account role or ask an admin to update your permissions." %}

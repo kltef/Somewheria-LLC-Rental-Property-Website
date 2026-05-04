@@ -1,78 +1,138 @@
-# Somewheria LLC Rental Property Listing Web Application
+# Somewheria LLC Rental Property Website
 
-Welcome to the Somewheria LLC Rental Property Listing web application, designed to showcase rental properties and provide a seamless user experience for individuals searching for their next home.
+A Flask web application that lists rental properties owned by Somewheria LLC. Visitors can browse listings and request viewings; renters and admins have authenticated dashboards behind Google sign-in. Property data lives in an AWS-backed API; the site fetches and renders it on demand.
 
-This web application is built using Python's Flask framework and serves as a front-end interface for users to explore various rental properties, view detailed information, and get in contact with Somewheria LLC for queries.
+## Tech stack
 
-## Features
+- **Python 3.10+** with **Flask 2.3**
+- **Google OAuth** (`google-auth`, `google-auth-oauthlib`) for sign-in
+- **Pillow** for image processing on uploads
+- **AWS API Gateway + Lambda** as the upstream property store
+- **Gmail SMTP** for transactional and crash-alert emails
+- **unittest** for the test suite
 
-- **Home Page**: Overview of the service and company with a welcoming message.
-- **Properties for Rent**: Displays all available rental properties with details such as name, bedrooms, bathrooms, rental rate, and square footage.
-- **Property Details Page**: A dedicated page for each property with comprehensive information including images, address, amenities, and contact information.
-- **About Us**: Details about Somewheria LLC, including contact information.
-- **Contact Us**: A simple contact form for users to reach out with their queries.
+## Project layout
 
-## Getting Started
-
-### Prerequisites
-
-To run this application, you need:
-
-- Python 3.x installed on your system.
-- `pip` package manager for Python.
-- `Flask` package installed. You can install it using:
-  ```bash
-  pip install Flask
-  ```
-- `requests` package installed for API calls:
-  ```bash
-  pip install requests
-  ```
-
-### Running the Application
-
-To run the application, use the following command:
-
-```bash
-python3 app.py
+```
+somewheria_app/
+  __init__.py            create_app() factory + global error handlers
+  config.py              env-driven AppConfig dataclass
+  routes/
+    auth_routes.py       Google OAuth flow, login/logout
+    public_routes.py     /, /for-rent, /property/<id>, /about, /contact, …
+    admin_routes.py      add/edit/delete listings, dashboard, users, contracts
+    ticket_routes.py     maintenance/issue tickets
+    pwa_routes.py        manifest, service worker, offline page
+  services/
+    properties.py        property cache, AWS fan-out, image upload
+    auth.py              session, role decorators
+    notifications.py     email + log writers
+    appointments.py      viewing requests
+    analytics.py         per-request timing & visitor metrics
+    storage.py           JSON file persistence helpers
+    security.py          CSRF, rate limiting, security headers
+    tickets.py           ticket service
+    registry.py, console.py
+templates/               Jinja2 templates (one per page)
+static/                  CSS, JS, images, uploaded photos
+website_app.py           entry point with interactive startup prompts
+test_*.py                unittest suites
 ```
 
-The application will start on `localhost:5000`, and you can access it by navigating to `http://localhost:5000` in your web browser.
+## Quick start
 
-### Application Structure
+```bash
+git clone https://github.com/kltef2013/Somewheria-LLC-Rental-Property-Website.git
+cd Somewheria-LLC-Rental-Property-Website
+pip install -r requirements.txt
+# Create a .env file in the repo root with the variables described below.
+python website_app.py
+```
 
-- **App Initialization**: The application is initialized with Flask and starts by pre-fetching properties to improve performance.
-- **Routing**:
-  - `/` - Displays the home page.
-  - `/for-rent` - Lists available properties for rent.
-  - `/property/<uuid>` - Displays detailed information for a specific property.
-  - `/about` - Shows information about Somewheria LLC.
-  - `/contact` - Presents a contact form for user inquiries.
+The first run asks a few startup questions (log level, request logging, cache warm-up, host, port). Defaults work for local dev. The server then listens on `http://localhost:5000`.
 
-- **Templates**: The application uses the `render_template_string` function to dynamically generate HTML content served to the users.
+## Environment variables
 
-- **CSS and HTML**: Seamlessly integrated for responsive design and aesthetic appeal, with a focus on user experience and mobile responsiveness.
+| Variable | Required? | Default | Purpose |
+|---|---|---|---|
+| `SECRET_KEY` | recommended | random per-process | Flask session signing. Set this in production so sessions survive restarts. |
+| `GOOGLE_CLIENT_ID` | required for login | — | Google OAuth client. See `GOOGLE_OAUTH_SETUP.md`. |
+| `GOOGLE_CLIENT_SECRET` | required for login | — | Google OAuth secret. |
+| `GOOGLE_REDIRECT_URI` | optional | `http://localhost:5000/google/callback` | OAuth callback URL. |
+| `EMAIL_APP_PASSWORD` | required for email | — | Gmail app password used to send transactional and crash-alert emails. |
+| `PROPERTIES_API_BASE_URL` | optional | AWS test endpoint | Override the upstream property API. |
+| `AUTHORIZED_USERS` | optional | empty | Comma-separated emails granted the `renter` role. |
+| `ADMIN_USERS` | optional | empty | Comma-separated emails granted `admin`. |
+| `HIGH_ADMIN_USERS` | optional | empty | Comma-separated emails granted `high_admin` (full panel). |
+| `FLASK_ENV` | optional | `production` | Set to `development` to relax cookie security and allow plaintext OAuth locally. |
+| `DISABLE_BACKGROUND_THREADS` | optional | `0` | Set to `1` to disable any opt-in background workers (useful for tests). |
+| `CONSOLE_LOG_LEVEL` | optional | `INFO` | Initial log verbosity. |
 
-- **Performance Logging**: The application logs the time taken to respond to each request in milliseconds or seconds for performance monitoring.
+`load_dotenv()` is called at startup, so a `.env` file in the repo root is picked up automatically.
 
-## Branching Strategy
+## Routes (high level)
 
-### Main Branch
+- **Public:** `/`, `/for-rent`, `/for-rent.json`, `/property/<id>`, `/about`, `/contact`, `/privacy`, `/terms`, `/report-issue`, `/register`, `/login`, `/logout`
+- **Auth (Google):** `/google/login`, `/google/callback`, `/auth/status`
+- **Renter (signed in, role ≥ renter):** `/renter-dashboard`, `/renter/profile`, `/for-rent-refresh.json`, `/tickets/...`
+- **Admin (`@admin_required`):** `/manage-listings`, `/add-listing`, `/edit-listing/<id>`, `/save-edit/<id>`, `/upload-image/<id>`, `/delete-listing/<id>`, `/toggle-sale/<id>`, `/admin/dashboard`, `/admin/analytics`, `/admin/users`, `/admin/registrations`, `/admin/contracts`
+- **PWA:** `/manifest.webmanifest`, `/manifest.json`, `/service-worker.js`, `/offline`
 
-The `main` branch contains the stable version of the application, ready for production use. It is thoroughly tested and validated to ensure a smooth user experience.
+Run `flask routes` (with `FLASK_APP=website_app.py`) for the full list.
 
-### Developer Branch
+## How property data flows
 
-The `dev` branch is used for ongoing development and experimentation. This branch is considered unstable and may contain features or fixes that are still in progress. Use this branch with caution.
+The app does not own the property database; it reads from the AWS API at `PROPERTIES_API_BASE_URL`.
 
-## API Integration
+```
+visitor → /for-rent
+        → PropertyService.refresh_cache()       # synchronous on every load
+            ├─ GET /propertiesforrent           (list of UUIDs)
+            └─ for each UUID, in a 8-worker pool:
+               ├─ GET /properties/<uuid>/details
+               ├─ GET /properties/<uuid>/photos      (then base64-encode each)
+               └─ GET /properties/<uuid>/thumbnail
+        → properties_cache (in-memory, locked)
+        → render for_rent.html
+```
 
-The application fetches property data using the following API endpoints:
+If the upstream call fails, the view falls back to whatever is in cache and serves that — visitors don't see an error during transient AWS hiccups.
 
-1. `https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test/propertiesforrent`: Fetches the list of property IDs.
-2. `https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test/properties/<uuid>/details`: Fetches detailed property information.
-3. `https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test/properties/<uuid>/photos`: Fetches property photos using the UUID.
+There is no longer a periodic background refresh; the cache is repopulated only when a visitor hits `/for-rent` or `/for-rent.json`, or when an admin mutation (`/add-listing`, `/save-edit/<id>`, etc.) fires `trigger_background_refresh`. This keeps AWS API Gateway / Lambda costs proportional to real traffic.
 
----
+## Safe mode (crash handling)
 
-Thank you for using the Somewheria LLC Rental Property Listing web application. We hope you have a pleasant experience exploring our properties.
+When an unhandled exception escapes a route, the global handler in `somewheria_app/__init__.py`:
+
+1. Returns an empty body with HTTP 503 (no template, no cache, no AWS — nothing that could fail again).
+2. Emails the admin a stack trace asynchronously, rate-limited to once per 10 minutes per `(ExceptionType, path)` fingerprint so a sustained outage doesn't mailbomb the inbox.
+3. Logs the exception via `app.logger.exception`.
+
+HTTPException subclasses (401, 403, 404, 502, 503, 504) keep their dedicated template handlers and do not trigger crash emails.
+
+This catches in-process failures only. A dead Python process or unreachable host needs an external uptime monitor (UptimeRobot, BetterStack, etc.).
+
+## Tests
+
+```bash
+python -m unittest discover
+```
+
+Or hit individual files:
+
+```bash
+python -m unittest test_coverage_full
+python -m unittest test_routes_expanded
+python -m unittest test_services
+```
+
+`test_oauth.py` exercises the Google OAuth flow against a mocked client; `test_site.py` is a smoke test that spins up a client and walks the public pages.
+
+## Branches
+
+- **`main`** — production. Tagged releases land here.
+- **`dev`** — active development. Features and fixes start here and are merged to `main` once verified.
+
+## License
+
+Proprietary — © Somewheria, LLC. All rights reserved.

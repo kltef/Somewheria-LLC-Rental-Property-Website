@@ -1,0 +1,8 @@
+{% extends "error_base.html" %}
+{% set error_code = "503" %}
+{% set error_title = "House Services Temporarily Offline" %}
+{% set error_message = "The site is still here, but one or more important rental services are temporarily unavailable right now." %}
+{% set primary_label = "Return Home" %}
+{% set secondary_label = "Check Status" %}
+{% set secondary_href = url_for('admin_status') if session.get('user', {}).get('role') in ['admin', 'high_admin'] else url_for('home') %}
+{% set house_note = "A 503 usually clears up once background services, APIs, or maintenance work finish running." %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="px-6 py-6 max-w-7xl mx-auto bg-white dark:bg-neutral-950 rounded shadow">
+  <h1 class="text-3xl font-bold mb-6 text-[#111518] dark:text-white">System Status</h1>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
+    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <p class="text-sm text-gray-500">Property Cache</p>
+      <p class="text-2xl font-bold">{{ metrics.properties_cached }}</p>
+      <p class="text-sm text-gray-500 mt-1">Listings currently cached in memory</p>
+    </div>
+    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <p class="text-sm text-gray-500">Pending Registrations</p>
+      <p class="text-2xl font-bold">{{ metrics.pending_registrations }}</p>
+      <p class="text-sm text-gray-500 mt-1">Requests waiting for admin review</p>
+    </div>
+    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <p class="text-sm text-gray-500">Known Users</p>
+      <p class="text-2xl font-bold">{{ metrics.known_users }}</p>
+      <p class="text-sm text-gray-500 mt-1">Entries in persistent user roles</p>
+    </div>
+    <div class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <p class="text-sm text-gray-500">Refresh Interval</p>
+      <p class="text-2xl font-bold">{{ metrics.cache_refresh_interval }}</p>
+      <p class="text-sm text-gray-500 mt-1">Configured property refresh cadence</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <section class="p-4 bg-white dark:bg-neutral-800 rounded shadow lg:col-span-2">
+      <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">Website Sections</h2>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {% for item in website_status %}
+          <div class="flex items-center justify-between gap-4 border border-neutral-200 dark:border-neutral-700 rounded p-4">
+            <div>
+              <p class="font-medium text-[#111518] dark:text-white">{{ item.label }}</p>
+              <p class="text-sm text-gray-500">{{ item.detail }}</p>
+            </div>
+            <span class="px-3 py-1 rounded text-sm font-semibold {% if item.ok %}bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200{% else %}bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200{% endif %}">
+              {{ "Up" if item.ok else "Issue" }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">Services</h2>
+      <div class="space-y-3">
+        {% for item in service_status %}
+          <div class="flex items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">
+            <div>
+              <p class="font-medium text-[#111518] dark:text-white">{{ item.label }}</p>
+              <p class="text-sm text-gray-500">{{ item.detail }}</p>
+            </div>
+            <span class="px-3 py-1 rounded text-sm font-semibold {% if item.ok %}bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200{% else %}bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200{% endif %}">
+              {{ "Healthy" if item.ok else "Attention" }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">Files</h2>
+      <div class="space-y-3">
+        {% for item in file_status %}
+          <div class="flex items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">
+            <div>
+              <p class="font-medium text-[#111518] dark:text-white">{{ item.label }}</p>
+              <p class="text-sm text-gray-500 break-all">{{ item.detail }}</p>
+            </div>
+            <span class="px-3 py-1 rounded text-sm font-semibold {% if item.ok %}bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200{% else %}bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200{% endif %}">
+              {{ "Present" if item.ok else "Missing" }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

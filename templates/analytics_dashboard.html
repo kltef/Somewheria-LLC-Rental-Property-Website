@@ -47,7 +47,7 @@
 </div>
 <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 <script>
-const chartData = JSON.parse('{{ chart_data|tojson|safe }}');
+const chartData = {{ chart_data|tojson }};
 // Visits
 Plotly.newPlot('visits-chart', [{
   x: chartData.days,
