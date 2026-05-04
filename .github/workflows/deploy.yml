@@ -1,5 +1,7 @@
 name: Flask CI/CD
 on: [push]
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -16,7 +18,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Unit Tests
-        env:
-          DISABLE_BACKGROUND_THREADS: "1"
-        run: python -m unittest discover -v
+      - name: Run Flask in background
+        run: |
+          python app.py & 
+          sleep 5 # Wait for Flask to start
+
+      - name: Run Playwright Tests
+        run: pytest tests/  # This is where your codegen scripts go
