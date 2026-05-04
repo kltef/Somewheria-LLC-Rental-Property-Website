@@ -51,7 +51,8 @@ class AppointmentService:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     for property_id, date_set in appointments.items():
-                        print(f"{property_id}:{','.join(sorted(date_set))}", file=handle)
+                        line = f"{property_id}:{','.join(sorted(date_set))}\n"
+                        handle.write(line)
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(tmp_name, path)
