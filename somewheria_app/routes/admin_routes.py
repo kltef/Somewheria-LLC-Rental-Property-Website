@@ -386,18 +386,24 @@ def admin_registrations():
                 title="Pending Registrations",
                 error="No email provided.",
             )
+        # Send the approval/rejection notice to the applicant, not the admin
+        # inbox. Without an explicit ``to=`` the NotificationService falls back
+        # to ``config.email_recipient`` (admin), so the user-facing message
+        # never reaches them.
         if action == "approve":
             services.storage.set_user_role(email, "renter")
             services.storage.remove_pending_registration(email)
             services.notifications.send_email(
                 "Registration Approved",
                 "Your registration for Somewheria has been approved. You can now log in.",
+                to=email,
             )
         elif action == "reject":
             services.storage.remove_pending_registration(email)
             services.notifications.send_email(
                 "Registration Rejected",
                 "Your registration for Somewheria was not approved at this time.",
+                to=email,
             )
         else:
             return render_template(

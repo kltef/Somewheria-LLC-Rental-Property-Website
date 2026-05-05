@@ -391,6 +391,12 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         set_role_mock.assert_called_once_with("pending@example.com", "renter")
         remove_pending_mock.assert_called_once_with("pending@example.com")
         send_email_mock.assert_called_once()
+        # The approval message must be sent to the applicant, not the admin
+        # inbox fallback used when ``to=`` is omitted.
+        self.assertEqual(
+            send_email_mock.call_args.kwargs.get("to"),
+            "pending@example.com",
+        )
 
     def test_admin_registrations_reject_calls_storage_and_email(self):
         self.login_as("admin")
@@ -413,6 +419,12 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         remove_pending_mock.assert_called_once_with("pending@example.com")
         send_email_mock.assert_called_once()
+        # The rejection message must be sent to the applicant, not the admin
+        # inbox fallback used when ``to=`` is omitted.
+        self.assertEqual(
+            send_email_mock.call_args.kwargs.get("to"),
+            "pending@example.com",
+        )
 
     def test_admin_users_page_loads(self):
         self.login_as("admin")
