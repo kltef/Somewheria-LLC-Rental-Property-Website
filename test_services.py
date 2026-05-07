@@ -490,10 +490,20 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
             "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
-        ):
+        ) as smtp_mock:
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertTrue(result)
+        # SMTP must be called with a finite timeout so a stalled relay can't
+        # tie up the calling request worker indefinitely.
+        smtp_call_kwargs = smtp_mock.call_args.kwargs
+        smtp_call_args = smtp_mock.call_args.args
+        timeout = smtp_call_kwargs.get("timeout")
+        if timeout is None and len(smtp_call_args) >= 3:
+            timeout = smtp_call_args[2]
+        self.assertIsNotNone(timeout, "smtplib.SMTP must be invoked with a timeout")
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 60)
         smtp_instance.starttls.assert_called_once()
         smtp_instance.login.assert_called_once_with("sender@example.com", "app-pass")
         smtp_instance.send_message.assert_called_once()
@@ -504,6 +514,17 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertIsNotNone(html_part)
         self.assertIsNotNone(text_part)
         self.assertIn("Somewheria LLC", html_part.get_content())
+
+    def test_send_email_returns_false_on_smtp_timeout(self):
+        # A network-level timeout from smtplib must be caught and reported as
+        # a clean False, not bubble up into the request handler.
+        with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
+            "somewheria_app.services.notifications.smtplib.SMTP",
+            side_effect=TimeoutError("smtp connect timed out"),
+        ):
+            result = self.service.send_email("Test Subject", "Hello world")
+
+        self.assertFalse(result)
 
     def test_send_email_returns_false_on_smtp_failure(self):
         smtp_instance = Mock()

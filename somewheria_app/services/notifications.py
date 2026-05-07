@@ -9,6 +9,13 @@ from email.message import EmailMessage
 from .console import get_console_logger
 
 
+# Socket timeout (seconds) for every SMTP operation: connect, STARTTLS, login,
+# send. Without this, a stalled Gmail relay would tie up the calling worker
+# indefinitely — and many request handlers call send_email synchronously,
+# so a hung SMTP socket equals a hung HTTP request.
+SMTP_TIMEOUT_SECONDS = 15
+
+
 class NotificationService:
     def __init__(self, config, analytics) -> None:
         self.config = config
@@ -34,7 +41,7 @@ class NotificationService:
         message.add_alternative(self._html_email_body(subject, body), subtype="html")
 
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=SMTP_TIMEOUT_SECONDS) as server:
                 server.starttls()
                 server.login(self.config.email_sender, app_password)
                 server.send_message(message)
