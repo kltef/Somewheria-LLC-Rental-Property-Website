@@ -389,15 +389,20 @@ def admin_registrations():
         if action == "approve":
             services.storage.set_user_role(email, "renter")
             services.storage.remove_pending_registration(email)
+            # Decision emails are addressed to the applicant. Without to=,
+            # NotificationService falls back to the admin inbox, so the
+            # applicant never hears back.
             services.notifications.send_email(
                 "Registration Approved",
                 "Your registration for Somewheria has been approved. You can now log in.",
+                to=email,
             )
         elif action == "reject":
             services.storage.remove_pending_registration(email)
             services.notifications.send_email(
                 "Registration Rejected",
                 "Your registration for Somewheria was not approved at this time.",
+                to=email,
             )
         else:
             return render_template(

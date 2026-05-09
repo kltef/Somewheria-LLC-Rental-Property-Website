@@ -11,6 +11,7 @@ from somewheria_app.services.auth import AuthService
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService
 from somewheria_app.services.storage import FileStorageService
+from somewheria_app.services.tickets import TicketService
 
 
 class DummyForm:
@@ -847,6 +848,61 @@ class RateLimiterTestCase(unittest.TestCase):
 
         self.assertNotIn("stale", limiter._hits)
         self.assertIn("active", limiter._hits)
+
+
+class TicketServiceConcurrencyTestCase(unittest.TestCase):
+    """Verify TicketService load -> mutate -> save blocks are atomic.
+
+    FileStorageService only locks individual reads or writes, so two
+    concurrent ticket submissions could each load the same list, append,
+    and have one save overwrite the other. The service-level lock added
+    in TicketService must serialize the whole block.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.config = SimpleNamespace(tickets_file=Path(self.tmpdir.name) / "tickets.json")
+        self.storage = FileStorageService(SimpleNamespace())
+        self.notifications = Mock()
+        # send_email returning truthy keeps the happy path in create_ticket.
+        self.notifications.send_email.return_value = True
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_concurrent_create_ticket_does_not_lose_writes(self):
+        import threading as _threading
+
+        N = 20
+        barrier = _threading.Barrier(N)
+        errors: list[BaseException] = []
+
+        def submit(i):
+            try:
+                barrier.wait(timeout=5)
+                self.service.create_ticket(
+                    {
+                        "title": f"t{i}",
+                        "description": f"d{i}",
+                        "category": "other",
+                        "priority": "normal",
+                    },
+                    submitter_email=f"r{i}@example.com",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [_threading.Thread(target=submit, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        all_tickets = self.service.list_tickets()
+        self.assertEqual(len(all_tickets), N)
+        # IDs must be unique — i.e., no two threads produced a ticket that
+        # got dropped by an overwriting save.
+        self.assertEqual(len({t["id"] for t in all_tickets}), N)
 
 
 if __name__ == "__main__":

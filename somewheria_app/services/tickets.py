@@ -10,6 +10,7 @@ The service is intentionally small and synchronous — it mirrors the
 from __future__ import annotations
 
 import datetime
+import threading
 import uuid
 from typing import Iterable
 
@@ -57,6 +58,12 @@ class TicketService:
         self.storage = storage
         self.notifications = notifications
         self.logger = get_console_logger("tickets")
+        # FileStorageService.file_lock only covers a single read or write,
+        # so two threads doing load -> mutate -> save would race and lose
+        # one update. This RLock makes each mutating block atomic at the
+        # service level. Reentrant so a future helper can call into another
+        # mutating method without self-deadlock.
+        self._mutation_lock = threading.RLock()
 
     # ------------------------------------------------------------------ I/O
 
@@ -149,9 +156,10 @@ class TicketService:
             "notes": [],
         }
 
-        tickets = self._load()
-        tickets.append(ticket)
-        self._save(tickets)
+        with self._mutation_lock:
+            tickets = self._load()
+            tickets.append(ticket)
+            self._save(tickets)
 
         try:
             # Notify the internal admin inbox.
@@ -198,23 +206,28 @@ class TicketService:
         return ticket
 
     def set_email_updates(self, ticket_id: str, enabled: bool, actor_email: str) -> dict | None:
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
-            ticket["email_updates"] = bool(enabled)
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
-            try:
-                self.notifications.log_site_change(
-                    actor_email or "unknown",
-                    "ticket_email_updates_toggled",
-                    {"ticket_id": ticket_id, "enabled": bool(enabled)},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        with self._mutation_lock:
+            tickets = self._load()
+            updated_ticket: dict | None = None
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
+                ticket["email_updates"] = bool(enabled)
+                ticket["updated_at"] = _now_iso()
+                self._save(tickets)
+                updated_ticket = ticket
+                break
+        if updated_ticket is None:
+            return None
+        try:
+            self.notifications.log_site_change(
+                actor_email or "unknown",
+                "ticket_email_updates_toggled",
+                {"ticket_id": ticket_id, "enabled": bool(enabled)},
+            )
+        except Exception:
+            pass
+        return updated_ticket
 
     # Send the email when ``email_updates`` is on AND we actually have a
     # reachable submitter address. The NotificationService itself will no-op
@@ -236,121 +249,133 @@ class TicketService:
         updates: dict,
         actor_email: str,
     ) -> dict | None:
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
+        with self._mutation_lock:
+            tickets = self._load()
+            updated_ticket: dict | None = None
             changed: dict = {}
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
 
-            if "status" in updates:
-                status = (updates.get("status") or "").strip().lower()
-                if status in ALLOWED_STATUSES and status != ticket.get("status"):
-                    ticket["status"] = status
-                    changed["status"] = status
+                if "status" in updates:
+                    status = (updates.get("status") or "").strip().lower()
+                    if status in ALLOWED_STATUSES and status != ticket.get("status"):
+                        ticket["status"] = status
+                        changed["status"] = status
 
-            if "priority" in updates:
-                priority = (updates.get("priority") or "").strip().lower()
-                if priority in ALLOWED_PRIORITIES and priority != ticket.get("priority"):
-                    ticket["priority"] = priority
-                    changed["priority"] = priority
+                if "priority" in updates:
+                    priority = (updates.get("priority") or "").strip().lower()
+                    if priority in ALLOWED_PRIORITIES and priority != ticket.get("priority"):
+                        ticket["priority"] = priority
+                        changed["priority"] = priority
 
-            if "assigned_to" in updates:
-                assignee = (updates.get("assigned_to") or "").strip().lower()[:254]
-                if assignee != ticket.get("assigned_to"):
-                    ticket["assigned_to"] = assignee
-                    changed["assigned_to"] = assignee
+                if "assigned_to" in updates:
+                    assignee = (updates.get("assigned_to") or "").strip().lower()[:254]
+                    if assignee != ticket.get("assigned_to"):
+                        ticket["assigned_to"] = assignee
+                        changed["assigned_to"] = assignee
 
-            if not changed:
-                return ticket
+                if changed:
+                    ticket["updated_at"] = _now_iso()
+                    self._save(tickets)
+                updated_ticket = ticket
+                break
 
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
+        if updated_ticket is None:
+            return None
+        if not changed:
+            return updated_ticket
 
-            # Email the submitter a summary of what changed.
-            friendly_bits = []
-            if "status" in changed:
-                friendly_bits.append(f"Status: {changed['status'].replace('_', ' ')}")
-            if "priority" in changed:
-                friendly_bits.append(f"Severity: {changed['priority']}")
-            if "assigned_to" in changed:
-                friendly_bits.append(
-                    f"Assigned to: {changed['assigned_to'] or '(unassigned)'}"
-                )
-            self._maybe_email_submitter(
-                ticket,
-                subject=f"Repair ticket update: {ticket.get('title', '')}",
-                body=(
-                    f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
-                    f"There's an update on your repair ticket (reference {ticket_id[:8]}):\n\n"
-                    + "\n".join(friendly_bits)
-                    + "\n\nYou can view the full ticket in the Somewheria portal."
-                ),
+        # Email the submitter a summary of what changed.
+        friendly_bits = []
+        if "status" in changed:
+            friendly_bits.append(f"Status: {changed['status'].replace('_', ' ')}")
+        if "priority" in changed:
+            friendly_bits.append(f"Severity: {changed['priority']}")
+        if "assigned_to" in changed:
+            friendly_bits.append(
+                f"Assigned to: {changed['assigned_to'] or '(unassigned)'}"
             )
+        self._maybe_email_submitter(
+            updated_ticket,
+            subject=f"Repair ticket update: {updated_ticket.get('title', '')}",
+            body=(
+                f"Hi {updated_ticket.get('submitter_name') or 'there'},\n\n"
+                f"There's an update on your repair ticket (reference {ticket_id[:8]}):\n\n"
+                + "\n".join(friendly_bits)
+                + "\n\nYou can view the full ticket in the Somewheria portal."
+            ),
+        )
 
-            try:
-                self.notifications.log_site_change(
-                    actor_email or "unknown",
-                    "ticket_updated",
-                    {"ticket_id": ticket_id, **changed},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        try:
+            self.notifications.log_site_change(
+                actor_email or "unknown",
+                "ticket_updated",
+                {"ticket_id": ticket_id, **changed},
+            )
+        except Exception:
+            pass
+        return updated_ticket
 
     def add_note(self, ticket_id: str, text: str, actor_email: str) -> dict | None:
         text = (text or "").strip()[:MAX_NOTE_LEN]
         if not text:
             raise ValueError("Note cannot be empty.")
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
-            actor = (actor_email or "unknown").lower()
-            ticket.setdefault("notes", []).append({
-                "at": _now_iso(),
-                "by": actor,
-                "text": text,
-            })
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
+        actor = (actor_email or "unknown").lower()
 
-            submitter = (ticket.get("submitted_by") or "").lower()
-            if actor != submitter:
-                # Note from someone other than the submitter (typically admin);
-                # send a heads-up email if the submitter opted in.
-                self._maybe_email_submitter(
-                    ticket,
-                    subject=f"New note on your repair ticket: {ticket.get('title', '')}",
-                    body=(
-                        f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
-                        f"{actor} added a note to your repair ticket (reference {ticket_id[:8]}):\n\n"
-                        f"{text}\n\n"
-                        f"Reply from the ticket page in the Somewheria portal."
+        with self._mutation_lock:
+            tickets = self._load()
+            updated_ticket: dict | None = None
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
+                ticket.setdefault("notes", []).append({
+                    "at": _now_iso(),
+                    "by": actor,
+                    "text": text,
+                })
+                ticket["updated_at"] = _now_iso()
+                self._save(tickets)
+                updated_ticket = ticket
+                break
+        if updated_ticket is None:
+            return None
+
+        submitter = (updated_ticket.get("submitted_by") or "").lower()
+        if actor != submitter:
+            # Note from someone other than the submitter (typically admin);
+            # send a heads-up email if the submitter opted in.
+            self._maybe_email_submitter(
+                updated_ticket,
+                subject=f"New note on your repair ticket: {updated_ticket.get('title', '')}",
+                body=(
+                    f"Hi {updated_ticket.get('submitter_name') or 'there'},\n\n"
+                    f"{actor} added a note to your repair ticket (reference {ticket_id[:8]}):\n\n"
+                    f"{text}\n\n"
+                    f"Reply from the ticket page in the Somewheria portal."
+                ),
+            )
+        else:
+            # Note from the submitter — notify the internal inbox so staff
+            # see a renter reply even if they're not watching the dashboard.
+            try:
+                self.notifications.send_email(
+                    f"Renter note on ticket: {updated_ticket.get('title', '')}",
+                    (
+                        f"Ticket: {ticket_id[:8]}\n"
+                        f"From: {updated_ticket.get('submitter_name') or submitter or 'renter'}\n\n"
+                        f"{text}"
                     ),
                 )
-            else:
-                # Note from the submitter — notify the internal inbox so staff
-                # see a renter reply even if they're not watching the dashboard.
-                try:
-                    self.notifications.send_email(
-                        f"Renter note on ticket: {ticket.get('title', '')}",
-                        (
-                            f"Ticket: {ticket_id[:8]}\n"
-                            f"From: {ticket.get('submitter_name') or submitter or 'renter'}\n\n"
-                            f"{text}"
-                        ),
-                    )
-                except Exception as exc:
-                    self.logger.warning("Failed to forward renter note: %s", exc)
+            except Exception as exc:
+                self.logger.warning("Failed to forward renter note: %s", exc)
 
-            try:
-                self.notifications.log_site_change(
-                    actor,
-                    "ticket_note_added",
-                    {"ticket_id": ticket_id},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        try:
+            self.notifications.log_site_change(
+                actor,
+                "ticket_note_added",
+                {"ticket_id": ticket_id},
+            )
+        except Exception:
+            pass
+        return updated_ticket
