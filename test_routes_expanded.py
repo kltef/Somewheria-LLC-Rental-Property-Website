@@ -814,6 +814,303 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
 
+    # ---------------- Phase 3 §1 — renter portal additions ----------------
+
+    @staticmethod
+    def _png_bytes(size=(10, 10)):
+        """Return a minimal in-memory PNG for upload tests."""
+        from PIL import Image as _Image
+
+        buffer = BytesIO()
+        _Image.new("RGB", size, color=(120, 200, 80)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_admin_contracts_add_with_pdf_persists_filename_and_id(self):
+        self.login_as("admin")
+        captured = {}
+
+        def fake_save(target, data):
+            captured["path"] = target
+            captured["bytes"] = data
+            return True
+
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={}
+        ), patch.object(
+            self.services.storage, "save_renter_contracts"
+        ) as save_mock, patch.object(
+            self.services.storage, "save_binary_file", side_effect=fake_save
+        ) as save_binary_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "contract_pdf": (BytesIO(b"%PDF-1.4 hello"), "lease.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        save_binary_mock.assert_called_once()
+        save_mock.assert_called_once()
+        saved_payload = save_mock.call_args[0][0]
+        contracts_for_renter = saved_payload["renter@example.com"]
+        self.assertEqual(len(contracts_for_renter), 1)
+        contract = contracts_for_renter[0]
+        self.assertEqual(contract["property_name"], "Maple House")
+        self.assertTrue(contract["id"])
+        self.assertTrue(contract["pdf_filename"].endswith(".pdf"))
+        self.assertIn(contract["id"], contract["pdf_filename"])
+        self.assertEqual(captured["bytes"], b"%PDF-1.4 hello")
+
+    def test_admin_contracts_rejects_non_pdf_upload(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={}
+        ), patch.object(
+            self.services.storage, "save_renter_contracts"
+        ) as save_mock, patch.object(
+            self.services.storage, "save_binary_file"
+        ) as save_binary_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "contract_pdf": (BytesIO(b"not really a pdf"), "fake.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"not a valid PDF", response.data)
+        save_binary_mock.assert_not_called()
+        save_mock.assert_not_called()
+
+    def test_contract_detail_renter_can_view_own_contract(self):
+        self.login_as("renter", email="renter@example.com")
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": "contract-abc",
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": "",
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get("/contracts/contract-abc")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Maple House", response.data)
+
+    def test_contract_detail_404_when_renter_does_not_own(self):
+        self.login_as("renter", email="renter@example.com")
+        contracts_data = {
+            "someone-else@example.com": [
+                {
+                    "id": "contract-xyz",
+                    "property_name": "Other House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": "",
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get("/contracts/contract-xyz")
+        self.assertEqual(response.status_code, 404)
+
+    def test_contract_download_serves_pdf(self):
+        self.login_as("renter", email="renter@example.com")
+        contract_id = "contract-dl"
+        upload_dir = self.services.config.contract_upload_dir
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = upload_dir / f"{contract_id}.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 sample")
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": contract_id,
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": f"{contract_id}.pdf",
+                }
+            ]
+        }
+        try:
+            with patch.object(
+                self.services.storage, "get_renter_contracts", return_value=contracts_data
+            ):
+                response = self.client.get(f"/contracts/{contract_id}/download")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "application/pdf")
+            self.assertTrue(response.data.startswith(b"%PDF"))
+        finally:
+            try:
+                pdf_path.unlink()
+            except OSError:
+                pass
+
+    def test_contract_download_404_when_unknown(self):
+        self.login_as("renter", email="renter@example.com")
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={}
+        ):
+            response = self.client.get("/contracts/does-not-exist/download")
+        self.assertEqual(response.status_code, 404)
+
+    def test_renter_profile_post_persists_rcs_status_updates(self):
+        self.login_as("renter", email="renter@example.com")
+        with patch.object(
+            self.services.storage, "get_renter_profiles", return_value={}
+        ), patch.object(
+            self.services.storage, "save_renter_profiles"
+        ) as save_mock:
+            response = self.client.post(
+                "/renter/profile",
+                data={
+                    "name": "Jamie",
+                    "contact": "555-0100",
+                    "email_status_updates": "1",
+                    "rcs_status_updates": "1",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        save_mock.assert_called_once_with(
+            {
+                "renter@example.com": {
+                    "name": "Jamie",
+                    "contact": "555-0100",
+                    "email_status_updates": True,
+                    "rcs_status_updates": True,
+                }
+            }
+        )
+
+    def test_ticket_new_form_includes_photo_input(self):
+        response = self.client.get("/tickets/new")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'name="photos"', response.data)
+        self.assertIn(b"multipart/form-data", response.data)
+
+    def test_ticket_service_add_photo_persists_image(self):
+        from somewheria_app.services.tickets import MAX_TICKET_PHOTOS
+
+        self.login_as("renter", email="renter@example.com")
+        # Create a ticket through the service so storage holds it.
+        services = self.services
+        # Patch out emails so the service doesn't try SMTP.
+        with patch.object(services.notifications, "send_email", return_value=True):
+            ticket = services.tickets.create_ticket(
+                {
+                    "title": "Leak",
+                    "description": "Water under the sink",
+                    "category": "plumbing",
+                    "priority": "high",
+                },
+                "renter@example.com",
+            )
+        try:
+            png = self._png_bytes()
+
+            class _Upload:
+                def __init__(self, name, blob):
+                    self.filename = name
+                    self.stream = BytesIO(blob)
+
+            updated = services.tickets.add_photo(
+                ticket["id"], _Upload("leak.png", png), "renter@example.com"
+            )
+            self.assertIsNotNone(updated)
+            self.assertEqual(len(updated["photos"]), 1)
+            url = updated["photos"][0]["url"]
+            self.assertTrue(url.startswith(f"/static/uploads/tickets/{ticket['id']}/"))
+            on_disk = self.services.config.base_dir / url.lstrip("/").replace("/", os.sep)
+            self.assertTrue(on_disk.exists())
+
+            # Limit guard: cannot exceed MAX_TICKET_PHOTOS.
+            for _ in range(MAX_TICKET_PHOTOS - 1):
+                services.tickets.add_photo(
+                    ticket["id"], _Upload("more.png", self._png_bytes()), "renter@example.com"
+                )
+            from somewheria_app.services.properties import UploadValidationError
+
+            with self.assertRaises(UploadValidationError):
+                services.tickets.add_photo(
+                    ticket["id"], _Upload("over.png", self._png_bytes()), "renter@example.com"
+                )
+        finally:
+            # Best-effort cleanup of test artifacts.
+            ticket_dir = self.services.config.ticket_upload_dir / ticket["id"]
+            if ticket_dir.exists():
+                for child in ticket_dir.iterdir():
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+                try:
+                    ticket_dir.rmdir()
+                except OSError:
+                    pass
+            # Remove the ticket from tickets.json so other tests don't see it.
+            tickets_file = self.services.config.tickets_file
+            if tickets_file.exists():
+                try:
+                    tickets_file.unlink()
+                except OSError:
+                    pass
+
+    def test_ticket_service_add_photo_rejects_non_image(self):
+        from somewheria_app.services.properties import UploadValidationError
+
+        services = self.services
+        with patch.object(services.notifications, "send_email", return_value=True):
+            ticket = services.tickets.create_ticket(
+                {
+                    "title": "Light",
+                    "description": "Bulb out",
+                    "category": "electrical",
+                    "priority": "low",
+                },
+                "renter@example.com",
+            )
+        try:
+
+            class _Upload:
+                filename = "evil.png"
+                stream = BytesIO(b"this is not really a png")
+
+            with self.assertRaises(UploadValidationError):
+                services.tickets.add_photo(
+                    ticket["id"], _Upload(), "renter@example.com"
+                )
+        finally:
+            tickets_file = self.services.config.tickets_file
+            if tickets_file.exists():
+                try:
+                    tickets_file.unlink()
+                except OSError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()

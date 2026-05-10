@@ -69,6 +69,21 @@
       <h2 class="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Description</h2>
       <p class="whitespace-pre-wrap text-[#111518] dark:text-white">{{ ticket.description }}</p>
     </div>
+
+    {% if ticket.photos %}
+      <div class="mt-4">
+        <h2 class="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Photos</h2>
+        <div class="flex flex-wrap gap-2">
+          {% for photo in ticket.photos %}
+            <a href="{{ photo.url }}" target="_blank" rel="noopener"
+               class="block border border-neutral-200 dark:border-neutral-800 rounded overflow-hidden hover:opacity-90 transition-opacity">
+              <img src="{{ photo.url }}" alt="Ticket attachment"
+                   class="h-24 w-24 object-cover bg-neutral-100 dark:bg-neutral-900">
+            </a>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
   </div>
 
   {# Email-update preference: visible to the submitter or any admin. #}

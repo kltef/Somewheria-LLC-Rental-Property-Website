@@ -24,7 +24,7 @@
       </div>
     {% endif %}
 
-    <form action="{{ url_for('ticket_new_submit') }}" method="POST"
+    <form action="{{ url_for('ticket_new_submit') }}" method="POST" enctype="multipart/form-data"
           class="bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6 space-y-4">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
 
@@ -145,6 +145,13 @@
                  placeholder="Optional"
                  class="w-full p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white" />
         </div>
+      </div>
+
+      <div>
+        <label for="photos" class="block text-xs uppercase tracking-wide font-semibold mb-1 text-gray-600 dark:text-gray-300">Photos (optional, up to 5)</label>
+        <input type="file" id="photos" name="photos" accept="image/jpeg,image/png,image/gif,image/webp" multiple
+               class="w-full p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white">
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">JPG, PNG, GIF, or WebP. 16 MB per file.</p>
       </div>
 
       <div class="pt-2 border-t border-neutral-200 dark:border-neutral-800">

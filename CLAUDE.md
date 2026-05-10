@@ -39,7 +39,7 @@ python manage_users.py
 
 **Crash safety.** `create_app()` registers a global `Exception` handler that returns an empty `503` body (no template, no DB, no AWS — nothing that can fail again) and emails a stack trace asynchronously, rate-limited to one email per 10 min per `(ExceptionType, path)` fingerprint. `HTTPException` subclasses bypass this and use the per-status template handlers. Don't add work into the crash path that itself depends on AWS, the cache, or rendering.
 
-**Persistence is JSON files, not a DB.** `FileStorageService` reads/writes `pending_registrations.json`, `user_roles.json`, `renter_profiles.json`, `renter_contracts.json`, `tickets.json`, plus the `property_appointments.txt` log — all paths defined in `AppConfig.__post_init__`. Treat these as the source of truth for user/registration/ticket state.
+**Persistence is JSON files, not a DB.** `FileStorageService` reads/writes `pending_registrations.json`, `user_roles.json`, `renter_profiles.json`, `renter_contracts.json`, `tickets.json`, plus the `property_appointments.txt` log — all paths defined in `AppConfig.__post_init__`. Treat these as the source of truth for user/registration/ticket state. Binary attachments (signed-contract PDFs at `static/uploads/contracts/<uuid>.pdf`, ticket photos at `static/uploads/tickets/<ticket_id>/`) also go through `FileStorageService` (`save_binary_file` / `load_binary_file` / `delete_file`) — don't bypass it with raw `open()`.
 
 **Roles** are CSV env vars: `AUTHORIZED_USERS` → renter, `ADMIN_USERS` → admin, `HIGH_ADMIN_USERS` → full panel. They're loaded once at config construction; restart the app after editing `.env`.
 
