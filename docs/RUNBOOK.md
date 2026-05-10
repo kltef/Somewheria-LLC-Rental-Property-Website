@@ -122,6 +122,72 @@ These are enforced by `_RateLimiter` in `services/security.py`, in-memory per pr
 
 `X-Forwarded-For` is trusted for the client IP if present. If you front with a proxy that doesn't sanitize this header, attackers can spoof IPs to evade the per-IP limits. Configure your proxy to overwrite `X-Forwarded-For`.
 
+## JIRA integration — pending credentials
+
+Phase 3 §6 wired up a JIRA mirror for repair tickets, but **no live HTTP calls
+are made yet** — we don't have JIRA Cloud credentials. The scaffold (service,
+webhook endpoint, admin link, retry queue, CSRF exemption) is in place; flipping
+the toggle is a one-line change to `JiraClient.create_issue` once the env is
+populated.
+
+### Env vars
+
+Set all four to enable the JIRA mirror; leave any blank to keep the no-op
+behaviour.
+
+| Variable | Purpose |
+| --- | --- |
+| `JIRA_BASE_URL` | e.g. `https://somewheria.atlassian.net` (no trailing slash) |
+| `JIRA_PROJECT_KEY` | The JIRA project key new issues are created in (e.g. `MAINT`) |
+| `JIRA_API_TOKEN` | API token from `https://id.atlassian.com/manage/api-tokens` |
+| `JIRA_USER_EMAIL` | Email of the JIRA user the token belongs to |
+| `JIRA_WEBHOOK_SECRET` | Independent — shared secret JIRA must send back via `X-JIRA-Webhook-Secret` to the inbound webhook. Generate with `python -c 'import secrets; print(secrets.token_urlsafe(32))'` |
+
+Restart the app after editing `.env`.
+
+### What the app does on ticket creation
+
+Each successful ticket POST queues a JIRA mirror creation in a daemon thread
+(3 retries, 1s/4s/16s backoff). The returned issue key is persisted on the
+ticket as `jira_key` and surfaces as a clickable link on the admin ticket
+detail page. JIRA being slow or down **never** blocks the ticket-creation
+response.
+
+### Configuring JIRA's outbound webhook
+
+Point JIRA at the inbound endpoint so status changes flow back into the local
+`tickets.json`:
+
+1. JIRA Cloud → Settings → System → Webhooks → Create webhook.
+2. URL: `https://<your-host>/webhooks/jira`
+3. Events: `Issue updated` (and optionally `Issue transitioned`).
+4. JQL: `project = MAINT` (whichever project you set in `JIRA_PROJECT_KEY`).
+5. JIRA's UI does not expose custom request headers directly; use a JIRA
+   automation rule instead — "Send web request" with header
+   `X-JIRA-Webhook-Secret: <value of JIRA_WEBHOOK_SECRET>` and a JSON body of
+   `{"issue": {"key": "{{issue.key}}", "fields": {"status": {"name": "{{issue.status.name}}"}}}}`.
+
+### Status mapping
+
+JIRA status name → local ticket status:
+
+- `Open` → `open`
+- `In Progress` → `in_progress`
+- `Done` → `resolved`
+- `Closed` → `closed`
+
+Anything else is acknowledged with `200` but ignored (so JIRA doesn't retry).
+
+### Endpoint behaviour
+
+`POST /webhooks/jira`:
+
+- 401 if `X-JIRA-Webhook-Secret` header is missing or doesn't match `JIRA_WEBHOOK_SECRET`.
+- 404 if the `issue.key` doesn't match any ticket's `jira_key`.
+- 200 on success or on an unmapped status.
+- CSRF-exempt (declared in `services/security.CSRF_EXEMPT_ENDPOINTS`); the
+  shared secret is the only authentication.
+
 ## What this document does not cover
 
 - **Production hostname / TLS termination / reverse proxy config:** not in the codebase. Document separately for your deployment.
