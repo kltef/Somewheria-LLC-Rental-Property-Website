@@ -30,6 +30,7 @@ Complete reference for every HTTP endpoint exposed by the app. Generated from th
 | GET | `/report-issue-complete` | public | Confirmation page after submitting an issue. |
 | GET | `/register` | public | Account-request form (renter access request). |
 | POST | `/register` | public | Submit a registration request. Form fields: `name` (≤120 char), `email` (≤254 char, must contain `@`), `reason` (≤2000 char). Duplicate emails do not re-notify (SMTP abuse protection). Rate-limited 3 / 10 min per IP. |
+| POST | `/lead-captures` | public | Submit a "notify me when a new property is listed" request from `/for-rent`. Form field: `email` (≤254 char, must contain `@`). Duplicate emails are de-duplicated server-side. Rate-limited 3 / 10 min per IP. Response: `200 {"success": true}` or `400 {"success": false, "error": "..."}`. |
 
 ### `POST /property/<uuid>/schedule` — request body
 
@@ -95,6 +96,8 @@ On success the session is cleared (defense against session fixation) and re-popu
 | POST | `/toggle-sale/<id>` | admin+ | Toggle the for-sale flag on listing `id`. Redirects to `/manage-listings`. |
 | GET | `/admin/registrations` | admin+ | List of pending registration requests. |
 | POST | `/admin/registrations` | admin+ | Approve or reject a request. Form: `action` (`approve` \| `reject`), `email`. Approve grants the `renter` role and emails the requester; reject removes the entry and emails a polite rejection. |
+| GET | `/admin/lead-captures` | admin+ | Pending "notify me" lead-capture submissions from `/for-rent`. |
+| POST | `/admin/lead-captures` | admin+ | Approve or reject a lead capture. Form: `action` (`approve` \| `reject`), `email`. Approve removes the entry and emails the requester a thank-you (no role granted). Reject silently removes the entry. |
 | GET | `/admin/users` | admin+ | User-management page. |
 | POST | `/admin/users` | admin+ | Add, update, or delete a user. Form: `email`, `role` (`renter` \| `admin` \| `high_admin`), `action` (`delete` or omitted). Constraint: cannot modify your own account; cannot assign or modify a role at or above your own. Delete writes a `"revoked"` tombstone (see [RUNBOOK.md § Roles and access](RUNBOOK.md#roles-and-access)). |
 | GET | `/admin/contracts` | admin+ | List all renter contracts. |
@@ -169,11 +172,14 @@ Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: geolocation=(), microphone=(), camera=()
 Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'
                          https://cdn.tailwindcss.com https://accounts.google.com
-                         https://apis.google.com; style-src 'self' 'unsafe-inline'
-                         https://fonts.googleapis.com https://cdn.tailwindcss.com;
+                         https://apis.google.com https://unpkg.com;
+                         style-src 'self' 'unsafe-inline'
+                         https://fonts.googleapis.com https://cdn.tailwindcss.com
+                         https://unpkg.com;
                          font-src 'self' https://fonts.gstatic.com data:;
-                         img-src 'self' data: https:;
-                         connect-src 'self' https://accounts.google.com;
+                         img-src 'self' data: https: https://*.tile.openstreetmap.org;
+                         connect-src 'self' https://accounts.google.com
+                         https://nominatim.openstreetmap.org;
                          frame-src https://accounts.google.com;
                          frame-ancestors 'none'; base-uri 'self';
                          form-action 'self' https://accounts.google.com

@@ -81,6 +81,7 @@ class FileStorageServiceTestCase(unittest.TestCase):
             user_roles_file=Path("roles.json"),
             renter_profile_file=Path("profiles.json"),
             contracts_file=Path("contracts.json"),
+            lead_capture_file=Path("lead_captures.json"),
         )
         self.service = FileStorageService(self.config)
 
@@ -149,6 +150,41 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
         save_json_mock.assert_called_once_with(
             self.config.registration_file,
+            [{"email": "keep@example.com"}],
+        )
+
+    def test_add_pending_lead_capture_appends_and_saves(self):
+        with patch.object(
+            self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.add_pending_lead_capture(
+                {"email": "new@example.com", "submitted_at": "2026-01-01"}
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [
+                {"email": "keep@example.com"},
+                {"email": "new@example.com", "submitted_at": "2026-01-01"},
+            ],
+        )
+
+    def test_add_pending_lead_capture_dedupes_existing_email(self):
+        # Repeated submissions with the same email should not bloat the file.
+        with patch.object(
+            self.service, "get_pending_lead_captures", return_value=[{"email": "dup@example.com"}]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.add_pending_lead_capture({"email": "dup@example.com"})
+        save_json_mock.assert_not_called()
+
+    def test_remove_pending_lead_capture_filters_matching_email(self):
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[{"email": "keep@example.com"}, {"email": "drop@example.com"}],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_lead_capture("DROP@example.com")
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
             [{"email": "keep@example.com"}],
         )
 

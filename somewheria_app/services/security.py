@@ -90,11 +90,11 @@ _SECURITY_HEADERS = {
 # elsewhere. img-src includes data: for base64 thumbnails used on the site.
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://accounts.google.com https://apis.google.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.tailwindcss.com; "
+    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://accounts.google.com https://apis.google.com https://unpkg.com; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.tailwindcss.com https://unpkg.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
-    "img-src 'self' data: https:; "
-    "connect-src 'self' https://accounts.google.com https://my.matterport.com https://kuula.co; "
+    "img-src 'self' data: https: https://*.tile.openstreetmap.org; "
+    "connect-src 'self' https://accounts.google.com https://my.matterport.com https://kuula.co https://nominatim.openstreetmap.org; "
     "frame-src https://accounts.google.com https://my.matterport.com https://kuula.co; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "

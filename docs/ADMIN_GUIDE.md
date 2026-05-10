@@ -80,6 +80,23 @@ Visitors who want renter access submit the registration form at `/register`. The
 
 There is no "request more info" action — reject and ask the requester to re-submit with more detail if needed.
 
+## Lead captures ("notify me when a new property is listed")
+
+Visitors on `/for-rent` can drop their email into the **Notify me when a new property is listed** form at the bottom of the page. Submissions appear as pending lead captures that you approve or reject.
+
+### Approve a lead capture
+
+1. Go to **Pending Lead Captures** (`/admin/lead-captures`).
+2. Find the entry — it shows the email address and submission timestamp.
+3. Click **Approve**. The entry is removed from the pending list and the requester is emailed a thank-you. **No role is granted** — this is purely a marketing list, not an account-access workflow.
+
+### Reject a lead capture
+
+1. Same page, find the entry.
+2. Click **Reject**. The entry is silently removed. No email is sent to the requester.
+
+Use this when an entry looks like spam or an obvious typo. Treat the lead-capture list as transient: once you've actioned someone, they're gone from the page.
+
 ## User management (high admin only)
 
 `/admin/users` shows everyone with a saved role. From this page you can add a user, change a user's role, or remove a user.

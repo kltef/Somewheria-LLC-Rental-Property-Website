@@ -174,6 +174,25 @@ def report_issue():
     )
 
 
+@rate_limit(limit=3, window_seconds=600)
+def submit_lead_capture():
+    services = get_services()
+    email = (request.form.get("email") or "").strip().lower()[:254]
+    if not email or "@" not in email:
+        return jsonify(success=False, error="A valid email is required."), 400
+    services.storage.add_pending_lead_capture(
+        {
+            "email": email,
+            "submitted_at": datetime.datetime.now().isoformat(),
+        }
+    )
+    services.notifications.send_email(
+        "New Lead Capture",
+        f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
+    )
+    return jsonify(success=True)
+
+
 def register_public_routes(app) -> None:
     app.add_url_rule("/", endpoint="home", view_func=home)
     app.add_url_rule("/manage-listings", endpoint="manage_listings", view_func=manage_listings)
@@ -193,3 +212,9 @@ def register_public_routes(app) -> None:
     app.add_url_rule("/logs", endpoint="view_logs", view_func=view_logs)
     app.add_url_rule("/report-issue", endpoint="report_issue_form", view_func=report_issue_form, methods=["GET"])
     app.add_url_rule("/report-issue", endpoint="report_issue", view_func=report_issue, methods=["POST"])
+    app.add_url_rule(
+        "/lead-captures",
+        endpoint="submit_lead_capture",
+        view_func=submit_lead_capture,
+        methods=["POST"],
+    )

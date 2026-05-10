@@ -4,7 +4,7 @@
   <div class="max-w-[960px] w-full relative">
     <div class="bg-white dark:bg-neutral-900 rounded-xl mb-5 relative">
       <!-- Carousel -->
-      <div id="carouselFrame" class="relative flex justify-center items-center" style="height: 360px; overflow:hidden; touch-action: pan-y;">
+      <div id="carouselFrame" class="relative flex justify-center items-center cursor-zoom-in" style="height: 360px; overflow:hidden; touch-action: pan-y;">
         {% set image_count = property.photos | length %}
         <img 
           id="carouselImg" 
@@ -91,6 +91,14 @@
       <button id="openCalModal" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 font-bold shadow">
         Request Appointment
       </button>
+    </div>
+    <!-- Lightbox overlay (§3.2) -->
+    <div id="lightbox" class="fixed inset-0 bg-black/90 z-[100] hidden items-center justify-center" style="touch-action: pan-y;">
+      <button id="lightboxClose" aria-label="Close" class="absolute top-3 right-4 text-white text-3xl font-bold leading-none px-3 py-1 rounded hover:bg-white/10">&times;</button>
+      <button id="lightboxPrev" aria-label="Previous image" class="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 text-white text-4xl font-bold px-3 py-2 rounded hover:bg-white/10">&#8249;</button>
+      <button id="lightboxNext" aria-label="Next image" class="absolute right-2 sm:right-6 top-1/2 -translate-y-1/2 text-white text-4xl font-bold px-3 py-2 rounded hover:bg-white/10">&#8250;</button>
+      <img id="lightboxImg" src="" alt="Property image" class="max-h-[90vh] max-w-[92vw] object-contain rounded shadow-2xl select-none" draggable="false"/>
+      <div id="lightboxCounter" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-black/55 text-white text-xs font-semibold tracking-wide">1 / 1</div>
     </div>
     <!-- Calendar Modal -->
     <div id="calModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 hidden">
@@ -316,6 +324,86 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Initialize carousel
   updateCarousel();
+
+  // --- §3.2 Lightbox ---
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = document.getElementById('lightboxImg');
+  const lightboxClose = document.getElementById('lightboxClose');
+  const lightboxPrev = document.getElementById('lightboxPrev');
+  const lightboxNext = document.getElementById('lightboxNext');
+  const lightboxCounter = document.getElementById('lightboxCounter');
+  let lightboxOpen = false;
+
+  function lightboxRender() {
+    if (photos.length === 0) return;
+    const idx = ((currentIdx % photos.length) + photos.length) % photos.length;
+    currentIdx = idx;
+    lightboxImg.src = photos[idx];
+    if (lightboxCounter) lightboxCounter.textContent = `${idx + 1} / ${photos.length}`;
+    if (lightboxPrev) lightboxPrev.style.display = photos.length > 1 ? 'block' : 'none';
+    if (lightboxNext) lightboxNext.style.display = photos.length > 1 ? 'block' : 'none';
+    // Keep main carousel in sync.
+    updateCarousel();
+  }
+  function openLightbox() {
+    if (photos.length === 0 || !lightbox) return;
+    lightboxOpen = true;
+    lightbox.classList.remove('hidden');
+    lightbox.classList.add('flex');
+    document.body.style.overflow = 'hidden';
+    lightboxRender();
+  }
+  function closeLightbox() {
+    if (!lightbox) return;
+    lightboxOpen = false;
+    lightbox.classList.add('hidden');
+    lightbox.classList.remove('flex');
+    document.body.style.overflow = 'auto';
+  }
+  function lightboxStep(delta) {
+    if (photos.length === 0) return;
+    currentIdx = ((currentIdx + delta) % photos.length + photos.length) % photos.length;
+    lightboxRender();
+  }
+
+  if (carouselFrame) {
+    carouselFrame.addEventListener('click', (e) => {
+      // Don't trigger when clicking the prev/next/dot controls.
+      if (e.target.closest('button') || e.target.classList.contains('carousel-dot')) return;
+      openLightbox();
+    });
+  }
+  if (lightboxClose) lightboxClose.addEventListener('click', closeLightbox);
+  if (lightboxPrev) lightboxPrev.addEventListener('click', (e) => { e.stopPropagation(); lightboxStep(-1); });
+  if (lightboxNext) lightboxNext.addEventListener('click', (e) => { e.stopPropagation(); lightboxStep(1); });
+  if (lightbox) lightbox.addEventListener('click', (e) => {
+    if (e.target === lightbox) closeLightbox();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!lightboxOpen) return;
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowLeft') lightboxStep(-1);
+    else if (e.key === 'ArrowRight') lightboxStep(1);
+  });
+
+  // Mobile swipe inside the lightbox.
+  if (lightbox) {
+    let lbStartX = null, lbStartY = null;
+    lightbox.addEventListener('touchstart', (e) => {
+      const t = e.touches[0]; if (!t) return;
+      lbStartX = t.clientX; lbStartY = t.clientY;
+    }, { passive: true });
+    lightbox.addEventListener('touchend', (e) => {
+      if (lbStartX === null) return;
+      const t = (e.changedTouches && e.changedTouches[0]); if (!t) return;
+      const dx = t.clientX - lbStartX;
+      const dy = t.clientY - lbStartY;
+      lbStartX = lbStartY = null;
+      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+        lightboxStep(dx < 0 ? 1 : -1);
+      }
+    }, { passive: true });
+  }
   
   // Modal functionality
   const modal = document.getElementById('calModal');
