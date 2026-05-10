@@ -20,6 +20,19 @@ from ..services.security import rate_limit
 ALLOWED_ROLES = ("renter", "admin", "high_admin")
 
 
+def _zillow_status_detail(zillow) -> str:
+    snapshot = zillow.status_snapshot()
+    if not snapshot["configured"]:
+        return (
+            "Credentials missing (ZILLOW_API_BASE_URL / ZILLOW_API_TOKEN / "
+            "ZILLOW_FEED_KEY); publishes are skipped."
+        )
+    return (
+        f"{snapshot['success_count']} successful syncs, "
+        f"{snapshot['failure_count']} failures since last restart"
+    )
+
+
 def _current_role() -> str:
     return (get_current_user() or {}).get("role", "guest")
 
@@ -198,6 +211,11 @@ def admin_status():
             "label": "Email Notifications",
             "detail": "Ready" if services.notifications._email_password() else "EMAIL_APP_PASSWORD is not configured",
             "ok": bool(services.notifications._email_password()),
+        },
+        {
+            "label": "Zillow Sync",
+            "detail": _zillow_status_detail(services.zillow),
+            "ok": services.zillow.credentials_configured(),
         },
         {
             "label": "Background Refresh",

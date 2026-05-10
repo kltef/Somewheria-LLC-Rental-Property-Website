@@ -122,6 +122,57 @@ These are enforced by `_RateLimiter` in `services/security.py`, in-memory per pr
 
 `X-Forwarded-For` is trusted for the client IP if present. If you front with a proxy that doesn't sanitize this header, attackers can spoof IPs to evade the per-IP limits. Configure your proxy to overwrite `X-Forwarded-For`.
 
+## Zillow integration — pending credentials
+
+The codebase ships a publish-only Zillow sync **scaffold** at
+`somewheria_app/services/zillow.py`. It is wired into every `PropertyService`
+mutation (create / update / delete / for-sale toggle) and into the
+`/admin/status` page, but it does **not** make any real HTTP calls yet.
+
+State today:
+
+- With the three Zillow env vars unset, every publish attempt logs a warning
+  via `get_console_logger("zillow")` and returns. Admin operations succeed
+  unchanged. This mirrors the `EMAIL_APP_PASSWORD` pattern in
+  `NotificationService`.
+- With the env vars set, the publisher logs `would publish to Zillow: <action>
+  <property_id>` and increments the success counter. Still no network I/O.
+- The retry queue is real: 3 attempts, exponential backoff (1s, 4s, 16s), in a
+  daemon thread. On final failure it calls
+  `notifications.log_and_notify_error("Zillow Sync Failure", ...)` so the
+  admin gets an email.
+- `/admin/status` shows a "Zillow Sync" row with credentials status and a
+  process-local count of recent successes / failures.
+
+To plug in a real client, replace `ZillowPublisher._perform_publish` with the
+actual HTTP request. Everything around it (queueing, backoff, alerting,
+status counters, PropertyService wiring) is already in place.
+
+**Env vars to set in production (when credentials land):**
+
+- `ZILLOW_API_BASE_URL` — base URL of the chosen Zillow endpoint.
+- `ZILLOW_API_TOKEN` — bearer / API token for authenticated requests.
+- `ZILLOW_FEED_KEY` — feed identifier (used for the RSS-style listings feed
+  path, if that's the path we end up on).
+
+**Open decisions blocking this work:**
+
+1. Which Zillow integration path is available to us — the **Rental Manager
+   API** (per-listing REST calls, partner approval required) or the
+   **RSS-style listings feed** (we host a feed; Zillow polls it). The two
+   paths have different data models, different auth, and different SLAs. The
+   stub doesn't commit to either yet.
+2. Whether deletes / for-sale toggles are supported on the chosen path, or
+   whether we need to fall back to "republish without the listing" semantics.
+3. Whether photos must be hosted on a public URL Zillow can fetch, or whether
+   the API accepts inline base64 (the site currently stores base64 in the
+   property cache).
+4. Source-of-truth contract: site is canonical. If Zillow ever pushes back
+   data (lead capture, status updates), confirm we will treat that as
+   read-only inbound and not let it overwrite our `properties_cache`.
+
+Until items 1-4 are resolved, do not enable real HTTP from `_perform_publish`.
+
 ## What this document does not cover
 
 - **Production hostname / TLS termination / reverse proxy config:** not in the codebase. Document separately for your deployment.
