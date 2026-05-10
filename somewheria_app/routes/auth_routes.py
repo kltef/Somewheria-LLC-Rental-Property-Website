@@ -108,17 +108,17 @@ def google_callback():
             config.google_client_id,
         )
         user_email = id_info["email"].lower()
-        if not user_email.endswith("@ekbergproperties.com"):
+        if not user_email.endswith(("@ekbergproperties.com", "@somewheria.com")):
             return (
                 render_template(
                     "login.html",
                     title="Login",
-                    error="Only ekbergproperties.com accounts are allowed.",
+                    error="Only ekbergproperties.com or somewheria.com accounts are allowed.",
                 ),
                 401,
             )
         # Default-deny: if the whitelist is configured, user must be on it.
-        # If it is not configured, the ekbergproperties.com domain gate above
+        # If it is not configured, the ekbergproperties.com / somewheria.com domain gate above
         # is the sole gate — admin/high_admin env lists still grant access.
         role = services.auth.get_user_role(user_email)
         if config.authorized_users and user_email not in config.authorized_users and role == "guest":
