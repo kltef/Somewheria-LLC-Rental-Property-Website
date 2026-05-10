@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div class="px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-10 md:py-12 bg-white dark:bg-neutral-950 rounded shadow">
     <h2 class="text-2xl font-bold mb-6">Available Properties</h2>
 
@@ -63,6 +65,10 @@
     {% endfor %}
     </div>
     <div id="filterEmpty" class="hidden text-center text-gray-500 py-10">No properties match your filters.</div>
+
+    <h3 class="text-xl font-bold mt-10 mb-3 text-[#111518] dark:text-white">Map view</h3>
+    <div id="propertyMap" style="height: 360px;" class="rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900"></div>
+    <div id="mapStatus" class="mt-2 text-xs text-gray-500" aria-live="polite"></div>
     {% endif %}
 
     <!-- Lead capture: Notify me -->
@@ -183,6 +189,101 @@
         feedback.className = 'mt-3 text-sm text-red-500';
       });
   });
+})();
+
+// --- §3.4 Map view (Leaflet + Nominatim, cached in localStorage) ---
+(function() {
+  const mapEl = document.getElementById('propertyMap');
+  if (!mapEl || typeof L === 'undefined') return;
+  const statusEl = document.getElementById('mapStatus');
+  // eslint-disable-next-line
+  const ids = {{ properties|map(attribute='id')|list|tojson }};
+  // eslint-disable-next-line
+  const names = {{ properties|map(attribute='name')|list|tojson }};
+  // eslint-disable-next-line
+  const addresses = {{ properties|map(attribute='address')|list|tojson }};
+  const mapProperties = ids.map((id, i) => ({ id, name: names[i], address: addresses[i] }));
+  const map = L.map(mapEl).setView([39.5, -98.35], 4); // continental US default
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(map);
+
+  const CACHE_KEY = 'geocode_cache_v1';
+  function loadCache() {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch { return {}; }
+  }
+  function saveCache(c) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch {}
+  }
+  const cache = loadCache();
+  const bounds = [];
+  let pending = mapProperties.length;
+  let success = 0;
+
+  function addPin(prop, lat, lon) {
+    const marker = L.marker([lat, lon]).addTo(map);
+    const safeName = String(prop.name || 'Property').replace(/[<>&"']/g, c => ({
+      '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":"&#39;"
+    })[c]);
+    const url = '/property/' + encodeURIComponent(prop.id);
+    marker.bindPopup('<a href="' + url + '">' + safeName + '</a>');
+    bounds.push([lat, lon]);
+    success++;
+  }
+  function tick() {
+    pending--;
+    if (statusEl) statusEl.textContent = `Mapped ${success} of ${mapProperties.length} properties.`;
+    if (pending === 0 && bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+    }
+  }
+
+  // Sequential geocoding — Nominatim asks for max 1 req/sec.
+  let i = 0;
+  function next() {
+    if (i >= mapProperties.length) return;
+    const prop = mapProperties[i++];
+    const addr = (prop.address || '').trim();
+    if (!addr || addr === 'N/A') { tick(); next(); return; }
+    if (cache[addr] !== undefined) {
+      const c = cache[addr];
+      if (c && c.lat != null && c.lon != null) addPin(prop, c.lat, c.lon);
+      tick();
+      next();
+      return;
+    }
+    fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(addr))
+      .then(r => r.ok ? r.json() : [])
+      .then(results => {
+        if (Array.isArray(results) && results.length > 0) {
+          const lat = parseFloat(results[0].lat);
+          const lon = parseFloat(results[0].lon);
+          if (!isNaN(lat) && !isNaN(lon)) {
+            cache[addr] = { lat, lon };
+            saveCache(cache);
+            addPin(prop, lat, lon);
+          } else {
+            cache[addr] = null;
+            saveCache(cache);
+          }
+        } else {
+          cache[addr] = null;
+          saveCache(cache);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        tick();
+        // 1.1s pacing per Nominatim's usage policy.
+        setTimeout(next, 1100);
+      });
+  }
+  if (mapProperties.length === 0) {
+    if (statusEl) statusEl.textContent = 'No properties to map.';
+  } else {
+    next();
+  }
 })();
 
 // Property change detection logic

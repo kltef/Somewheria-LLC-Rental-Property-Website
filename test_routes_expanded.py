@@ -905,6 +905,13 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"filterBar", response.data)
         self.assertIn(b"leadCaptureForm", response.data)
+        self.assertIn(b"propertyMap", response.data)
+        # CSP should permit Leaflet from unpkg.com and tiles from
+        # *.tile.openstreetmap.org for the §3.4 map view.
+        csp = response.headers.get("Content-Security-Policy", "")
+        self.assertIn("https://unpkg.com", csp)
+        self.assertIn("tile.openstreetmap.org", csp)
+        self.assertIn("nominatim.openstreetmap.org", csp)
 
 
 if __name__ == "__main__":

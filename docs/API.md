@@ -170,11 +170,14 @@ Referrer-Policy: strict-origin-when-cross-origin
 Permissions-Policy: geolocation=(), microphone=(), camera=()
 Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'
                          https://cdn.tailwindcss.com https://accounts.google.com
-                         https://apis.google.com; style-src 'self' 'unsafe-inline'
-                         https://fonts.googleapis.com https://cdn.tailwindcss.com;
+                         https://apis.google.com https://unpkg.com;
+                         style-src 'self' 'unsafe-inline'
+                         https://fonts.googleapis.com https://cdn.tailwindcss.com
+                         https://unpkg.com;
                          font-src 'self' https://fonts.gstatic.com data:;
-                         img-src 'self' data: https:;
-                         connect-src 'self' https://accounts.google.com;
+                         img-src 'self' data: https: https://*.tile.openstreetmap.org;
+                         connect-src 'self' https://accounts.google.com
+                         https://nominatim.openstreetmap.org;
                          frame-src https://accounts.google.com;
                          frame-ancestors 'none'; base-uri 'self';
                          form-action 'self' https://accounts.google.com
