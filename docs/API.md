@@ -76,9 +76,11 @@ On success the session is cleared (defense against session fixation) and re-popu
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/manage-listings` | any | Listings management page. The page itself uses cached property data. Note: the route only requires sign-in; admin-only buttons inside the template are gated by role checks in the template/JS. |
-| GET | `/renter-dashboard` | renter+ | Renter's dashboard with their contracts and recent tickets. |
+| GET | `/renter-dashboard` | renter+ | Renter's dashboard. Shows the renter's full lease history (active / pending / ended) and their recent tickets. Old contracts are retro-fitted with a stable `id` on first view so they can be linked from this list. |
 | GET | `/renter/profile` | renter+ | View renter profile. |
-| POST | `/renter/profile` | renter+ | Update renter profile. Form: `name` (≤120 char), `contact` (≤200 char), `email_status_updates` (checkbox). |
+| POST | `/renter/profile` | renter+ | Update renter profile. Form: `name` (≤120 char), `contact` (≤200 char), `email_status_updates` (checkbox), `rcs_status_updates` (checkbox — placeholder, RCS delivery not wired). |
+| GET | `/contracts/<contract_id>` | renter+ | Detail page for a single contract. Renters may only view their own contracts (404 otherwise); admins may view any. |
+| GET | `/contracts/<contract_id>/download` | renter+ | Download the signed contract PDF. 404 if no PDF on file or the renter doesn't own the contract. Returns `application/pdf` with `Content-Disposition: attachment`. |
 | GET | `/for-rent-refresh.json` | public¹ | Force-refresh the property cache and return the JSON list. Rate-limited 6 / minute per IP for both GET and POST. |
 
 ¹ The route is registered without an auth decorator but the rate limit deters abuse. It triggers an upstream refresh on every call within the limit.
@@ -101,7 +103,7 @@ On success the session is cleared (defense against session fixation) and re-popu
 | GET | `/admin/users` | admin+ | User-management page. |
 | POST | `/admin/users` | admin+ | Add, update, or delete a user. Form: `email`, `role` (`renter` \| `admin` \| `high_admin`), `action` (`delete` or omitted). Constraint: cannot modify your own account; cannot assign or modify a role at or above your own. Delete writes a `"revoked"` tombstone (see [RUNBOOK.md § Roles and access](RUNBOOK.md#roles-and-access)). |
 | GET | `/admin/contracts` | admin+ | List all renter contracts. |
-| POST | `/admin/contracts` | admin+ | Add or delete a contract. Form (`action=add`): `renter_email`, `property_name`, `start_date`, `end_date`, `status` (default `Active`). Form (`action=delete`): `renter_email`, `contract_index` (integer). |
+| POST | `/admin/contracts` | admin+ | Add or delete a contract. Multipart/form-data on add. Form (`action=add`): `renter_email`, `property_name`, `start_date`, `end_date`, `status` (default `Active`), optional `contract_pdf` file (must start with `%PDF-`, ≤16 MB, `.pdf` extension). PDFs are saved at `static/uploads/contracts/<uuid>.pdf` via `FileStorageService`. Form (`action=delete`): `renter_email`, `contract_index` (integer). Delete also removes the on-disk PDF best-effort. |
 | GET | `/admin/contracts/export.csv` | admin+ | Streamed CSV of every contract. Columns: `renter_email`, `property_name`, `start_date`, `end_date`, `status`, `created_at`. `Content-Type: text/csv`, `Content-Disposition: attachment; filename="contracts-YYYY-MM-DD.csv"`. |
 
 ## High admin
@@ -119,7 +121,7 @@ On success the session is cleared (defense against session fixation) and re-popu
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/tickets/new` | public | Submit-ticket form. Pre-fills `property_id` from `?property_id=...`. |
-| POST | `/tickets/new` | public | Create a ticket. Form fields: `title`, `description`, `category` (one of `ALLOWED_CATEGORIES`), `priority` (one of `ALLOWED_PRIORITIES`), `submitter_name`, `contact`, `property_id` (optional), `email_updates` (checkbox). Returns 400 with the form on validation error. Rate-limited 5 / 10 min per IP. |
+| POST | `/tickets/new` | public | Create a ticket. Multipart/form-data. Form fields: `title`, `description`, `category` (one of `ALLOWED_CATEGORIES`), `priority` (one of `ALLOWED_PRIORITIES`), `submitter_name`, `contact`, `property_id` (optional), `email_updates` (checkbox), optional `photos` (up to 5 image files — same validation as listing photos: jpg/jpeg/png/gif/webp, ≤16 MB each, ≤24 MP, ≤6000px per side). Photos are stored under `static/uploads/tickets/<ticket_id>/`. A photo upload failure does not roll back the ticket. Returns 400 with the form on text-validation error. Rate-limited 5 / 10 min per IP. |
 | GET | `/tickets` | any | The signed-in user's own ticket list. |
 | GET | `/tickets/<ticket_id>` | any² | Ticket detail page. Renters see only their own; admin+ see any. |
 | POST | `/tickets/<ticket_id>/notes` | any² | Add a note to the ticket. Form: `note`. Empty notes are silently dropped. Rate-limited 20 / 5 min per IP. |

@@ -21,10 +21,12 @@ from ..services.auth import (
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.properties import UploadValidationError
 from ..services.tickets import (
     ALLOWED_CATEGORIES,
     ALLOWED_PRIORITIES,
     ALLOWED_STATUSES,
+    MAX_TICKET_PHOTOS,
     OPEN_STATUSES,
 )
 
@@ -108,6 +110,25 @@ def ticket_new_submit():
             error=str(exc),
             form=payload,
         ), 400
+
+    # Optional photo attachments (max MAX_TICKET_PHOTOS). A failed photo
+    # upload should NOT roll back the ticket — the user can still report the
+    # problem in text. Surface the failure as a visible note on the next page.
+    photo_errors: list[str] = []
+    files = request.files.getlist("photos") if request.files else []
+    for uploaded in files[:MAX_TICKET_PHOTOS]:
+        if not uploaded or not uploaded.filename:
+            continue
+        try:
+            services.tickets.add_photo(ticket["id"], uploaded, submitter_email)
+        except UploadValidationError as exc:
+            photo_errors.append(str(exc))
+        except Exception as exc:
+            services.notifications.log_and_notify_error(
+                "Ticket Photo Error",
+                f"Photo attach failed for ticket {ticket['id']}: {exc}",
+            )
+            photo_errors.append("One or more photos could not be saved.")
 
     if is_logged_in():
         return redirect(url_for("ticket_detail", ticket_id=ticket["id"]))

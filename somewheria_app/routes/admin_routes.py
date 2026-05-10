@@ -1,8 +1,10 @@
 import csv
 import datetime
 import io
+import secrets
+import uuid as uuid_lib
 
-from flask import Response, current_app, jsonify, redirect, render_template, request, url_for
+from flask import Response, abort, current_app, jsonify, redirect, render_template, request, send_file, url_for
 
 from ..services.auth import (
     admin_required,
@@ -18,6 +20,11 @@ from ..services.security import rate_limit
 
 
 ALLOWED_ROLES = ("renter", "admin", "high_admin")
+
+# Contract PDF upload constraints. PDFs are validated by sniffing the magic
+# bytes (%PDF-) and capping size at 16 MB — same ceiling as image uploads.
+MAX_CONTRACT_PDF_BYTES = 16 * 1024 * 1024
+PDF_MAGIC = b"%PDF-"
 
 
 def _zillow_status_detail(zillow) -> str:
@@ -142,12 +149,72 @@ def image_edit_notify():
         return jsonify(message="Failed to send notification."), 500
 
 
+def _classify_contract_status(contract: dict) -> str:
+    """Normalize a contract's status into one of: active / pending / ended.
+
+    Falls back to the explicit ``status`` field, then infers from dates if the
+    field is unset or unrecognized. The classification is used purely for the
+    dashboard summary — admins can still set any free-form status string.
+    """
+    raw = (contract.get("status") or "").strip().lower()
+    if raw in {"active", "current"}:
+        return "active"
+    if raw in {"pending", "upcoming", "draft"}:
+        return "pending"
+    if raw in {"ended", "expired", "terminated", "closed"}:
+        return "ended"
+    # Infer from end_date if status is unrecognized.
+    end_date = (contract.get("end_date") or "").strip()
+    if end_date:
+        try:
+            end = datetime.date.fromisoformat(end_date[:10])
+            if end < datetime.date.today():
+                return "ended"
+        except ValueError:
+            pass
+    start_date = (contract.get("start_date") or "").strip()
+    if start_date:
+        try:
+            start = datetime.date.fromisoformat(start_date[:10])
+            if start > datetime.date.today():
+                return "pending"
+        except ValueError:
+            pass
+    return "active"
+
+
+def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str) -> list[dict]:
+    """Old contracts written before PDFs were a thing have no ``id``. Stamp
+    one in (and persist the back-fill) so renter links can target them."""
+    if not contracts_for_email:
+        return contracts_for_email
+    needs_save = False
+    for contract in contracts_for_email:
+        if not contract.get("id"):
+            contract["id"] = uuid_lib.uuid4().hex
+            needs_save = True
+        contract.setdefault("pdf_filename", "")
+        # Annotate a normalized status for templates without mutating the
+        # canonical free-form ``status`` field admins set in the form.
+        contract["status_class"] = _classify_contract_status(contract)
+    if needs_save:
+        try:
+            all_contracts = services.storage.get_renter_contracts()
+            all_contracts[email] = contracts_for_email
+            services.storage.save_renter_contracts(all_contracts)
+        except Exception:
+            pass
+    return contracts_for_email
+
+
 @renter_required
 def renter_dashboard():
     services = get_services()
     user = get_current_user()
     email = user["email"].lower()
-    contracts = services.storage.get_renter_contracts().get(email, [])
+    contracts = _backfill_contract_ids(
+        services, services.storage.get_renter_contracts().get(email, []), email
+    )
     my_tickets = services.tickets.list_tickets(submitter=email)
     open_ticket_count = sum(
         1 for t in my_tickets if t.get("status") in {"open", "in_progress", "awaiting_parts"}
@@ -532,19 +599,45 @@ def renter_profile():
     profiles = services.storage.get_renter_profiles()
     profile = profiles.get(
         email,
-        {"name": user.get("name", ""), "contact": "", "email_status_updates": True},
+        {
+            "name": user.get("name", ""),
+            "contact": "",
+            "email_status_updates": True,
+            "rcs_status_updates": True,
+        },
     )
-    # Backfill the field for profiles created before the preference existed.
+    # Backfill fields for profiles created before the preference existed.
     profile.setdefault("email_status_updates", True)
+    profile.setdefault("rcs_status_updates", True)
     success = None
     if request.method == "POST":
         profile["name"] = request.form.get("name", "").strip()[:120]
         profile["contact"] = request.form.get("contact", "").strip()[:200]
         profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
+        profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
         profiles[email] = profile
         services.storage.save_renter_profiles(profiles)
         success = "Profile updated."
     return render_template("renter_profile.html", profile=profile, user=user, success=success, title="Edit Profile")
+
+
+def _validate_contract_pdf(uploaded_file) -> bytes | None:
+    """Read the upload, validate as a PDF (magic bytes + size). Returns bytes
+    on success or None when no file was supplied. Raises ValueError on bad
+    content."""
+    if not uploaded_file or not getattr(uploaded_file, "filename", ""):
+        return None
+    raw = uploaded_file.stream.read(MAX_CONTRACT_PDF_BYTES + 1)
+    if not raw:
+        return None
+    if len(raw) > MAX_CONTRACT_PDF_BYTES:
+        raise ValueError("PDF exceeds maximum allowed size (16 MB).")
+    if not raw.startswith(PDF_MAGIC):
+        raise ValueError("Uploaded file is not a valid PDF.")
+    # Be conservative: also ensure the declared filename ends with .pdf.
+    if not uploaded_file.filename.lower().endswith(".pdf"):
+        raise ValueError("Uploaded file must have a .pdf extension.")
+    return raw
 
 
 @admin_required
@@ -556,26 +649,46 @@ def admin_contracts():
     if request.method == "POST":
         action = request.form.get("action")
         if action == "add":
-            renter_email = request.form.get("renter_email", "").strip().lower()
-            property_name = request.form.get("property_name", "").strip()
-            start_date = request.form.get("start_date", "").strip()
-            end_date = request.form.get("end_date", "").strip()
-            status = request.form.get("status", "Active").strip()
+            renter_email = request.form.get("renter_email", "").strip().lower()[:254]
+            property_name = request.form.get("property_name", "").strip()[:200]
+            start_date = request.form.get("start_date", "").strip()[:32]
+            end_date = request.form.get("end_date", "").strip()[:32]
+            status = request.form.get("status", "Active").strip()[:32]
             if not all([renter_email, property_name, start_date, end_date]):
                 error = "All fields are required."
             else:
-                contracts_data.setdefault(renter_email, []).append(
-                    {
-                        "property_name": property_name,
-                        "start_date": start_date,
-                        "end_date": end_date,
-                        "status": status,
-                        "download_url": "#",
-                        "created_at": datetime.datetime.now().isoformat(),
-                    }
-                )
-                services.storage.save_renter_contracts(contracts_data)
-                success = f"Contract added for {renter_email}."
+                contract_id = uuid_lib.uuid4().hex
+                pdf_filename = ""
+                try:
+                    pdf_bytes = _validate_contract_pdf(request.files.get("contract_pdf"))
+                except ValueError as exc:
+                    error = str(exc)
+                    pdf_bytes = None
+                if error is None:
+                    if pdf_bytes:
+                        pdf_filename = f"{contract_id}.pdf"
+                        target = services.config.contract_upload_dir / pdf_filename
+                        try:
+                            ok = services.storage.save_binary_file(target, pdf_bytes)
+                        except Exception:
+                            ok = False
+                        if not ok:
+                            pdf_filename = ""
+                            error = "Failed to save PDF; contract not added."
+                if error is None:
+                    contracts_data.setdefault(renter_email, []).append(
+                        {
+                            "id": contract_id,
+                            "property_name": property_name,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                            "status": status,
+                            "pdf_filename": pdf_filename,
+                            "created_at": datetime.datetime.now().isoformat(),
+                        }
+                    )
+                    services.storage.save_renter_contracts(contracts_data)
+                    success = f"Contract added for {renter_email}."
         elif action == "delete":
             renter_email = request.form.get("renter_email", "").strip().lower()
             contract_index = request.form.get("contract_index")
@@ -583,6 +696,16 @@ def admin_contracts():
                 try:
                     contract_idx = int(contract_index)
                     if renter_email in contracts_data and 0 <= contract_idx < len(contracts_data[renter_email]):
+                        removed = contracts_data[renter_email][contract_idx]
+                        # Best-effort delete of the on-disk PDF.
+                        pdf_filename = removed.get("pdf_filename") or ""
+                        if pdf_filename:
+                            try:
+                                services.storage.delete_file(
+                                    services.config.contract_upload_dir / pdf_filename
+                                )
+                            except Exception:
+                                pass
                         del contracts_data[renter_email][contract_idx]
                         if not contracts_data[renter_email]:
                             del contracts_data[renter_email]
@@ -601,6 +724,99 @@ def admin_contracts():
         success=success,
         title="Contract Management",
     )
+
+
+def _find_contract_for_email(services, email: str, contract_id: str):
+    """Return (contract_dict, list_index) for a given (email, contract_id),
+    or (None, None) if not found."""
+    contracts = services.storage.get_renter_contracts().get(email, [])
+    for idx, contract in enumerate(contracts):
+        if contract.get("id") == contract_id:
+            return contract, idx
+    return None, None
+
+
+@renter_required
+def contract_detail(contract_id: str):
+    services = get_services()
+    user = get_current_user()
+    email = user["email"].lower()
+    is_admin = user.get("role") in ("admin", "high_admin")
+    contract = None
+    owner_email = email
+    if is_admin:
+        # Admins can view any contract — search across renters.
+        for renter_email, items in services.storage.get_renter_contracts().items():
+            for item in items:
+                if item.get("id") == contract_id:
+                    contract = item
+                    owner_email = renter_email
+                    break
+            if contract:
+                break
+    else:
+        # Make sure the renter's own contracts have IDs (backfill for old data).
+        _backfill_contract_ids(
+            services, services.storage.get_renter_contracts().get(email, []), email
+        )
+        contract, _ = _find_contract_for_email(services, email, contract_id)
+    if not contract:
+        return render_template("404.html", title="Contract Not Found"), 404
+    contract.setdefault("status_class", _classify_contract_status(contract))
+    return render_template(
+        "contract_detail.html",
+        contract=contract,
+        owner_email=owner_email,
+        is_admin=is_admin,
+        title=f"Contract: {contract.get('property_name', '')}",
+        user=user,
+    )
+
+
+@renter_required
+def contract_download(contract_id: str):
+    services = get_services()
+    user = get_current_user()
+    email = user["email"].lower()
+    is_admin = user.get("role") in ("admin", "high_admin")
+    contract = None
+    if is_admin:
+        for items in services.storage.get_renter_contracts().values():
+            for item in items:
+                if item.get("id") == contract_id:
+                    contract = item
+                    break
+            if contract:
+                break
+    else:
+        contract, _ = _find_contract_for_email(services, email, contract_id)
+    if not contract:
+        abort(404)
+    pdf_filename = contract.get("pdf_filename") or ""
+    if not pdf_filename:
+        abort(404)
+    # Defense-in-depth: only the bare filename component is honoured. The
+    # filename was generated server-side as ``<uuid>.pdf`` so it should never
+    # contain separators, but be paranoid in case of hand-edited storage.
+    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
+        abort(404)
+    pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
+    upload_root = services.config.contract_upload_dir.resolve()
+    try:
+        pdf_path.relative_to(upload_root)
+    except ValueError:
+        abort(404)
+    if not pdf_path.exists():
+        abort(404)
+    try:
+        return send_file(
+            str(pdf_path),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"contract-{contract_id[:8]}.pdf",
+        )
+    except Exception:
+        abort(404)
 
 
 @admin_required
@@ -799,6 +1015,18 @@ def register_admin_routes(app) -> None:
         "/admin/tickets/export.csv",
         endpoint="admin_tickets_export_csv",
         view_func=admin_tickets_export_csv,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/contracts/<contract_id>",
+        endpoint="contract_detail",
+        view_func=contract_detail,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/contracts/<contract_id>/download",
+        endpoint="contract_download",
+        view_func=contract_download,
         methods=["GET"],
     )
     app.add_url_rule(

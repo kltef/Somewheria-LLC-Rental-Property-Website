@@ -75,17 +75,29 @@
     {% endif %}
   </div>
 
-  {# --- Contracts --- #}
+  {# --- Contracts (full lease history) --- #}
   <div class="bg-white dark:bg-neutral-950 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6">
-    <h2 class="text-lg font-semibold mb-3 text-[#111518] dark:text-white">Your Rental Contracts</h2>
+    <h2 class="text-lg font-semibold mb-3 text-[#111518] dark:text-white">Your Lease History</h2>
     {% if contracts and contracts|length > 0 %}
       <ul class="divide-y divide-gray-200 dark:divide-neutral-800">
         {% for contract in contracts %}
-          <li class="py-3">
-            <div class="font-medium text-[#111518] dark:text-white">Property: {{ contract.property_name }}</div>
-            <div class="text-sm text-gray-600 dark:text-gray-300">Lease Dates: {{ contract.start_date }} – {{ contract.end_date }}</div>
-            <div class="text-sm text-gray-600 dark:text-gray-300">Status: {{ contract.status }}</div>
-            <a href="{{ contract.download_url }}" class="text-blue-600 dark:text-blue-400 underline text-sm">Download PDF</a>
+          {% set badge = 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100' %}
+          {% if contract.status_class == 'active' %}{% set badge = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' %}{% endif %}
+          {% if contract.status_class == 'pending' %}{% set badge = 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' %}{% endif %}
+          {% if contract.status_class == 'ended' %}{% set badge = 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300' %}{% endif %}
+          <li class="py-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              {% if contract.id %}
+                <a href="{{ url_for('contract_detail', contract_id=contract.id) }}"
+                   class="font-medium text-blue-600 dark:text-blue-400 hover:underline">{{ contract.property_name }}</a>
+              {% else %}
+                <span class="font-medium text-[#111518] dark:text-white">{{ contract.property_name }}</span>
+              {% endif %}
+              <div class="text-sm text-gray-600 dark:text-gray-300">
+                {{ contract.start_date }} &ndash; {{ contract.end_date }}
+              </div>
+            </div>
+            <span class="inline-block px-2 py-0.5 rounded text-xs font-medium {{ badge }}">{{ contract.status }}</span>
           </li>
         {% endfor %}
       </ul>

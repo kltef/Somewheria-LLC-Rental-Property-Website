@@ -11,12 +11,25 @@ from __future__ import annotations
 
 import datetime
 import os
+import secrets
 import threading
 import time
 import uuid
+from io import BytesIO
 from typing import Iterable
 
+from PIL import Image
+
 from .console import get_console_logger
+from .properties import (
+    ALLOWED_IMAGE_EXTENSIONS,
+    MAX_IMAGE_BYTES,
+    UploadValidationError,
+    _ensure_safe_image_dimensions,
+)
+
+
+MAX_TICKET_PHOTOS = 5
 
 
 ALLOWED_STATUSES: tuple[str, ...] = (
@@ -404,6 +417,101 @@ class TicketService:
                 pass
             return ticket
         return None
+
+    def add_photo(self, ticket_id: str, uploaded_file, actor_email: str) -> dict | None:
+        """Validate ``uploaded_file`` (same checks as listing-photo uploads:
+        size cap, allowed extension, decompression-bomb dimensions) and write
+        it under ``static/uploads/tickets/<ticket_id>/<random>.<ext>``.
+
+        Raises UploadValidationError on any validation failure (caller maps
+        to a user-facing message). Returns the updated ticket on success or
+        None when the ticket id doesn't exist.
+        """
+        if not uploaded_file or not getattr(uploaded_file, "filename", ""):
+            raise UploadValidationError("No file selected.")
+
+        original_name = uploaded_file.filename
+        if "." not in original_name:
+            raise UploadValidationError("Unsupported file name.")
+        ext = original_name.rsplit(".", 1)[1].lower()
+        if ext not in ALLOWED_IMAGE_EXTENSIONS:
+            raise UploadValidationError("Unsupported image type.")
+
+        raw = uploaded_file.stream.read(MAX_IMAGE_BYTES + 1)
+        if not raw:
+            raise UploadValidationError("Empty upload.")
+        if len(raw) > MAX_IMAGE_BYTES:
+            raise UploadValidationError("Image exceeds maximum allowed size.")
+        try:
+            with Image.open(BytesIO(raw)) as probe:
+                _ensure_safe_image_dimensions(probe)
+                probe.verify()
+        except UploadValidationError:
+            raise
+        except Exception as exc:
+            raise UploadValidationError("File is not a valid image.") from exc
+
+        tickets = self._load()
+        target = None
+        for ticket in tickets:
+            if ticket.get("id") == ticket_id:
+                target = ticket
+                break
+        if target is None:
+            return None
+
+        existing_photos = target.get("photos") or []
+        if not isinstance(existing_photos, list):
+            existing_photos = []
+        if len(existing_photos) >= MAX_TICKET_PHOTOS:
+            raise UploadValidationError(
+                f"Each ticket is limited to {MAX_TICKET_PHOTOS} photos."
+            )
+
+        # ticket_id is a uuid4 hex string from create_ticket(); guard anyway
+        # so a hand-edited tickets.json can't smuggle path separators.
+        safe_ticket_id = "".join(c for c in ticket_id if c.isalnum())[:64]
+        if not safe_ticket_id:
+            raise UploadValidationError("Invalid ticket id.")
+
+        ticket_dir = (self.config.ticket_upload_dir / safe_ticket_id).resolve()
+        upload_root = self.config.ticket_upload_dir.resolve()
+        try:
+            ticket_dir.relative_to(upload_root)
+        except ValueError as exc:
+            raise UploadValidationError("Invalid destination path.") from exc
+
+        new_filename = f"{secrets.token_hex(8)}.{ext}"
+        save_path = (ticket_dir / new_filename).resolve()
+        try:
+            save_path.relative_to(upload_root)
+        except ValueError as exc:
+            raise UploadValidationError("Invalid destination path.") from exc
+
+        ok = self.storage.save_binary_file(save_path, raw)
+        if not ok:
+            raise UploadValidationError("Failed to save photo.")
+
+        # Persist a relative URL so templates can render it as <img src=...>.
+        relative_url = f"/static/uploads/tickets/{safe_ticket_id}/{new_filename}"
+        existing_photos.append({"url": relative_url, "uploaded_at": _now_iso()})
+        target["photos"] = existing_photos
+        target["updated_at"] = _now_iso()
+        try:
+            self._save(tickets)
+        except Exception as exc:
+            self.logger.error("Failed to persist ticket photos: %s", exc)
+            raise UploadValidationError("Failed to record photo on ticket.") from exc
+
+        try:
+            self.notifications.log_site_change(
+                (actor_email or "unknown").lower(),
+                "ticket_photo_added",
+                {"ticket_id": ticket_id, "url": relative_url},
+            )
+        except Exception:
+            pass
+        return target
 
     def add_note(self, ticket_id: str, text: str, actor_email: str) -> dict | None:
         text = (text or "").strip()[:MAX_NOTE_LEN]

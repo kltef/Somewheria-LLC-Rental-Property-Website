@@ -121,3 +121,56 @@ class FileStorageService:
 
     def save_renter_contracts(self, contracts: dict) -> None:
         self.save_json_file(self.config.contracts_file, contracts)
+
+    # --- Binary file persistence (contract PDFs, ticket photos) ---
+    #
+    # These mirror the JSON helpers: writes go via tempfile + os.replace so a
+    # crash mid-write can't leave a half-written file on disk. The single
+    # in-process lock serializes all storage I/O — fine for a single-worker
+    # deployment, would need to move to a real DB for multi-worker.
+
+    def save_binary_file(self, path, data: bytes) -> bool:
+        """Persist ``data`` to ``path`` atomically. Returns True on success."""
+        try:
+            with self.file_lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+                )
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(data)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp_name, path)
+                except Exception:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to save binary file %s: %s", path, exc)
+            return False
+
+    def load_binary_file(self, path) -> bytes | None:
+        try:
+            with self.file_lock:
+                if not path.exists():
+                    return None
+                with path.open("rb") as handle:
+                    return handle.read()
+        except Exception as exc:
+            self.logger.error("Failed to load binary file %s: %s", path, exc)
+            return None
+
+    def delete_file(self, path) -> bool:
+        try:
+            with self.file_lock:
+                if path.exists():
+                    os.unlink(path)
+                    return True
+        except Exception as exc:
+            self.logger.error("Failed to delete file %s: %s", path, exc)
+        return False

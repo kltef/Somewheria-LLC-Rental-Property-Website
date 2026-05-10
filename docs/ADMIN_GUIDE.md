@@ -132,18 +132,17 @@ You cannot delete yourself.
 
 1. Click **Add Contract** (or scroll to the form).
 2. Fill in: renter email, property name, start date, end date, status (default **Active**).
-3. Click **Save**.
+3. **Optional:** attach the signed contract PDF. Must be a real PDF (the server checks the file's `%PDF-` magic bytes); ≤ 16 MB. The file is renamed server-side to `<uuid>.pdf` and stored under `static/uploads/contracts/`. The renter can download it from their contract detail page once the contract is saved.
+4. Click **Add Contract**.
 
-The contract immediately appears on the renter's dashboard the next time they sign in.
+The contract immediately appears on the renter's dashboard the next time they sign in. The dashboard shows their full lease history (active, pending, ended) — not just the current one — and each row links to a contract detail page where the PDF (if any) can be downloaded.
 
 ### Remove a contract
 
 1. Find the contract under the renter.
 2. Click **Delete** next to that specific contract.
 
-If a renter has no contracts left, their grouping disappears from the page.
-
-The download URL field on contracts is a placeholder — there is no file upload for contract documents in the current UI.
+If a renter has no contracts left, their grouping disappears from the page. Deleting the contract also removes the underlying PDF from disk (best-effort — a stale file under `static/uploads/contracts/` is harmless but can be cleaned up by hand).
 
 ## Tickets (repair requests)
 
@@ -155,8 +154,9 @@ The download URL field on contracts is a placeholder — there is no file upload
 2. Click a ticket to open it.
 3. Use the controls to change **Status** (open, in_progress, awaiting_parts, resolved, closed, etc.), **Priority** (low, normal, high, urgent), or **Assigned to** (free-text email).
 4. Add a note for the renter or for internal record-keeping. Notes appear on the ticket detail page in chronological order.
+5. Renters can attach up to 5 photos when filing a ticket. Thumbnails appear on the ticket detail page (admin and renter views) — click any thumbnail to open the full-size image in a new tab. Photos are stored under `static/uploads/tickets/<ticket_id>/` and use the same upload validation as listing photos (jpg/jpeg/png/gif/webp, ≤ 16 MB, decompression-bomb checks).
 
-If the renter has email updates enabled, status changes and notes you add can trigger an email to them. They can opt out per-ticket or globally in their renter profile.
+If the renter has email updates enabled, status changes and notes you add can trigger an email to them. They can opt out per-ticket or globally in their renter profile. The profile also has an "RCS status updates" toggle — that's a placeholder for now (no RCS sender wired); the preference is stored so it works once delivery is implemented.
 
 ### Quick filters
 

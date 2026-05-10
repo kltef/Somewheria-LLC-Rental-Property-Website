@@ -18,7 +18,7 @@
   <!-- Add New Contract Form -->
   <div class="bg-white dark:bg-neutral-900 rounded shadow p-6 mb-6">
     <h2 class="text-lg font-semibold mb-4">Add New Contract</h2>
-    <form method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <form method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add">
       <label class="font-semibold">Renter Email
@@ -41,7 +41,14 @@
           <option value="Terminated">Terminated</option>
         </select>
       </label>
-      <div class="flex items-end">
+      <label class="font-semibold md:col-span-2">Signed Contract PDF (optional, ≤ 16 MB)
+        <input type="file" name="contract_pdf" accept="application/pdf,.pdf"
+               class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
+        <span class="block text-xs text-gray-500 dark:text-gray-400 mt-1">
+          Stored at <code>static/uploads/contracts/&lt;uuid&gt;.pdf</code> and exposed to the renter via the contract detail page.
+        </span>
+      </label>
+      <div class="flex items-end md:col-span-2">
         <button type="submit" class="bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-600 font-bold transition-colors">Add Contract</button>
       </div>
     </form>
@@ -57,9 +64,16 @@
           {% for contract in contract_list %}
             <div class="border border-gray-200 dark:border-neutral-800 rounded p-3 mb-2 flex justify-between items-center">
               <div>
-                <div class="font-medium">{{ contract.property_name }}</div>
+                <div class="font-medium">
+                  {% if contract.id %}
+                    <a href="{{ url_for('contract_detail', contract_id=contract.id) }}" class="text-blue-600 dark:text-blue-400 hover:underline">{{ contract.property_name }}</a>
+                  {% else %}
+                    {{ contract.property_name }}
+                  {% endif %}
+                </div>
                 <div class="text-sm text-gray-600 dark:text-gray-400">
                   {{ contract.start_date }} – {{ contract.end_date }} | Status: {{ contract.status }}
+                  {% if contract.pdf_filename %}| <span class="text-emerald-600 dark:text-emerald-400">PDF on file</span>{% endif %}
                 </div>
               </div>
               <form method="post" class="inline">

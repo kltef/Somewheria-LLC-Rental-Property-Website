@@ -102,9 +102,12 @@ To grant emergency admin access without using the UI: add the email to `ADMIN_US
 
 ## Disk and capacity
 
-- Uploaded images go to `static/uploads/`. Max upload: 16 MB per file (`MAX_CONTENT_LENGTH`); decoded raster capped at 24 MP and 6000px per side to prevent decompression-bomb DoS. Images are letterboxed at upload time.
-- JSON state files are small (KB range for a small property portfolio). They are written via `tempfile + os.replace` for atomicity.
+- Uploaded property images go to `static/uploads/`. Max upload: 16 MB per file (`MAX_CONTENT_LENGTH`); decoded raster capped at 24 MP and 6000px per side to prevent decompression-bomb DoS. Images are letterboxed at upload time.
+- Signed contract PDFs go to `static/uploads/contracts/<uuid>.pdf` (`AppConfig.contract_upload_dir`). Validated server-side as PDF via the `%PDF-` magic bytes plus a 16 MB cap; written atomically via `FileStorageService.save_binary_file`. Served only through `/contracts/<id>/download` after an ownership check (admins can download any; renters only their own). Filename is server-chosen (the contract's UUID); never derived from the upload's filename. The `pdf_filename` field on each contract row in `renter_contracts.json` points at the file.
+- Repair-ticket photo attachments go to `static/uploads/tickets/<ticket_id>/<random>.<ext>` (`AppConfig.ticket_upload_dir`). Up to 5 per ticket. Same image validation as listing photos: allowed extensions jpg/jpeg/png/gif/webp, ≤16 MB, ≤24 MP, ≤6000px per side. Each `tickets.json` row carries a `photos: [{url, uploaded_at}, ...]` list of relative URLs.
+- JSON state files are small (KB range for a small property portfolio). They are written via `tempfile + os.replace` for atomicity. Binary files (PDFs, ticket photos) use the same atomic-write helper on `FileStorageService`.
 - The properties cache is in-memory only. Each restart re-fetches from AWS (8-worker pool, one full property = details + photos + thumbnail).
+- Contract PDFs and ticket photos are NOT in the cache and NOT replicated anywhere — back them up the same way you back up `*.json` files. Deleting `static/uploads/contracts/<uuid>.pdf` is permanent; the `renter_contracts.json` row will still reference it but the download endpoint will 404.
 
 ## Security headers and CSP
 
