@@ -901,5 +901,103 @@ class CsrfTokenExtractionTestCase(unittest.TestCase):
         self.assertEqual(token, "json-token")
 
 
+class TourUrlSanitizationTestCase(unittest.TestCase):
+    def test_blank_property_includes_tour_url(self):
+        from somewheria_app.services.properties import BLANK_PROPERTY
+
+        self.assertIn("tour_url", BLANK_PROPERTY)
+        self.assertEqual(BLANK_PROPERTY["tour_url"], "")
+
+    def test_sanitize_accepts_https_url(self):
+        from somewheria_app.services.properties import sanitize_tour_url
+
+        self.assertEqual(
+            sanitize_tour_url("https://my.matterport.com/show/?m=abc"),
+            "https://my.matterport.com/show/?m=abc",
+        )
+
+    def test_sanitize_rejects_javascript_scheme(self):
+        from somewheria_app.services.properties import sanitize_tour_url
+
+        for hostile in (
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "  javascript:alert(1)  ",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "file:///etc/passwd",
+            "",
+            "   ",
+            "not a url",
+            "/relative/path",
+            None,
+            123,
+        ):
+            self.assertEqual(sanitize_tour_url(hostile), "")
+
+    def test_property_payload_from_form_includes_sanitized_tour_url(self):
+        notifications = Mock()
+        config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        service = PropertyService(config, notifications)
+        form = DummyForm(values={"tour_url": "https://kuula.co/share/abc"})
+
+        payload = service.property_payload_from_form(form)
+
+        self.assertEqual(payload["tour_url"], "https://kuula.co/share/abc")
+
+    def test_property_payload_drops_javascript_tour_url(self):
+        notifications = Mock()
+        config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        service = PropertyService(config, notifications)
+        form = DummyForm(values={"tour_url": "javascript:alert(1)"})
+
+        payload = service.property_payload_from_form(form)
+
+        self.assertEqual(payload["tour_url"], "")
+
+    def test_update_property_forwards_sanitized_tour_url_to_upstream(self):
+        notifications = Mock()
+        config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        service = PropertyService(config, notifications)
+        current = {"id": "prop-1", "name": "Maple", "tour_url": ""}
+        form = DummyForm(values={"tour_url": "https://my.matterport.com/show/?m=xyz"})
+
+        with patch.object(service, "get_property", return_value=current), patch(
+            "somewheria_app.services.properties.requests.put"
+        ) as put_mock, patch.object(service, "trigger_background_refresh"):
+            service.update_property("prop-1", form, "admin@example.com")
+
+        self.assertEqual(
+            put_mock.call_args.kwargs["json"]["tour_url"],
+            "https://my.matterport.com/show/?m=xyz",
+        )
+
+    def test_update_property_drops_hostile_tour_url(self):
+        notifications = Mock()
+        config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        service = PropertyService(config, notifications)
+        current = {"id": "prop-1", "name": "Maple", "tour_url": ""}
+        form = DummyForm(values={"tour_url": "javascript:alert(1)"})
+
+        with patch.object(service, "get_property", return_value=current), patch(
+            "somewheria_app.services.properties.requests.put"
+        ) as put_mock, patch.object(service, "trigger_background_refresh"):
+            service.update_property("prop-1", form, "admin@example.com")
+
+        self.assertEqual(put_mock.call_args.kwargs["json"]["tour_url"], "")
+
+
 if __name__ == "__main__":
     unittest.main()
