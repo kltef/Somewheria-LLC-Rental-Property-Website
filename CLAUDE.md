@@ -45,6 +45,8 @@ python manage_users.py
 
 **Security middleware** (`services/security.py`) registers CSRF and security headers in `create_app()`. Mutating routes need a CSRF token from the session helper — don't add new POST/PUT/DELETE handlers without it.
 
+**Browser support.** Supported matrix and the human QA checklist live in [`docs/BROWSER_SUPPORT.md`](docs/BROWSER_SUPPORT.md). We target latest + N-1 of Safari (macOS/iOS), Chrome, Edge, Samsung Internet, and Firefox; Internet Explorer is explicitly unsupported. Any change to `templates/base.html`, inline JS, the service worker, or Tailwind input warrants re-running the checklist.
+
 ## Branches
 
 `main` is production (tagged releases). `dev` is where features land first and get verified before promotion to `main`.

@@ -10,6 +10,7 @@ Index of documentation for the Somewheria LLC Rental Property Website.
 | On-call or running the deployment | [RUNBOOK.md](RUNBOOK.md) |
 | A developer contributing code | [DEVELOPING.md](DEVELOPING.md) |
 | Looking for the HTTP endpoint reference | [API.md](API.md) |
+| Signing off cross-browser support before a release | [BROWSER_SUPPORT.md](BROWSER_SUPPORT.md) |
 | Setting up the app for the first time | [../README.md](../README.md) |
 | Looking for the high-level architecture in one page | [../CLAUDE.md](../CLAUDE.md) |
 | Configuring Google OAuth | [../GOOGLE_OAUTH_SETUP.md](../GOOGLE_OAUTH_SETUP.md) |
@@ -20,6 +21,7 @@ Index of documentation for the Somewheria LLC Rental Property Website.
 - **[RUNBOOK.md](RUNBOOK.md)** — Operations reference. Crash-handler behavior, what to do when the AWS properties API is down, restart procedure, rotating secrets, log file inventory, role/access internals, in-process rate limits, security headers and CSP.
 - **[DEVELOPING.md](DEVELOPING.md)** — Contributor guide. Service-registry pattern, adding routes and services, CSRF requirement, JSON-file persistence model, properties cache, crash-safety contract, test patterns, Tailwind workflow.
 - **[API.md](API.md)** — HTTP endpoint reference. Every route grouped by audience, with auth level, CSRF/rate-limit notes, request/response shapes, error pages, and the security headers set on every response.
+- **[BROWSER_SUPPORT.md](BROWSER_SUPPORT.md)** — Supported browser matrix (Safari, Chrome, Edge, Samsung, Firefox; IE explicitly unsupported) and the manual QA checklist a human walks through on each browser before a release.
 
 ## Repo-root docs
 
