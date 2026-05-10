@@ -63,6 +63,18 @@
           <dd class="text-[#111518] dark:text-white">{{ ticket.assigned_to }}</dd>
         </div>
       {% endif %}
+      {% if ticket.jira_key and jira_base_url %}
+        <div>
+          <dt class="text-gray-500 dark:text-gray-400">JIRA issue</dt>
+          <dd class="text-[#111518] dark:text-white">
+            <a href="{{ jira_base_url }}/browse/{{ ticket.jira_key }}"
+               target="_blank" rel="noopener noreferrer"
+               class="text-blue-600 dark:text-blue-400 hover:underline font-mono">
+              {{ ticket.jira_key }}
+            </a>
+          </dd>
+        </div>
+      {% endif %}
     </dl>
 
     <div>

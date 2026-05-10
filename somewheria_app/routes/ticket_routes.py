@@ -154,6 +154,7 @@ def ticket_detail(ticket_id: str):
         is_admin=_is_admin(),
         statuses=ALLOWED_STATUSES,
         priorities=ALLOWED_PRIORITIES,
+        jira_base_url=services.config.jira_base_url,
     )
 
 

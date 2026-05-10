@@ -14,6 +14,7 @@ class Services:
     properties: object
     tickets: object
     zillow: object
+    jira: object
 
 
 def set_services(app, services: Services) -> None:

@@ -13,7 +13,10 @@ CSRF_FORM_FIELD = "_csrf_token"
 CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 # Endpoints that are intentionally stateless and must not require CSRF
 # (e.g. Google OAuth callback arrives via GET redirect from Google).
-CSRF_EXEMPT_ENDPOINTS = {"google_callback", "static"}
+# ``jira_webhook`` is authenticated by the X-JIRA-Webhook-Secret header
+# (shared secret, see services/jira.py and routes/webhook_routes.py) so
+# the standard session+CSRF check doesn't apply.
+CSRF_EXEMPT_ENDPOINTS = {"google_callback", "static", "jira_webhook"}
 
 
 def _get_or_create_csrf_token() -> str:

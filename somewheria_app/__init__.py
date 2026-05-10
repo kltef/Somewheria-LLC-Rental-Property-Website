@@ -13,10 +13,12 @@ from .routes.auth_routes import register_auth_routes
 from .routes.public_routes import register_public_routes
 from .routes.pwa_routes import register_pwa_routes
 from .routes.ticket_routes import register_ticket_routes
+from .routes.webhook_routes import register_webhook_routes
 from .services.analytics import AnalyticsTracker
 from .services.appointments import AppointmentService
 from .services.auth import AuthService
 from .services.console import setup_console_logger
+from .services.jira import JiraClient
 from .services.notifications import NotificationService
 from .services.properties import PropertyService
 from .services.registry import Services, set_services
@@ -74,7 +76,8 @@ def create_app() -> Flask:
     auth = AuthService(config, storage)
     zillow = ZillowPublisher(config, notifications)
     properties = PropertyService(config, notifications, zillow=zillow)
-    tickets = TicketService(config, storage, notifications)
+    jira = JiraClient(config, notifications)
+    tickets = TicketService(config, storage, notifications, jira=jira)
 
     set_services(
         app,
@@ -88,6 +91,7 @@ def create_app() -> Flask:
             properties=properties,
             tickets=tickets,
             zillow=zillow,
+            jira=jira,
         ),
     )
 
@@ -102,6 +106,7 @@ def create_app() -> Flask:
     register_admin_routes(app)
     register_pwa_routes(app)
     register_ticket_routes(app)
+    register_webhook_routes(app)
 
     @app.errorhandler(404)
     def page_not_found(_error):
