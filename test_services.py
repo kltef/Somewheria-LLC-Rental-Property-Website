@@ -849,5 +849,109 @@ class RateLimiterTestCase(unittest.TestCase):
         self.assertIn("active", limiter._hits)
 
 
+class ConcurrentMutationTestCase(unittest.TestCase):
+    """Lost-update regression coverage.
+
+    Storage and TicketService used to do load -> mutate -> save with the
+    file lock released between the load and the save, which let two
+    concurrent callers read the same baseline and clobber each other.
+    These tests assert that simultaneous mutations now all land.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.base = Path(self.tmpdir.name)
+        self.config = SimpleNamespace(
+            registration_file=self.base / "registrations.json",
+            user_roles_file=self.base / "roles.json",
+            renter_profile_file=self.base / "profiles.json",
+            contracts_file=self.base / "contracts.json",
+            tickets_file=self.base / "tickets.json",
+        )
+        self.storage = FileStorageService(self.config)
+
+    def _run_concurrently(self, fn, count=20):
+        import threading
+
+        barrier = threading.Barrier(count)
+        threads = []
+
+        def runner(i):
+            barrier.wait()  # release all threads as close to simultaneously as we can
+            fn(i)
+
+        for i in range(count):
+            t = threading.Thread(target=runner, args=(i,))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+
+    def test_concurrent_set_user_role_does_not_lose_writes(self):
+        def assign(i):
+            self.storage.set_user_role(f"user{i}@example.com", "renter")
+
+        self._run_concurrently(assign, count=25)
+
+        roles = self.storage.get_user_roles()
+        self.assertEqual(len(roles), 25)
+        for i in range(25):
+            self.assertEqual(roles.get(f"user{i}@example.com"), "renter")
+
+    def test_concurrent_add_pending_registration_preserves_all(self):
+        def add(i):
+            self.storage.add_pending_registration({"email": f"a{i}@x", "name": str(i)})
+
+        self._run_concurrently(add, count=20)
+
+        pending = self.storage.get_pending_registrations()
+        self.assertEqual(len(pending), 20)
+        seen = {item["email"] for item in pending}
+        self.assertEqual(seen, {f"a{i}@x" for i in range(20)})
+
+    def test_concurrent_create_ticket_preserves_all(self):
+        from somewheria_app.services.tickets import TicketService
+
+        notifications = Mock()
+        # send_email/log_site_change are best-effort and shouldn't matter here.
+        service = TicketService(self.config, self.storage, notifications)
+
+        def create(i):
+            service.create_ticket(
+                {"title": f"T{i}", "description": f"D{i}"},
+                f"renter{i}@example.com",
+            )
+
+        self._run_concurrently(create, count=20)
+
+        # Use the service's own _load to read the persisted tickets.
+        all_tickets = service._load()
+        self.assertEqual(len(all_tickets), 20)
+        titles = {t["title"] for t in all_tickets}
+        self.assertEqual(titles, {f"T{i}" for i in range(20)})
+
+    def test_concurrent_add_note_preserves_all(self):
+        from somewheria_app.services.tickets import TicketService
+
+        notifications = Mock()
+        service = TicketService(self.config, self.storage, notifications)
+        ticket = service.create_ticket(
+            {"title": "Heater", "description": "broken"},
+            "renter@example.com",
+        )
+        ticket_id = ticket["id"]
+
+        def add_note(i):
+            service.add_note(ticket_id, f"note-{i}", "renter@example.com")
+
+        self._run_concurrently(add_note, count=15)
+
+        notes = service.get_ticket(ticket_id)["notes"]
+        self.assertEqual(len(notes), 15)
+        texts = {n["text"] for n in notes}
+        self.assertEqual(texts, {f"note-{i}" for i in range(15)})
+
+
 if __name__ == "__main__":
     unittest.main()
