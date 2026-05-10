@@ -801,5 +801,111 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
 
 
+    # --- §3.3 Lead capture tests ---
+
+    def test_submit_lead_capture_requires_valid_email(self):
+        response = self.client.post("/lead-captures", data={"email": "not-an-email"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"valid email", response.data)
+
+    def test_submit_lead_capture_saves_and_emails(self):
+        with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock:
+            response = self.client.post(
+                "/lead-captures", data={"email": "lead@example.com"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertTrue(response.get_json().get("success"))
+        add_mock.assert_called_once()
+        called_with = add_mock.call_args[0][0]
+        self.assertEqual(called_with["email"], "lead@example.com")
+        self.assertIn("submitted_at", called_with)
+        send_email_mock.assert_called_once()
+
+    def test_admin_lead_captures_page_loads_for_admin(self):
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_pending_lead_captures", return_value=[]):
+            response = self.client.get("/admin/lead-captures")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Pending Lead Captures", response.data)
+
+    def test_admin_lead_captures_requires_login(self):
+        response = self.client.get("/admin/lead-captures", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+
+    def test_admin_lead_captures_requires_email_on_post(self):
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_pending_lead_captures", return_value=[]), patch.object(
+            self.services.storage, "remove_pending_lead_capture"
+        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/admin/lead-captures", data={"action": "approve", "email": ""}
+            )
+        self.assertEqual(response.status_code, 200)
+        remove_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+
+    def test_admin_lead_captures_approve_removes_and_emails(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_lead_captures",
+            side_effect=[[{"email": "lead@example.com"}], []],
+        ), patch.object(
+            self.services.storage, "remove_pending_lead_capture"
+        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/admin/lead-captures",
+                data={"action": "approve", "email": "lead@example.com"},
+            )
+        self.assertEqual(response.status_code, 200)
+        remove_mock.assert_called_once_with("lead@example.com")
+        send_email_mock.assert_called_once()
+
+    def test_admin_lead_captures_reject_removes_silently(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_lead_captures",
+            side_effect=[[{"email": "lead@example.com"}], []],
+        ), patch.object(
+            self.services.storage, "remove_pending_lead_capture"
+        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/admin/lead-captures",
+                data={"action": "reject", "email": "lead@example.com"},
+            )
+        self.assertEqual(response.status_code, 200)
+        remove_mock.assert_called_once_with("lead@example.com")
+        send_email_mock.assert_not_called()
+
+    def test_admin_lead_captures_invalid_action(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_lead_captures",
+            return_value=[{"email": "lead@example.com"}],
+        ), patch.object(
+            self.services.storage, "remove_pending_lead_capture"
+        ) as remove_mock:
+            response = self.client.post(
+                "/admin/lead-captures",
+                data={"action": "wat", "email": "lead@example.com"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Invalid action.", response.data)
+        remove_mock.assert_not_called()
+
+    def test_for_rent_renders_filter_bar_and_lead_form(self):
+        self.seed_property()
+        with patch.object(self.services.properties, "refresh_cache"):
+            response = self.client.get("/for-rent")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"filterBar", response.data)
+        self.assertIn(b"leadCaptureForm", response.data)
+
+
 if __name__ == "__main__":
     unittest.main()

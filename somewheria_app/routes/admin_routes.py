@@ -423,6 +423,48 @@ def admin_registrations():
 
 
 @admin_required
+def admin_lead_captures():
+    services = get_services()
+    pending = services.storage.get_pending_lead_captures()
+    error = None
+    if request.method == "POST":
+        action = request.form.get("action")
+        email = request.form.get("email", "").strip().lower()
+        if not email:
+            return render_template(
+                "admin_lead_captures.html",
+                pending=pending,
+                title="Pending Lead Captures",
+                error="No email provided.",
+            )
+        if action == "approve":
+            # Approve = no role granted; just remove from pending and thank them.
+            services.storage.remove_pending_lead_capture(email)
+            services.notifications.send_email(
+                "Thanks for signing up",
+                "Thanks for signing up to be notified when a new property is listed at Somewheria. "
+                "We'll reach out as soon as something becomes available.",
+            )
+        elif action == "reject":
+            # Silent reject — no email to the requester.
+            services.storage.remove_pending_lead_capture(email)
+        else:
+            return render_template(
+                "admin_lead_captures.html",
+                pending=pending,
+                title="Pending Lead Captures",
+                error="Invalid action.",
+            )
+        pending = services.storage.get_pending_lead_captures()
+    return render_template(
+        "admin_lead_captures.html",
+        pending=pending,
+        title="Pending Lead Captures",
+        error=error,
+    )
+
+
+@admin_required
 def admin_users():
     services = get_services()
     error = None
@@ -605,6 +647,12 @@ def register_admin_routes(app) -> None:
         methods=["GET", "POST"],
     )
     app.add_url_rule("/admin/users", endpoint="admin_users", view_func=admin_users, methods=["GET", "POST"])
+    app.add_url_rule(
+        "/admin/lead-captures",
+        endpoint="admin_lead_captures",
+        view_func=admin_lead_captures,
+        methods=["GET", "POST"],
+    )
     app.add_url_rule(
         "/renter/profile",
         endpoint="renter_profile",

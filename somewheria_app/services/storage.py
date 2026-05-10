@@ -96,6 +96,26 @@ class FileStorageService:
     def save_renter_profiles(self, profiles: dict) -> None:
         self.save_json_file(self.config.renter_profile_file, profiles)
 
+    def get_pending_lead_captures(self) -> list[dict]:
+        return self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
+
+    def add_pending_lead_capture(self, lead: dict) -> None:
+        leads = self.get_pending_lead_captures()
+        # De-duplicate by email so a repeated submission doesn't bloat the file
+        # or give the requester a way to flood the admin UI.
+        target_email = (lead.get("email") or "").lower()
+        if target_email and any(item.get("email", "").lower() == target_email for item in leads):
+            return
+        leads.append(lead)
+        self.save_json_file(self.config.lead_capture_file, leads)
+
+    def remove_pending_lead_capture(self, email: str) -> None:
+        leads = [
+            item for item in self.get_pending_lead_captures()
+            if item.get("email", "").lower() != email.lower()
+        ]
+        self.save_json_file(self.config.lead_capture_file, leads)
+
     def get_renter_contracts(self) -> dict:
         return self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
 
