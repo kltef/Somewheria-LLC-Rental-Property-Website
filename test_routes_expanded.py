@@ -541,7 +541,14 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         # The profile now carries a ticket-email preference; an unchecked box
         # submits nothing, which the route interprets as False.
         save_profiles_mock.assert_called_once_with(
-            {"renter@example.com": {"name": "Jamie", "contact": "555-0100", "email_status_updates": False}}
+            {
+                "renter@example.com": {
+                    "name": "Jamie",
+                    "contact": "555-0100",
+                    "email_status_updates": False,
+                    "rcs_status_updates": False,
+                }
+            }
         )
 
     def test_renter_profile_post_honors_email_status_updates_checkbox(self):
@@ -557,7 +564,14 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         save_profiles_mock.assert_called_once_with(
-            {"renter@example.com": {"name": "Jamie", "contact": "555-0100", "email_status_updates": True}}
+            {
+                "renter@example.com": {
+                    "name": "Jamie",
+                    "contact": "555-0100",
+                    "email_status_updates": True,
+                    "rcs_status_updates": False,
+                }
+            }
         )
 
     def test_admin_contracts_add_requires_all_fields(self):

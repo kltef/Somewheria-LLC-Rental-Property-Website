@@ -28,6 +28,17 @@
           </span>
         </span>
       </label>
+      <label class="flex items-start gap-2 cursor-pointer mt-3">
+        <input type="checkbox" name="rcs_status_updates" value="1"
+               {% if profile.rcs_status_updates %}checked{% endif %}
+               class="mt-1 rounded border-neutral-300 dark:border-neutral-600 text-blue-600 focus:ring-blue-500">
+        <span class="font-normal text-sm text-[#111518] dark:text-white">
+          Send me RCS message updates on my repair tickets
+          <span class="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Placeholder — RCS delivery is not yet wired up. Toggle this so we know your preference for when it ships.
+          </span>
+        </span>
+      </label>
     </div>
 
     <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold">Save Changes</button>

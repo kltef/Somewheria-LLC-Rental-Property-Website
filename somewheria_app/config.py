@@ -44,6 +44,8 @@ class AppConfig:
         self.template_dir = self.base_dir / "templates"
         self.static_dir = self.base_dir / "static"
         self.upload_dir = self.static_dir / "uploads"
+        self.contract_upload_dir = self.upload_dir / "contracts"
+        self.ticket_upload_dir = self.upload_dir / "tickets"
         self.log_file = self.base_dir / "application.log"
         self.change_log_file = self.base_dir / "site_changes.log"
         self.property_appointments_file = self.base_dir / "property_appointments.txt"
@@ -56,3 +58,5 @@ class AppConfig:
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.contract_upload_dir.mkdir(parents=True, exist_ok=True)
+        self.ticket_upload_dir.mkdir(parents=True, exist_ok=True)
