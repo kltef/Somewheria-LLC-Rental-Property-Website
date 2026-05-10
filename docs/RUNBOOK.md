@@ -173,6 +173,120 @@ status counters, PropertyService wiring) is already in place.
 
 Until items 1-4 are resolved, do not enable real HTTP from `_perform_publish`.
 
+## SQLite storage migration (opt-in)
+
+The app ships persisting state in JSON files via `FileStorageService`. A
+parallel SQLite-backed `SqlStorageService` is included for the planned
+migration off the JSON files, gated behind the `USE_SQLITE_STORAGE` env var
+(default `0`). With the flag off there is no behavior change.
+
+### Migrating
+
+1. Stop the app (or run while quiesced — the migration replaces table
+   contents with the current JSON snapshot, so any writes to JSON during
+   migration would be lost).
+2. Dry-run to inspect counts:
+   ```bash
+   python scripts/migrate_from_json.py --dry-run
+   ```
+3. Run the migration:
+   ```bash
+   python scripts/migrate_from_json.py
+   ```
+   This creates `somewheria.sqlite3` next to the JSON files (path is
+   `AppConfig.sqlite_file`, i.e. `<base_dir>/somewheria.sqlite3`). The
+   script is idempotent — re-running replaces table contents from the JSON
+   snapshot. The JSON files are not modified.
+4. Set `USE_SQLITE_STORAGE=1` in `.env` and start the app. `create_app()`
+   constructs `SqlStorageService` instead of `FileStorageService`. Because
+   the SqlStorageService mirrors the same public API used by routes and
+   `TicketService`, no other code changes.
+5. Verify reads via `/admin/registrations`, `/admin/users`, and the ticket
+   pages. Verify a write (e.g. add a pending registration) round-trips.
+6. To roll back: unset `USE_SQLITE_STORAGE` (or set to `0`) and restart.
+   The JSON files are untouched, so the app reverts to them.
+
+The JSON files remain on disk after migration as a fallback. Once the SQLite
+path has run cleanly for a while, the JSON files can be archived. Do not
+delete them until you have a working backup of `somewheria.sqlite3`.
+
+## Daily SQLite backup to S3
+
+`scripts/backup_database.py` compresses the SQLite DB with gzip and uploads
+the artifact to S3. Run it daily from cron once SQLite storage is live.
+
+### Required env vars
+
+| Variable | Purpose |
+|---|---|
+| `BACKUP_S3_BUCKET` | Target bucket. If unset, upload is skipped and the local artifact is left in the staging dir. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS credentials with `s3:PutObject` on the bucket. If either is unset, upload is skipped. |
+| `BACKUP_S3_PREFIX` | Optional. Key prefix inside the bucket (default `somewheria/`). |
+| `BACKUP_RETENTION_DAYS` | Optional. Local artifacts older than N days are pruned (default `7`). S3 lifecycle is managed in S3, not here. |
+| `BACKUP_STAGING_DIR` | Optional. Directory for the local artifact (default `./backups`). |
+
+### Cron example
+
+```cron
+# Daily at 03:15 UTC; logs to /var/log/somewheria-backup.log.
+15 3 * * *  cd /opt/somewheria && \
+  AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BACKUP_S3_BUCKET=somewheria-backups \
+  /opt/somewheria/.venv/bin/python scripts/backup_database.py \
+  >> /var/log/somewheria-backup.log 2>&1
+```
+
+The script exits non-zero on failure so cron's `MAILTO` will surface errors.
+S3 lifecycle rules (e.g. transition to Glacier after 30 days, expire after a
+year) should be configured on the bucket itself.
+
+### S3 setup
+
+`boto3` is not in `requirements.txt` — install it on the host that runs the
+backup (`pip install boto3`). The script imports lazily so it can also be
+exercised without S3 credentials (writes the gz artifact to the staging dir
+and prints "Skipping S3 upload").
+
+## External uptime monitoring
+
+The in-process crash handler only catches exceptions in a running Python
+process. A dead process, OOM kill, network outage, or hung worker will not
+trigger it. Wire up an external monitor.
+
+Recommended: **UptimeRobot** (free tier covers 5-minute checks) or
+**BetterStack / Better Uptime**.
+
+Configuration:
+
+1. Create an HTTP(S) check against the production root URL (e.g.
+   `https://somewheria.example.com/`). Interval: **5 minutes**. Expected
+   status: `200`.
+2. Set the alert recipient to the same admin email used by
+   `NotificationService` (currently `anthony@ekbergproperties.com`). Add SMS
+   as a secondary if available.
+3. Optionally add a content keyword check (a string from the home page) to
+   catch the case where the process is up but serving the bare 503 from the
+   crash handler — the crash handler returns `503`, so a status check alone
+   would already catch it, but a content check protects against any future
+   "200 with broken page" regression.
+4. Test the monitor by stopping the process and confirming the alert fires
+   within the configured window.
+
+This is independent of the in-process crash handler. Both are needed: the
+crash handler emails on caught exceptions; the external monitor catches the
+cases where no Python is alive to send mail.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on push and PR to `main` and `dev`:
+
+- `test` job: Python 3.11, `pip install -r requirements.txt`, then
+  `python -m unittest discover`. Fails the workflow on any test failure.
+- `lint` job: installs `requirements-dev.txt` (which adds `ruff`) and runs
+  `ruff check .`.
+
+Branch protection (require checks to pass before merge) is configured in the
+GitHub UI under Settings -> Branches, not in this repo.
+
 ## What this document does not cover
 
 - **Production hostname / TLS termination / reverse proxy config:** not in the codebase. Document separately for your deployment.

@@ -36,6 +36,9 @@ class AppConfig:
     disable_background_threads: bool = field(
         default_factory=lambda: os.getenv("DISABLE_BACKGROUND_THREADS") == "1"
     )
+    use_sqlite_storage: bool = field(
+        default_factory=lambda: os.getenv("USE_SQLITE_STORAGE", "0") == "1"
+    )
     authorized_users: list[str] = field(default_factory=lambda: _csv_env("AUTHORIZED_USERS"))
     admin_users: list[str] = field(default_factory=lambda: _csv_env("ADMIN_USERS"))
     high_admin_users: list[str] = field(default_factory=lambda: _csv_env("HIGH_ADMIN_USERS"))
@@ -52,6 +55,7 @@ class AppConfig:
         self.renter_profile_file = self.base_dir / "renter_profiles.json"
         self.contracts_file = self.base_dir / "renter_contracts.json"
         self.tickets_file = self.base_dir / "tickets.json"
+        self.sqlite_file = self.base_dir / "somewheria.sqlite3"
 
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)
