@@ -1,6 +1,8 @@
+import csv
 import datetime
+import io
 
-from flask import current_app, jsonify, redirect, render_template, request, url_for
+from flask import Response, current_app, jsonify, redirect, render_template, request, url_for
 
 from ..services.auth import (
     admin_required,
@@ -349,6 +351,8 @@ def admin_dashboard_combined():
                 )
     metrics, chart_data = services.analytics.dashboard_data(len(services.properties.get_cached_properties()))
     ticket_summary = services.tickets.summary()
+    ticket_status_counts = services.tickets.status_counts()
+    listing_activity = services.analytics.recent_listing_activity(months=12)
     return render_template(
         "admin_dashboard.html",
         user=get_current_user(),
@@ -356,6 +360,8 @@ def admin_dashboard_combined():
         chart_data=chart_data,
         users=list(services.storage.get_user_roles().items()),
         ticket_summary=ticket_summary,
+        ticket_status_counts=ticket_status_counts,
+        listing_activity=listing_activity,
         error=error,
         success=success,
         title="Admin Dashboard",
@@ -577,6 +583,106 @@ def toggle_sale(id):
         return "Operation failed. Please try again.", 500
 
 
+def _csv_filename(prefix: str) -> str:
+    today = datetime.date.today().isoformat()
+    return f"{prefix}-{today}.csv"
+
+
+@admin_required
+def admin_contracts_export_csv():
+    services = get_services()
+    contracts_by_renter = services.storage.get_renter_contracts() or {}
+
+    columns = (
+        "renter_email",
+        "property_name",
+        "start_date",
+        "end_date",
+        "status",
+        "created_at",
+    )
+
+    def generate():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(columns)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        for renter_email, contracts in contracts_by_renter.items():
+            for contract in contracts or []:
+                writer.writerow([
+                    renter_email,
+                    contract.get("property_name", ""),
+                    contract.get("start_date", ""),
+                    contract.get("end_date", ""),
+                    contract.get("status", ""),
+                    contract.get("created_at", ""),
+                ])
+                yield buffer.getvalue()
+                buffer.seek(0)
+                buffer.truncate(0)
+
+    return Response(
+        generate(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_csv_filename("contracts")}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@admin_required
+def admin_tickets_export_csv():
+    services = get_services()
+    tickets = services.tickets.list_tickets()
+
+    columns = (
+        "id",
+        "title",
+        "status",
+        "priority",
+        "category",
+        "submitter",
+        "property_name",
+        "created_at",
+        "last_updated",
+    )
+
+    def generate():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(columns)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        for ticket in tickets:
+            writer.writerow([
+                ticket.get("id", ""),
+                ticket.get("title", ""),
+                ticket.get("status", ""),
+                ticket.get("priority", ""),
+                ticket.get("category", ""),
+                ticket.get("submitted_by", ""),
+                ticket.get("property_name", ""),
+                ticket.get("created_at", ""),
+                ticket.get("updated_at", ""),
+            ])
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    return Response(
+        generate(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_csv_filename("tickets")}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 def register_admin_routes(app) -> None:
     app.add_url_rule("/add-listing", endpoint="add_listing", view_func=add_listing)
     app.add_url_rule("/edit-listing/<property_id>", endpoint="edit_listing", view_func=edit_listing)
@@ -616,6 +722,18 @@ def register_admin_routes(app) -> None:
         endpoint="admin_contracts",
         view_func=admin_contracts,
         methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/admin/contracts/export.csv",
+        endpoint="admin_contracts_export_csv",
+        view_func=admin_contracts_export_csv,
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/admin/tickets/export.csv",
+        endpoint="admin_tickets_export_csv",
+        view_func=admin_tickets_export_csv,
+        methods=["GET"],
     )
     app.add_url_rule(
         "/delete-listing/<id>",

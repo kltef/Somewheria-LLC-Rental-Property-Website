@@ -57,7 +57,7 @@ def create_app() -> Flask:
     )
     setup_console_logger(config.console_log_level, config.log_file)
 
-    analytics = AnalyticsTracker(config.analytics_days)
+    analytics = AnalyticsTracker(config.analytics_days, config)
     storage = FileStorageService(config)
     notifications = NotificationService(config, analytics)
     appointments = AppointmentService(config)
