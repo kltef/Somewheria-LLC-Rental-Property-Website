@@ -10,6 +10,9 @@ The service is intentionally small and synchronous — it mirrors the
 from __future__ import annotations
 
 import datetime
+import os
+import threading
+import time
 import uuid
 from typing import Iterable
 
@@ -52,11 +55,18 @@ def _now_iso() -> str:
 
 
 class TicketService:
-    def __init__(self, config, storage, notifications) -> None:
+    def __init__(self, config, storage, notifications, jira=None) -> None:
         self.config = config
         self.storage = storage
         self.notifications = notifications
+        # ``jira`` is optional so existing tests that construct TicketService
+        # directly (without a JiraClient) continue to pass.
+        self.jira = jira
         self.logger = get_console_logger("tickets")
+        # Retry backoffs (seconds). 1s/4s/16s = max ~21s of retry per ticket,
+        # entirely off the request thread so JIRA being slow never blocks the
+        # ticket-creation response.
+        self._jira_backoffs = (1, 4, 16)
 
     # ------------------------------------------------------------------ I/O
 
@@ -195,7 +205,89 @@ class TicketService:
             )
         except Exception:
             pass
+
+        # Fire JIRA mirror creation off the request thread. JIRA being down
+        # (timeouts, 5xx, auth errors) MUST NOT block ticket creation —
+        # ``_enqueue_jira_create`` returns immediately.
+        if self.jira is not None:
+            self._enqueue_jira_create(ticket["id"])
+
         return ticket
+
+    # --------------------------------------------------------------- JIRA
+
+    def _enqueue_jira_create(self, ticket_id: str) -> None:
+        """Create a JIRA mirror in a daemon thread with bounded retries.
+
+        Honours the same DISABLE_BACKGROUND_THREADS env hatch the rest of
+        the app uses so test runs stay synchronous and predictable.
+        """
+        if os.getenv("DISABLE_BACKGROUND_THREADS") == "1":
+            # Run inline so tests can assert against jira_key directly. Still
+            # wrapped in try/except so a failing JIRA never raises into the
+            # caller (matching production semantics).
+            try:
+                self._attempt_jira_create_once(ticket_id)
+            except Exception as exc:
+                self.logger.warning("Inline JIRA create failed for %s: %s", ticket_id, exc)
+            return
+
+        thread = threading.Thread(
+            target=self._jira_create_with_retries,
+            args=(ticket_id,),
+            name=f"jira-create-{ticket_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _jira_create_with_retries(self, ticket_id: str) -> None:
+        last_exc: Exception | None = None
+        for attempt, backoff in enumerate(self._jira_backoffs, start=1):
+            try:
+                key = self._attempt_jira_create_once(ticket_id)
+                if key:
+                    return  # success path; nothing more to do
+                # is_configured() returned False -> no point retrying.
+                return
+            except Exception as exc:
+                last_exc = exc
+                self.logger.warning(
+                    "JIRA create attempt %d/%d failed for %s: %s",
+                    attempt, len(self._jira_backoffs), ticket_id, exc,
+                )
+                if attempt < len(self._jira_backoffs):
+                    time.sleep(backoff)
+        self.logger.error(
+            "Giving up creating JIRA mirror for %s after %d attempts: %s",
+            ticket_id, len(self._jira_backoffs), last_exc,
+        )
+
+    def _attempt_jira_create_once(self, ticket_id: str) -> str | None:
+        """One JIRA create attempt. Persists ``jira_key`` on success."""
+        ticket = self.get_ticket(ticket_id)
+        if not ticket:
+            return None
+        key = self.jira.create_issue(ticket)
+        if not key:
+            return None
+        # Persist the JIRA key onto the ticket so the admin UI can deep-link
+        # and the webhook can map JIRA events back to the local ticket.
+        tickets = self._load()
+        for stored in tickets:
+            if stored.get("id") == ticket_id:
+                stored["jira_key"] = key
+                stored["updated_at"] = _now_iso()
+                self._save(tickets)
+                break
+        return key
+
+    def find_by_jira_key(self, jira_key: str) -> dict | None:
+        if not jira_key:
+            return None
+        for ticket in self._load():
+            if ticket.get("jira_key") == jira_key:
+                return ticket
+        return None
 
     def set_email_updates(self, ticket_id: str, enabled: bool, actor_email: str) -> dict | None:
         tickets = self._load()
