@@ -28,7 +28,30 @@
           {% endfor %}
         </div>
       </div>
+      {% if property.tour_url %}
+        <div class="px-4 pt-3 pb-1 flex justify-end">
+          <a href="#tour-embed" class="inline-flex items-center gap-2 bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded hover:bg-blue-700">
+            View 3D tour
+          </a>
+        </div>
+      {% endif %}
     </div>
+    {% if property.tour_url %}
+      <section id="tour-embed" class="px-4 pt-2 pb-6">
+        <h2 class="text-[#111518] dark:text-white text-[22px] font-bold pb-3 pt-2">3D virtual tour</h2>
+        <div class="relative w-full overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-900" style="padding-top: 56.25%;">
+          <iframe
+            src="{{ property.tour_url }}"
+            title="3D virtual tour of {{ property.name }}"
+            class="absolute inset-0 w-full h-full border-0"
+            loading="lazy"
+            allow="fullscreen; xr-spatial-tracking"
+            allowfullscreen
+            referrerpolicy="no-referrer"
+            sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+        </div>
+      </section>
+    {% endif %}
     <!-- Main content -->
     <h1 class="text-[#111518] dark:text-white text-[22px] font-bold tracking-tight px-4 pb-3 pt-5">{{ property.name }}</h1>
     <p class="text-[#111518] dark:text-white text-base pb-3 pt-1 px-4">{{ property.blurb }}</p>
