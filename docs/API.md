@@ -99,6 +99,7 @@ On success the session is cleared (defense against session fixation) and re-popu
 | POST | `/admin/users` | admin+ | Add, update, or delete a user. Form: `email`, `role` (`renter` \| `admin` \| `high_admin`), `action` (`delete` or omitted). Constraint: cannot modify your own account; cannot assign or modify a role at or above your own. Delete writes a `"revoked"` tombstone (see [RUNBOOK.md § Roles and access](RUNBOOK.md#roles-and-access)). |
 | GET | `/admin/contracts` | admin+ | List all renter contracts. |
 | POST | `/admin/contracts` | admin+ | Add or delete a contract. Form (`action=add`): `renter_email`, `property_name`, `start_date`, `end_date`, `status` (default `Active`). Form (`action=delete`): `renter_email`, `contract_index` (integer). |
+| GET | `/admin/contracts/export.csv` | admin+ | Streamed CSV of every contract. Columns: `renter_email`, `property_name`, `start_date`, `end_date`, `status`, `created_at`. `Content-Type: text/csv`, `Content-Disposition: attachment; filename="contracts-YYYY-MM-DD.csv"`. |
 
 ## High admin
 
@@ -121,6 +122,7 @@ On success the session is cleared (defense against session fixation) and re-popu
 | POST | `/tickets/<ticket_id>/notes` | any² | Add a note to the ticket. Form: `note`. Empty notes are silently dropped. Rate-limited 20 / 5 min per IP. |
 | POST | `/tickets/<ticket_id>/email-updates` | any² | Toggle the per-ticket email-updates preference. Form: `email_updates` (checkbox). |
 | GET | `/admin/tickets` | admin+ | All tickets. Query params: `status` (one of `ALLOWED_STATUSES`), `priority` (one of `ALLOWED_PRIORITIES`), `q` (text search across title/description/submitter/property name). |
+| GET | `/admin/tickets/export.csv` | admin+ | Streamed CSV of every ticket (no filtering). Columns: `id`, `title`, `status`, `priority`, `category`, `submitter`, `property_name`, `created_at`, `last_updated`. `Content-Type: text/csv`, `Content-Disposition: attachment; filename="tickets-YYYY-MM-DD.csv"`. |
 | POST | `/admin/tickets/<ticket_id>` | admin+ | Update ticket. Form: any of `status`, `priority`, `assigned_to` (free-text email). Only fields present in the form are applied. |
 
 ² Per-ticket access: signed in **and** either an admin/high_admin **or** the ticket's submitter.

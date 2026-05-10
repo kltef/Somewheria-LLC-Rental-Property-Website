@@ -800,6 +800,105 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
 
+    # ------------------------------------------------------------ reporting
+
+    def test_admin_dashboard_includes_reporting_chart_data_for_high_admin(self):
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 10}, {"labels": []}),
+        ), patch.object(
+            self.services.analytics,
+            "recent_listing_activity",
+            return_value={"months": ["2026-04", "2026-05"], "created": [1, 2], "deleted": [0, 1]},
+        ), patch.object(
+            self.services.tickets,
+            "status_counts",
+            return_value={"open": 3, "closed": 1, "in_progress": 0, "awaiting_parts": 0, "resolved": 0},
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"owner@example.com": "high_admin"},
+        ):
+            response = self.client.get("/admin/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Tickets by Status", response.data)
+        self.assertIn(b"Listings by Month", response.data)
+
+    def test_admin_dashboard_forbids_renter_for_chart_view(self):
+        self.login_as("renter")
+
+        response = self.client.get("/admin/dashboard")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_contracts_export_csv_returns_csv_for_admin(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_renter_contracts",
+            return_value={
+                "renter@example.com": [
+                    {
+                        "property_name": "Maple House",
+                        "start_date": "2030-01-01",
+                        "end_date": "2030-12-31",
+                        "status": "Active",
+                        "created_at": "2030-01-01T00:00:00",
+                    }
+                ]
+            },
+        ):
+            response = self.client.get("/admin/contracts/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.content_type)
+        self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
+        body = response.get_data(as_text=True)
+        self.assertIn("renter_email,property_name,start_date,end_date,status,created_at", body)
+        self.assertIn("renter@example.com", body)
+        self.assertIn("Maple House", body)
+
+    def test_admin_contracts_export_csv_forbids_renter(self):
+        self.login_as("renter")
+
+        response = self.client.get("/admin/contracts/export.csv")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_tickets_export_csv_returns_csv_for_admin(self):
+        self.login_as("admin")
+        sample_ticket = {
+            "id": "abc123",
+            "title": "Leaky faucet",
+            "status": "open",
+            "priority": "normal",
+            "category": "plumbing",
+            "submitted_by": "renter@example.com",
+            "property_name": "Maple House",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-02T00:00:00Z",
+        }
+        with patch.object(self.services.tickets, "list_tickets", return_value=[sample_ticket]):
+            response = self.client.get("/admin/tickets/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.content_type)
+        self.assertIn("attachment", response.headers.get("Content-Disposition", ""))
+        body = response.get_data(as_text=True)
+        self.assertIn("id,title,status,priority,category,submitter,property_name,created_at,last_updated", body)
+        self.assertIn("Leaky faucet", body)
+        self.assertIn("renter@example.com", body)
+
+    def test_admin_tickets_export_csv_forbids_renter(self):
+        self.login_as("renter")
+
+        response = self.client.get("/admin/tickets/export.csv")
+
+        self.assertEqual(response.status_code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()
