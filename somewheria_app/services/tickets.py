@@ -105,6 +105,21 @@ class TicketService:
         )
         return {"total": total, "open": open_count, "urgent": urgent_count}
 
+    def status_counts(self) -> dict:
+        """Return ``{status: count}`` for every ALLOWED_STATUSES bucket.
+
+        Always returns a key per allowed status (zero-filled) so the chart
+        on the admin dashboard renders consistent slices regardless of
+        whether any tickets currently sit in a given status.
+        """
+        tickets = self._load()
+        counts = {status: 0 for status in ALLOWED_STATUSES}
+        for ticket in tickets:
+            status = ticket.get("status")
+            if status in counts:
+                counts[status] += 1
+        return counts
+
     # --------------------------------------------------------------- mutate
 
     def create_ticket(self, payload: dict, submitter_email: str) -> dict:

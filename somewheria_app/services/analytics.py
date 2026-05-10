@@ -1,5 +1,6 @@
 import collections
 import datetime
+import json
 import time
 
 from flask import current_app, g, request, session
@@ -8,8 +9,9 @@ from .console import get_console_logger
 
 
 class AnalyticsTracker:
-    def __init__(self, analytics_days: int) -> None:
+    def __init__(self, analytics_days: int, config=None) -> None:
         self.analytics_days = analytics_days
+        self.config = config
         self.logger = get_console_logger("http")
         self.site_visits = collections.defaultdict(int)
         self.unique_users = collections.defaultdict(set)
@@ -89,3 +91,71 @@ class AnalyticsTracker:
             "unique_users": [len(self.unique_users.get(day, set())) for day in days],
         }
         return metrics, chart_data
+
+    def recent_listing_activity(self, months: int = 12) -> dict:
+        """Aggregate property created/deleted counts over the last ``months``.
+
+        Reads ``site_changes.log`` (a JSONL file) using a bounded deque so a
+        long-running process with a large change log doesn't load the entire
+        history into memory. Mirrors the bounded-tail pattern used by
+        ``NotificationService.read_logs``.
+
+        Returns ``{"months": [...], "created": [...], "deleted": [...]}``
+        where ``months`` is a list of ``YYYY-MM`` labels in chronological
+        order ending with the current month.
+        """
+        months = max(1, int(months))
+        today = datetime.date.today()
+        labels: list[str] = []
+        # Build labels in chronological order ending on the current month.
+        year, month = today.year, today.month
+        for _ in range(months):
+            labels.append(f"{year:04d}-{month:02d}")
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        labels.reverse()
+        label_set = set(labels)
+        created: dict[str, int] = {label: 0 for label in labels}
+        deleted: dict[str, int] = {label: 0 for label in labels}
+
+        change_log = getattr(self.config, "change_log_file", None) if self.config else None
+        if change_log and change_log.exists():
+            # Cap memory: the log is JSONL and append-only. Keep only the
+            # last 50k lines in memory at a time -- sufficient for any
+            # realistic 12-month window without unbounded growth.
+            tail: collections.deque[str] = collections.deque(maxlen=50000)
+            try:
+                with change_log.open("r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if line:
+                            tail.append(line)
+            except OSError as exc:
+                self.logger.warning("Could not read site_changes.log: %s", exc)
+                tail.clear()
+            for raw in tail:
+                try:
+                    entry = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                action = entry.get("action")
+                if action not in ("property_created", "property_deleted"):
+                    continue
+                ts = entry.get("timestamp") or ""
+                # Timestamps are ISO 8601 from datetime.isoformat(); the
+                # YYYY-MM prefix is the first 7 chars and avoids parsing.
+                key = ts[:7]
+                if key not in label_set:
+                    continue
+                if action == "property_created":
+                    created[key] += 1
+                else:
+                    deleted[key] += 1
+
+        return {
+            "months": labels,
+            "created": [created[label] for label in labels],
+            "deleted": [deleted[label] for label in labels],
+        }

@@ -349,6 +349,8 @@ def admin_dashboard_combined():
                 )
     metrics, chart_data = services.analytics.dashboard_data(len(services.properties.get_cached_properties()))
     ticket_summary = services.tickets.summary()
+    ticket_status_counts = services.tickets.status_counts()
+    listing_activity = services.analytics.recent_listing_activity(months=12)
     return render_template(
         "admin_dashboard.html",
         user=get_current_user(),
@@ -356,6 +358,8 @@ def admin_dashboard_combined():
         chart_data=chart_data,
         users=list(services.storage.get_user_roles().items()),
         ticket_summary=ticket_summary,
+        ticket_status_counts=ticket_status_counts,
+        listing_activity=listing_activity,
         error=error,
         success=success,
         title="Admin Dashboard",

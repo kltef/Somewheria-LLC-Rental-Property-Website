@@ -125,6 +125,26 @@
     </section>
   {% endif %}
 
+  {# --- Reporting charts --- #}
+  {% if ticket_status_counts is defined or listing_activity is defined %}
+    <section aria-labelledby="reporting-heading" class="mb-8">
+      <div class="flex items-end justify-between mb-3">
+        <h2 id="reporting-heading"
+            class="text-xl font-semibold text-[#111518] dark:text-white">Reporting</h2>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+          <p class="text-sm font-semibold mb-2 text-[#111518] dark:text-white">Tickets by Status</p>
+          <div id="tickets-status-chart" style="height:280px;"></div>
+        </div>
+        <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
+          <p class="text-sm font-semibold mb-2 text-[#111518] dark:text-white">Listings by Month (last 12)</p>
+          <div id="listings-activity-chart" style="height:280px;"></div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
   {# --- User Management Section --- #}
   <section aria-labelledby="users-heading">
     <div class="flex items-end justify-between mb-3">
@@ -233,6 +253,56 @@
     </div>
   </section>
 </div>
+
+{% if ticket_status_counts is defined or listing_activity is defined %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<script>
+(function() {
+  try {
+    var statusCounts = {{ (ticket_status_counts or {})|tojson }};
+    var statusLabels = Object.keys(statusCounts);
+    var statusValues = statusLabels.map(function(k) { return statusCounts[k]; });
+    if (window.Plotly && document.getElementById('tickets-status-chart')) {
+      Plotly.newPlot('tickets-status-chart', [{
+        type: 'pie',
+        labels: statusLabels.map(function(s) { return s.replace('_', ' '); }),
+        values: statusValues,
+        textinfo: 'label+value'
+      }], {margin: {t: 10, b: 10, l: 10, r: 10}}, {displayModeBar: false, responsive: true});
+    }
+  } catch (e) { /* ignore */ }
+
+  try {
+    var activity = {{ (listing_activity or {})|tojson }};
+    if (window.Plotly && activity.months && document.getElementById('listings-activity-chart')) {
+      Plotly.newPlot('listings-activity-chart', [
+        {
+          x: activity.months,
+          y: activity.created,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'Created',
+          line: {color: '#059669'}
+        },
+        {
+          x: activity.months,
+          y: activity.deleted,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: 'Deleted',
+          line: {color: '#dc2626'}
+        }
+      ], {
+        margin: {t: 10, b: 40, l: 40, r: 10},
+        xaxis: {title: 'Month'},
+        yaxis: {title: 'Count', rangemode: 'tozero'},
+        legend: {orientation: 'h'}
+      }, {displayModeBar: false, responsive: true});
+    }
+  } catch (e) { /* ignore */ }
+})();
+</script>
+{% endif %}
 
 <script>
 (function() {
