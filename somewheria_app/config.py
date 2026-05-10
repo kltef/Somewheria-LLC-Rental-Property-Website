@@ -39,6 +39,15 @@ class AppConfig:
     authorized_users: list[str] = field(default_factory=lambda: _csv_env("AUTHORIZED_USERS"))
     admin_users: list[str] = field(default_factory=lambda: _csv_env("ADMIN_USERS"))
     high_admin_users: list[str] = field(default_factory=lambda: _csv_env("HIGH_ADMIN_USERS"))
+    # JIRA integration (Phase 3 §6) — optional. When any of the four credential
+    # values are missing, JiraClient operates as a no-op and ticket creation is
+    # unaffected. The webhook secret is independent and only validates inbound
+    # webhook requests at /webhooks/jira.
+    jira_base_url: str = field(default_factory=lambda: os.getenv("JIRA_BASE_URL", "").rstrip("/"))
+    jira_project_key: str = field(default_factory=lambda: os.getenv("JIRA_PROJECT_KEY", ""))
+    jira_api_token: str = field(default_factory=lambda: os.getenv("JIRA_API_TOKEN", ""))
+    jira_user_email: str = field(default_factory=lambda: os.getenv("JIRA_USER_EMAIL", ""))
+    jira_webhook_secret: str = field(default_factory=lambda: os.getenv("JIRA_WEBHOOK_SECRET", ""))
 
     def __post_init__(self) -> None:
         self.template_dir = self.base_dir / "templates"
