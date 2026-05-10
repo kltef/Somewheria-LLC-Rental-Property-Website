@@ -40,6 +40,17 @@ You can never modify your own account from the user-management page, and you can
 2. Use the photo upload control. Allowed file types: JPG, JPEG, PNG, GIF, WEBP. Maximum size: 16 MB per file. Very large or extreme-aspect-ratio images are rejected as a safety measure.
 3. The system letterboxes the image at upload time so the displayed aspect ratio is consistent.
 
+### 3D tours
+
+Each listing can optionally embed one third-party 3D virtual tour (Matterport, Kuula, etc.).
+
+1. Open the listing's edit page (`/edit-listing/<id>`).
+2. Paste the tour's share URL into **3D Tour URL**. It must start with `http://` or `https://`. Other schemes (e.g. `javascript:`, `data:`) are silently dropped for safety.
+3. Click **Save**. The property detail page now shows a **View 3D tour** button on the gallery and an embedded tour below it.
+4. To remove the tour, clear the field and save again — the embed disappears.
+
+Self-hosted `.glb` / `.usdz` files are not supported in this iteration; only third-party URL embeds. Only `my.matterport.com` and `kuula.co` are whitelisted by the Content Security Policy. Tours hosted elsewhere will be blocked by the browser even if the URL is saved.
+
 ### Delete a listing
 
 1. From **Manage Listings**, find the listing.

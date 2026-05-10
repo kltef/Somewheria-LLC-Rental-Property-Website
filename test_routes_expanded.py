@@ -800,6 +800,27 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
 
+    def test_property_details_omits_tour_embed_when_url_blank(self):
+        self.seed_property(tour_url="")
+        with patch.object(self.services.appointments, "load", return_value={}):
+            response = self.client.get("/property/prop-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'id="tour-embed"', response.data)
+        self.assertNotIn(b"View 3D tour", response.data)
+        self.assertNotIn(b"<iframe", response.data)
+
+    def test_property_details_renders_tour_embed_when_url_present(self):
+        self.seed_property(tour_url="https://my.matterport.com/show/?m=abc")
+        with patch.object(self.services.appointments, "load", return_value={}):
+            response = self.client.get("/property/prop-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="tour-embed"', response.data)
+        self.assertIn(b"View 3D tour", response.data)
+        self.assertIn(b"https://my.matterport.com/show/?m=abc", response.data)
+        self.assertIn(b"<iframe", response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

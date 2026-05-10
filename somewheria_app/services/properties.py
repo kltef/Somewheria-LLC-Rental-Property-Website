@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 from io import BytesIO
+from urllib.parse import urlparse
 
 import requests
 from PIL import Image, ImageOps
@@ -67,7 +68,37 @@ BLANK_PROPERTY = {
     "custom_amenities": "",
     "photos": [],
     "thumbnail": "",
+    "tour_url": "",
 }
+
+
+# Allow only http(s) URLs for embedded 3D tour iframes. javascript:, data:, vbscript:,
+# and file: schemes can execute script in the parent context or read local resources;
+# a relative or empty value is rejected so we never embed an unintended target.
+_ALLOWED_TOUR_SCHEMES = {"http", "https"}
+
+
+def sanitize_tour_url(raw: str) -> str:
+    """Return a safe http(s) tour URL or "" if the value is missing/unsafe.
+
+    Capped at 2048 chars at the boundary so a hostile form post can't smuggle a
+    multi-megabyte string through to upstream / templates.
+    """
+    if not isinstance(raw, str):
+        return ""
+    value = raw.strip()[:2048]
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return ""
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_TOUR_SCHEMES:
+        return ""
+    if not parsed.netloc:
+        return ""
+    return value
 
 
 class PropertyService:
@@ -301,6 +332,7 @@ class PropertyService:
             ada_accessible = "Unknown"
         normalized["ada_accessible"] = ada_accessible
         normalized.setdefault("thumbnail", normalized["photos"][0] if normalized["photos"] else "")
+        normalized["tour_url"] = sanitize_tour_url(normalized.get("tour_url", ""))
         return normalized
 
     def letterbox_to_16_9(self, image: Image.Image) -> Image.Image:
@@ -379,6 +411,7 @@ class PropertyService:
             "blurb": form.get("blurb", ""),
             "description": form.get("description", ""),
             "included_amenities": amenities,
+            "tour_url": sanitize_tour_url(form.get("tour_url", "")),
         }
 
     def create_property(self, form, actor_email: str) -> str:
@@ -413,6 +446,9 @@ class PropertyService:
                 "blurb": form.get("blurb", current_property.get("blurb")),
                 "description": form.get("description", current_property.get("description")),
                 "custom_amenities": form.get("custom_amenities", "").strip(),
+                "tour_url": sanitize_tour_url(
+                    form.get("tour_url", current_property.get("tour_url", ""))
+                ),
             }
         )
         amenities = list(form.getlist("amenities"))
@@ -437,6 +473,7 @@ class PropertyService:
             "blurb": updated_property.get("blurb"),
             "description": updated_property.get("description"),
             "included_amenities": updated_property.get("included_amenities", []),
+            "tour_url": updated_property.get("tour_url", ""),
         }
         # Verify the upstream accepted the change before logging it as an
         # update — otherwise a 4xx/5xx silently records a phantom change.
