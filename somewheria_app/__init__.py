@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, render_template, request
 from werkzeug.exceptions import HTTPException
@@ -170,7 +170,7 @@ def create_app() -> Flask:
 
         body = (
             "The website hit an unhandled error and served the bare fallback response.\n\n"
-            f"Time:    {datetime.utcnow().isoformat()}Z\n"
+            f"Time:    {datetime.now(timezone.utc).replace(tzinfo=None).isoformat()}Z\n"
             f"Request: {method} {path}\n"
             f"Client:  {remote}\n"
             f"Agent:   {ua}\n"

@@ -1,7 +1,9 @@
 import tempfile
+import threading
 import time
 import unittest
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
@@ -11,6 +13,7 @@ from somewheria_app.services.auth import AuthService
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService
 from somewheria_app.services.storage import FileStorageService
+from somewheria_app.services.tickets import TicketService
 
 
 class DummyForm:
@@ -847,6 +850,104 @@ class RateLimiterTestCase(unittest.TestCase):
 
         self.assertNotIn("stale", limiter._hits)
         self.assertIn("active", limiter._hits)
+
+
+class StorageConcurrencyTestCase(unittest.TestCase):
+    """Regression tests: read-modify-write on the JSON files must be atomic.
+
+    Without the in-method file_lock around load+save, two concurrent writers
+    each load the same baseline, mutate locally, and one save() overwrites
+    the other — silently dropping registrations / role changes.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        base = Path(self.tmpdir.name)
+        self.config = SimpleNamespace(
+            registration_file=base / "registrations.json",
+            user_roles_file=base / "roles.json",
+            renter_profile_file=base / "profiles.json",
+            contracts_file=base / "contracts.json",
+        )
+        self.service = FileStorageService(self.config)
+
+    def _run_concurrently(self, fn, count):
+        # Coordinate a simultaneous start so all threads fight for the lock
+        # rather than running serially by accident of scheduler timing.
+        ready = threading.Barrier(count)
+
+        def worker(i):
+            ready.wait()
+            fn(i)
+
+        with ThreadPoolExecutor(max_workers=count) as pool:
+            list(pool.map(worker, range(count)))
+
+    def test_concurrent_add_pending_registration_does_not_lose_entries(self):
+        N = 16
+        self._run_concurrently(
+            lambda i: self.service.add_pending_registration(
+                {"email": f"user{i}@example.com", "name": f"User {i}"}
+            ),
+            N,
+        )
+        emails = {item["email"] for item in self.service.get_pending_registrations()}
+        self.assertEqual(len(emails), N)
+        self.assertEqual(emails, {f"user{i}@example.com" for i in range(N)})
+
+    def test_concurrent_set_user_role_does_not_lose_entries(self):
+        N = 16
+        self._run_concurrently(
+            lambda i: self.service.set_user_role(f"user{i}@example.com", "renter"),
+            N,
+        )
+        roles = self.service.get_user_roles()
+        self.assertEqual(len(roles), N)
+        for i in range(N):
+            self.assertEqual(roles[f"user{i}@example.com"], "renter")
+
+
+class TicketConcurrencyTestCase(unittest.TestCase):
+    """Regression test: concurrent create_ticket calls must not lose tickets."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        base = Path(self.tmpdir.name)
+        self.config = SimpleNamespace(
+            registration_file=base / "registrations.json",
+            user_roles_file=base / "roles.json",
+            renter_profile_file=base / "profiles.json",
+            contracts_file=base / "contracts.json",
+            tickets_file=base / "tickets.json",
+        )
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.tickets = TicketService(self.config, self.storage, self.notifications)
+
+    def test_concurrent_create_ticket_does_not_lose_tickets(self):
+        N = 12
+        ready = threading.Barrier(N)
+
+        def worker(i):
+            ready.wait()
+            self.tickets.create_ticket(
+                {
+                    "title": f"Issue {i}",
+                    "description": f"Body for ticket #{i}",
+                    "category": "other",
+                    "priority": "normal",
+                },
+                f"user{i}@example.com",
+            )
+
+        with ThreadPoolExecutor(max_workers=N) as pool:
+            list(pool.map(worker, range(N)))
+
+        stored = self.tickets.list_tickets()
+        self.assertEqual(len(stored), N)
+        self.assertEqual({t["title"] for t in stored}, {f"Issue {i}" for i in range(N)})
 
 
 if __name__ == "__main__":

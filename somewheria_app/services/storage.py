@@ -9,7 +9,10 @@ from .console import get_console_logger
 class FileStorageService:
     def __init__(self, config) -> None:
         self.config = config
-        self.file_lock = threading.Lock()
+        # Reentrant so callers can hold the lock across a read-modify-write
+        # cycle (load_json_file → mutate → save_json_file) without deadlocking
+        # on the per-call acquisitions inside those helpers.
+        self.file_lock = threading.RLock()
         self.logger = get_console_logger("storage")
 
     def load_json_file(self, path, default, *, expected_type: type | tuple[type, ...] | None = None):
@@ -61,33 +64,39 @@ class FileStorageService:
         return self.load_json_file(self.config.registration_file, [], expected_type=list)
 
     def add_pending_registration(self, registration: dict) -> None:
-        registrations = self.get_pending_registrations()
-        registrations.append(registration)
-        self.save_json_file(self.config.registration_file, registrations)
+        # Hold the lock across read+write so two concurrent registrations
+        # can't both load the same list, append, and clobber each other.
+        with self.file_lock:
+            registrations = self.get_pending_registrations()
+            registrations.append(registration)
+            self.save_json_file(self.config.registration_file, registrations)
 
     def remove_pending_registration(self, email: str) -> None:
-        registrations = [
-            item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
-        ]
-        self.save_json_file(self.config.registration_file, registrations)
+        with self.file_lock:
+            registrations = [
+                item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
+            ]
+            self.save_json_file(self.config.registration_file, registrations)
 
     def get_user_roles(self) -> dict:
         return self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)
 
     def set_user_role(self, email: str, role: str) -> None:
-        roles = self.get_user_roles()
-        roles[email.lower()] = role
-        self.save_json_file(self.config.user_roles_file, roles)
+        with self.file_lock:
+            roles = self.get_user_roles()
+            roles[email.lower()] = role
+            self.save_json_file(self.config.user_roles_file, roles)
 
     def delete_user_role(self, email: str) -> bool:
         email = email.lower()
-        roles = self.get_user_roles()
-        previous = roles.get(email)
-        # Store a tombstone ("revoked") instead of removing the key outright
-        # so that env-var fallbacks in AuthService.get_user_role cannot
-        # silently restore a deleted user's access on their next login.
-        roles[email] = "revoked"
-        self.save_json_file(self.config.user_roles_file, roles)
+        with self.file_lock:
+            roles = self.get_user_roles()
+            previous = roles.get(email)
+            # Store a tombstone ("revoked") instead of removing the key outright
+            # so that env-var fallbacks in AuthService.get_user_role cannot
+            # silently restore a deleted user's access on their next login.
+            roles[email] = "revoked"
+            self.save_json_file(self.config.user_roles_file, roles)
         return previous is not None and previous != "revoked"
 
     def get_renter_profiles(self) -> dict:
