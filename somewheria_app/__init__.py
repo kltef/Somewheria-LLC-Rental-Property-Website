@@ -22,6 +22,7 @@ from .services.properties import PropertyService
 from .services.registry import Services, set_services
 from .services.security import register_csrf, register_security_headers
 from .services.storage import FileStorageService
+from .services.sql_storage import SqlStorageService
 from .services.tickets import TicketService
 
 
@@ -58,7 +59,15 @@ def create_app() -> Flask:
     setup_console_logger(config.console_log_level, config.log_file)
 
     analytics = AnalyticsTracker(config.analytics_days)
-    storage = FileStorageService(config)
+    # Storage backend is feature-flagged. Default (USE_SQLITE_STORAGE unset
+    # or "0") keeps the JSON-file FileStorageService — same behavior the app
+    # has shipped with. Setting USE_SQLITE_STORAGE=1 swaps in SqlStorageService
+    # which mirrors the same public API and reads/writes a SQLite database at
+    # config.sqlite_file. Migration is via scripts/migrate_from_json.py.
+    if config.use_sqlite_storage:
+        storage = SqlStorageService(config)
+    else:
+        storage = FileStorageService(config)
     notifications = NotificationService(config, analytics)
     appointments = AppointmentService(config)
     auth = AuthService(config, storage)
