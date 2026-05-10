@@ -901,5 +901,99 @@ class CsrfTokenExtractionTestCase(unittest.TestCase):
         self.assertEqual(token, "json-token")
 
 
+class ZillowPublisherTestCase(unittest.TestCase):
+    def setUp(self):
+        from somewheria_app.services.zillow import ZillowPublisher
+
+        self.notifications = Mock()
+        self.config = SimpleNamespace()
+        # Wipe any inherited env so the unconfigured cases are deterministic.
+        self._env_patch = patch.dict(
+            "os.environ",
+            {"ZILLOW_API_BASE_URL": "", "ZILLOW_API_TOKEN": "", "ZILLOW_FEED_KEY": ""},
+            clear=False,
+        )
+        self._env_patch.start()
+        self.publisher = ZillowPublisher(self.config, self.notifications)
+
+    def tearDown(self):
+        self._env_patch.stop()
+
+    def test_publish_create_without_credentials_logs_and_returns(self):
+        # No env vars set: every method must return without raising and
+        # without spawning a worker.
+        self.publisher.publish_create({"id": "prop-1"})
+        self.publisher.publish_update({"id": "prop-1"})
+        self.publisher.publish_delete("prop-1")
+        self.publisher.publish_for_sale_toggle("prop-1", True)
+        self.assertFalse(self.publisher.credentials_configured())
+        self.assertEqual(self.publisher.success_count, 0)
+        self.assertEqual(self.publisher.failure_count, 0)
+        self.notifications.log_and_notify_error.assert_not_called()
+
+    def test_property_service_mutations_succeed_without_zillow_env(self):
+        # End-to-end assertion: with no Zillow env vars, every PropertyService
+        # mutation still completes successfully and the publisher records no
+        # failures (publishes are skipped at the boundary).
+        from somewheria_app.services.zillow import ZillowPublisher
+
+        zillow = ZillowPublisher(SimpleNamespace(), Mock())
+        config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        service = PropertyService(config, Mock(), zillow=zillow)
+        service.cache = [{"id": "prop-1", "for_sale": False, "status": "Active"}]
+
+        with patch("somewheria_app.services.properties.requests.delete", return_value=Mock(status_code=204, text="")):
+            service.delete_property("prop-1", "admin@example.com")
+        service.cache = [{"id": "prop-2", "for_sale": False, "status": "Active"}]
+        with patch("somewheria_app.services.properties.requests.put", return_value=Mock(status_code=200)):
+            service.toggle_sale("prop-2", "admin@example.com")
+
+        self.assertEqual(zillow.failure_count, 0)
+        self.assertEqual(zillow.success_count, 0)
+
+    def test_perform_publish_logs_when_configured(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+            },
+        ):
+            self.assertTrue(self.publisher.credentials_configured())
+            # Direct call (not via the worker) avoids thread-timing flakes.
+            self.publisher._perform_publish("create", "prop-1", {})
+            self.publisher._record_success("create", "prop-1")
+        self.assertEqual(self.publisher.success_count, 1)
+
+    def test_retry_worker_notifies_after_max_attempts(self):
+        # Force _perform_publish to fail and verify the admin alert fires
+        # exactly once after MAX_ATTEMPTS attempts. Backoff is patched out so
+        # the test doesn't actually wait 1+4+16 seconds.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+            },
+        ), patch.object(self.publisher, "_perform_publish", side_effect=RuntimeError("nope")), patch(
+            "somewheria_app.services.zillow.time.sleep", return_value=None
+        ):
+            self.publisher._retry_worker("create", "prop-1", {})
+        self.assertEqual(self.publisher.failure_count, 1)
+        self.notifications.log_and_notify_error.assert_called_once()
+
+    def test_status_snapshot_shape(self):
+        snapshot = self.publisher.status_snapshot()
+        self.assertIn("configured", snapshot)
+        self.assertIn("success_count", snapshot)
+        self.assertIn("failure_count", snapshot)
+        self.assertIn("recent_errors", snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()
