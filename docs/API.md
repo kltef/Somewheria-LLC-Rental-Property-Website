@@ -88,7 +88,7 @@ On success the session is cleared (defense against session fixation) and re-popu
 |---|---|---|---|
 | GET | `/add-listing` | admin+ | Form to create a new listing. |
 | GET | `/edit-listing/<property_id>` | admin+ | Form to edit an existing listing. 404 if the id isn't in the cache. |
-| POST | `/save-edit/<id>` | admin+ | Save a new (`id == "new"`) or existing listing. Form fields match the `BLANK_PROPERTY` schema in `services/properties.py`. Redirects to `/manage-listings` on success; returns plain-text error with status code on failure. |
+| POST | `/save-edit/<id>` | admin+ | Save a new (`id == "new"`) or existing listing. Form fields match the `BLANK_PROPERTY` schema in `services/properties.py`, including `tour_url` (optional http(s) Matterport / Kuula URL; non-http(s) values are silently dropped). Redirects to `/manage-listings` on success; returns plain-text error with status code on failure. |
 | POST | `/upload-image/<uuid>` | admin+ | Upload a single image for property `uuid`. Multipart/form-data with field name `file`. Allowed extensions: jpg, jpeg, png, gif, webp. Max 16 MB; max 24 MP decoded; max 6000px per side. Returns `{success: bool, new_image_url?: str, message?: str}`. |
 | POST | `/image-edit-notify` | admin+ | Notify admin recipient that an image edit occurred. Empty body. Does **not** accept client-supplied URLs (intentional — prevents exfiltration / spam amplification). |
 | POST | `/delete-listing/<id>` | admin+ | Delete the listing `id` from the upstream property store. Redirects to `/manage-listings`. |
