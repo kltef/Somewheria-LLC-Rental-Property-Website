@@ -39,7 +39,12 @@ def _extract_submitted_token() -> str:
     if request.is_json:
         payload = request.get_json(silent=True) or {}
         if isinstance(payload, dict):
-            token = payload.get(CSRF_FORM_FIELD, "") or ""
+            # Coerce non-string values (lists, numbers, dicts) to "" — passing
+            # them to secrets.compare_digest below would raise TypeError and
+            # turn a malformed CSRF body into a 500 instead of a clean 400.
+            candidate = payload.get(CSRF_FORM_FIELD, "")
+            if isinstance(candidate, str):
+                token = candidate
     return token or ""
 
 

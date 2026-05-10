@@ -849,5 +849,57 @@ class RateLimiterTestCase(unittest.TestCase):
         self.assertIn("active", limiter._hits)
 
 
+class CsrfTokenExtractionTestCase(unittest.TestCase):
+    """``_extract_submitted_token`` must always return a string so the
+    ``secrets.compare_digest`` check in ``_csrf_before_request`` can never
+    raise TypeError on a malformed body — that would surface as a 500 instead
+    of the intended 400."""
+
+    def _build_app(self):
+        from flask import Flask
+
+        app = Flask(__name__)
+        app.secret_key = "test"
+        return app
+
+    def _extract(self, app, **request_kwargs):
+        from somewheria_app.services.security import _extract_submitted_token
+
+        with app.test_request_context(**request_kwargs):
+            return _extract_submitted_token()
+
+    def test_returns_string_for_header(self):
+        app = self._build_app()
+        token = self._extract(app, method="POST", headers={"X-CSRF-Token": "abc"})
+        self.assertEqual(token, "abc")
+
+    def test_returns_empty_when_nothing_submitted(self):
+        app = self._build_app()
+        self.assertEqual(self._extract(app, method="POST"), "")
+
+    def test_coerces_non_string_json_token_to_empty(self):
+        app = self._build_app()
+        # JSON body where _csrf_token is a list — passing this to
+        # secrets.compare_digest would raise TypeError. The extractor must
+        # treat it as missing instead.
+        for bogus in ([1, 2, 3], {"nested": "x"}, 42, None):
+            token = self._extract(
+                app,
+                method="POST",
+                json={"_csrf_token": bogus},
+            )
+            self.assertEqual(token, "", f"non-string token {bogus!r} should coerce to ''")
+            self.assertIsInstance(token, str)
+
+    def test_accepts_string_json_token(self):
+        app = self._build_app()
+        token = self._extract(
+            app,
+            method="POST",
+            json={"_csrf_token": "json-token"},
+        )
+        self.assertEqual(token, "json-token")
+
+
 if __name__ == "__main__":
     unittest.main()
