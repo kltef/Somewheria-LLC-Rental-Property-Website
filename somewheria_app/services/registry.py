@@ -13,6 +13,7 @@ class Services:
     auth: object
     properties: object
     tickets: object
+    zillow: object
 
 
 def set_services(app, services: Services) -> None:

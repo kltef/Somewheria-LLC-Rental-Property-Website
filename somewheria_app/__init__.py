@@ -23,6 +23,7 @@ from .services.registry import Services, set_services
 from .services.security import register_csrf, register_security_headers
 from .services.storage import FileStorageService
 from .services.tickets import TicketService
+from .services.zillow import ZillowPublisher
 
 
 def _is_development() -> bool:
@@ -62,7 +63,8 @@ def create_app() -> Flask:
     notifications = NotificationService(config, analytics)
     appointments = AppointmentService(config)
     auth = AuthService(config, storage)
-    properties = PropertyService(config, notifications)
+    zillow = ZillowPublisher(config, notifications)
+    properties = PropertyService(config, notifications, zillow=zillow)
     tickets = TicketService(config, storage, notifications)
 
     set_services(
@@ -76,6 +78,7 @@ def create_app() -> Flask:
             auth=auth,
             properties=properties,
             tickets=tickets,
+            zillow=zillow,
         ),
     )
 

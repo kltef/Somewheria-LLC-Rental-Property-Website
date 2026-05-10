@@ -71,13 +71,29 @@ BLANK_PROPERTY = {
 
 
 class PropertyService:
-    def __init__(self, config, notifications) -> None:
+    def __init__(self, config, notifications, zillow=None) -> None:
         self.config = config
         self.notifications = notifications
+        # Optional dependency: when present, every successful mutation
+        # enqueues a publish-only sync to Zillow. Wrapped in try/except at
+        # each call site so a Zillow failure NEVER blocks the admin op —
+        # the site is the source of truth.
+        self.zillow = zillow
         self.logger = get_console_logger("properties")
         self.cache = []
         self.cache_lock = threading.Lock()
         self.refresh_thread = None
+
+    def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
+        if self.zillow is None:
+            return
+        try:
+            getattr(self.zillow, method_name)(*args, **kwargs)
+        except Exception as exc:
+            # Zillow is publish-only and best-effort. Log and move on; the
+            # admin operation has already succeeded against the source of
+            # truth (the upstream property API).
+            self.logger.warning("Zillow %s enqueue failed: %s", method_name, exc)
 
     def start_background_refresh(self) -> None:
         if self.refresh_thread and self.refresh_thread.is_alive():
@@ -392,6 +408,7 @@ class PropertyService:
             {"property_id": new_id, "address": payload.get("address")},
         )
         self.trigger_background_refresh(actor_email)
+        self._safe_zillow_publish("publish_create", {**payload, "id": new_id})
         return new_id
 
     def update_property(self, property_id: str, form, actor_email: str) -> None:
@@ -448,6 +465,7 @@ class PropertyService:
         response.raise_for_status()
         self.notifications.log_site_change(actor_email, "property_updated", {"property_id": property_id})
         self.trigger_background_refresh(actor_email)
+        self._safe_zillow_publish("publish_update", {**update_payload, "id": property_id})
 
     def delete_property(self, property_id: str, actor_email: str) -> None:
         response = requests.delete(f"{self.config.api_base_url}/properties/{property_id}", timeout=20)
@@ -456,6 +474,7 @@ class PropertyService:
         with self.cache_lock:
             self.cache = [item for item in self.cache if item.get("id") != property_id]
         self.notifications.log_site_change(actor_email, "property_deleted", {"property_id": property_id})
+        self._safe_zillow_publish("publish_delete", property_id)
 
     def toggle_sale(self, property_id: str, actor_email: str) -> None:
         property_info = self.get_property(property_id)
@@ -481,6 +500,7 @@ class PropertyService:
             "property_toggle_sale",
             {"property_id": property_id, "for_sale": new_status},
         )
+        self._safe_zillow_publish("publish_for_sale_toggle", property_id, new_status)
 
     def upload_image(self, property_id: str, uploaded_file, url_root: str, actor_email: str) -> str:
         if not PROPERTY_ID_PATTERN.match(property_id or ""):
