@@ -179,9 +179,18 @@ class PropertyService:
         try:
             response = requests.get(f"{self.config.api_base_url}/propertiesforrent", timeout=20)
             response.raise_for_status()
-            return response.json().get("property_ids", [])
+            payload = response.json()
         except Exception:
             return []
+        # A malformed upstream payload (string, list, dict-of-non-list, …) must
+        # not silently iterate as characters or unrelated keys downstream — that
+        # would spray the upstream API with junk per-id requests.
+        if not isinstance(payload, dict):
+            return []
+        ids = payload.get("property_ids", [])
+        if not isinstance(ids, list):
+            return []
+        return [item for item in ids if isinstance(item, str)]
 
     def fetch_property_record(self, property_id: str):
         # Defense in depth: refuse property IDs that don't match the expected

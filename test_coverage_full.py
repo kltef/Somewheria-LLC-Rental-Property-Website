@@ -196,6 +196,29 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(property_ids, [])
 
+    def test_fetch_property_ids_rejects_non_dict_payload(self):
+        # A misbehaving upstream that returns a top-level list/string must not
+        # silently iterate as characters or unrelated keys downstream.
+        for bogus in (["prop-1", "prop-2"], "prop-1", 42, None):
+            response = Mock()
+            response.json.return_value = bogus
+            with patch("somewheria_app.services.properties.requests.get", return_value=response):
+                self.assertEqual(self.service._fetch_property_ids(), [])
+
+    def test_fetch_property_ids_rejects_non_list_property_ids_field(self):
+        response = Mock()
+        response.json.return_value = {"property_ids": "prop-1"}
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            self.assertEqual(self.service._fetch_property_ids(), [])
+
+    def test_fetch_property_ids_filters_out_non_string_entries(self):
+        response = Mock()
+        response.json.return_value = {"property_ids": ["prop-1", 42, None, "prop-2"]}
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            self.assertEqual(self.service._fetch_property_ids(), ["prop-1", "prop-2"])
+
     def test_fetch_property_record_builds_normalized_payload(self):
         details_response = Mock()
         details_response.json.return_value = {"name": "Maple House"}
