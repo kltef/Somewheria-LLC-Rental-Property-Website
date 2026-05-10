@@ -892,7 +892,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
             response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 401)
-        self.assertIn(b"Only ekbergproperties.com accounts are allowed.", response.data)
+        self.assertIn(b"Only ekbergproperties.com or somewheria.com accounts are allowed.", response.data)
 
     def test_google_callback_rejects_unauthorized_company_user(self):
         self.configure_google()
