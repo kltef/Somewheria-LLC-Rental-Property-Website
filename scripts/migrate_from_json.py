@@ -46,6 +46,7 @@ def migrate(config: AppConfig, *, dry_run: bool = False) -> dict:
     profiles = _read_json(config.renter_profile_file, {})
     contracts = _read_json(config.contracts_file, {})
     tickets = _read_json(config.tickets_file, [])
+    leads = _read_json(config.lead_capture_file, [])
 
     counts = {
         "user_roles": len(roles) if isinstance(roles, dict) else 0,
@@ -55,6 +56,7 @@ def migrate(config: AppConfig, *, dry_run: bool = False) -> dict:
             len(v) for v in (contracts.values() if isinstance(contracts, dict) else [])
         ),
         "tickets": len(tickets) if isinstance(tickets, list) else 0,
+        "lead_captures": len(leads) if isinstance(leads, list) else 0,
     }
 
     if dry_run:
@@ -66,6 +68,7 @@ def migrate(config: AppConfig, *, dry_run: bool = False) -> dict:
     storage.save_renter_profiles(profiles if isinstance(profiles, dict) else {})
     storage.save_renter_contracts(contracts if isinstance(contracts, dict) else {})
     storage._save_tickets(tickets if isinstance(tickets, list) else [])
+    storage._replace_pending_lead_captures(leads if isinstance(leads, list) else [])
     return counts
 
 

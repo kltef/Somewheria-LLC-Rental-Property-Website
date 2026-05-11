@@ -17,6 +17,7 @@ Schema overview
    contract TEXT NOT NULL, PRIMARY KEY (email, idx))``
 - ``tickets(id TEXT PRIMARY KEY, payload TEXT NOT NULL,
    updated_at TEXT, created_at TEXT)``
+- ``lead_captures(email TEXT PRIMARY KEY, payload TEXT NOT NULL)``
 
 Tickets and registrations keep their full dict in a JSON ``payload`` column to
 match the existing flexible shape; promotion to typed columns can come later
@@ -66,6 +67,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         payload    TEXT NOT NULL,
         created_at TEXT,
         updated_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS lead_captures (
+        email   TEXT PRIMARY KEY,
+        payload TEXT NOT NULL
     )
     """,
 )

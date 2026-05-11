@@ -15,6 +15,8 @@ as a routing key — ``config.tickets_file`` routes to the ``tickets`` table.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from .console import get_console_logger
@@ -41,6 +43,8 @@ class SqlStorageService:
             return "renter_contracts"
         if path == self.config.tickets_file:
             return "tickets"
+        if path == self.config.lead_capture_file:
+            return "lead_captures"
         return ""
 
     # ---------------- Generic JSON shim used by TicketService et al --------
@@ -61,6 +65,8 @@ class SqlStorageService:
                 return self.get_renter_profiles()
             if key == "renter_contracts":
                 return self.get_renter_contracts()
+            if key == "lead_captures":
+                return self.get_pending_lead_captures()
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to load %s from sqlite: %s", path, exc)
         return default
@@ -81,6 +87,8 @@ class SqlStorageService:
                 self.save_renter_profiles(data)
             elif key == "renter_contracts":
                 self.save_renter_contracts(data)
+            elif key == "lead_captures":
+                self._replace_pending_lead_captures(data)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to save %s to sqlite: %s", path, exc)
 
@@ -218,3 +226,101 @@ class SqlStorageService:
                         ticket.get("updated_at"),
                     ),
                 )
+
+    # ----------------------------------------------------------- lead_captures
+
+    def get_pending_lead_captures(self) -> list[dict]:
+        with self.db.read() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM lead_captures ORDER BY email"
+            ).fetchall()
+        return [loads(row["payload"]) for row in rows]
+
+    def add_pending_lead_capture(self, lead: dict) -> None:
+        # Mirror FileStorageService: de-duplicate by email so a repeated
+        # submission doesn't bloat the table or flood the admin UI.
+        target_email = (lead.get("email") or "").strip().lower()
+        if not target_email:
+            return
+        with self.db.transaction() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM lead_captures WHERE email = ?", (target_email,)
+            ).fetchone()
+            if existing is not None:
+                return
+            conn.execute(
+                "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
+                (target_email, dumps(lead)),
+            )
+
+    def remove_pending_lead_capture(self, email: str) -> None:
+        email_lc = (email or "").strip().lower()
+        if not email_lc:
+            return
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM lead_captures WHERE email = ?", (email_lc,))
+
+    def _replace_pending_lead_captures(self, data: list[dict]) -> None:
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM lead_captures")
+            for item in data or []:
+                email = (item.get("email") or "").strip().lower()
+                if not email:
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO lead_captures(email, payload) VALUES (?, ?)",
+                    (email, dumps(item)),
+                )
+
+    # --------------------------------------------------------------- binaries
+    #
+    # Binary attachments (signed-contract PDFs at
+    # ``static/uploads/contracts/<uuid>.pdf`` and ticket photos at
+    # ``static/uploads/tickets/<ticket_id>/``) are URL-addressed from inside
+    # ticket / contract JSON payloads, so they continue to live on disk even
+    # when ``USE_SQLITE_STORAGE=1``. These mirror the implementation in
+    # ``FileStorageService`` (atomic temp-file + os.replace + fsync) so the
+    # request handlers don't need to know which backend is wired up.
+
+    def save_binary_file(self, path, data: bytes) -> bool:
+        """Persist ``data`` to ``path`` atomically. Returns True on success."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_name, path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to save binary file %s: %s", path, exc)
+            return False
+
+    def load_binary_file(self, path) -> bytes | None:
+        try:
+            if not path.exists():
+                return None
+            with path.open("rb") as handle:
+                return handle.read()
+        except Exception as exc:
+            self.logger.error("Failed to load binary file %s: %s", path, exc)
+            return None
+
+    def delete_file(self, path) -> bool:
+        try:
+            if path.exists():
+                os.unlink(path)
+                return True
+        except Exception as exc:
+            self.logger.error("Failed to delete file %s: %s", path, exc)
+        return False
