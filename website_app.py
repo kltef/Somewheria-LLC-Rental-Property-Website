@@ -62,7 +62,12 @@ def _env_port() -> int:
         port = int(val)
         if 1 <= port <= 65535:
             return port
-    return 443
+    # Fallback when PORT is unset and there's no TTY (CI, tests, containers
+    # without an explicit PORT). Production deployments set PORT explicitly —
+    # start.sh does this for port 80 via authbind, and systemd units / Docker
+    # set PORT in the environment. 5000 is Flask's conventional dev default
+    # and is what docs/RUNBOOK.md and CLAUDE.md document.
+    return 5000
 
 
 def run_startup_questions() -> dict[str, object]:
