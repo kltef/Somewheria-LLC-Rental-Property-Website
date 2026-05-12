@@ -62,11 +62,12 @@ def _env_port() -> int:
         port = int(val)
         if 1 <= port <= 65535:
             return port
-    return 5000
+    return 80
 
 
 def run_startup_questions() -> dict[str, object]:
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    no_interactive = "--no-interactive" in sys.argv
+    if no_interactive or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return {
             "console_level": os.environ.get("LOG_LEVEL", "INFO"),
             "show_request_logs": True,
