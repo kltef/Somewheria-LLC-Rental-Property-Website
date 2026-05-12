@@ -1,0 +1,224 @@
+"""End-to-end tests for ``SqlStorageService``.
+
+These exercise the SQLite-backed storage backend that activates when
+``USE_SQLITE_STORAGE=1``. The scaffold landed without test coverage and
+subsequently fell behind ``FileStorageService`` (it was missing lead-capture
+and binary-file methods). These tests pin both the schema and the public
+API parity so the feature flag is safe to flip in production.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from somewheria_app.services.sql_storage import SqlStorageService
+
+
+def _make_config(base: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        registration_file=base / "pending_registrations.json",
+        user_roles_file=base / "user_roles.json",
+        renter_profile_file=base / "renter_profiles.json",
+        contracts_file=base / "renter_contracts.json",
+        tickets_file=base / "tickets.json",
+        lead_capture_file=base / "pending_lead_captures.json",
+        sqlite_file=base / "test.sqlite3",
+    )
+
+
+class SqlStorageBaseTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.config = _make_config(self.base)
+        self.storage = SqlStorageService(self.config)
+
+
+class UserRolesTestCase(SqlStorageBaseTestCase):
+    def test_set_and_get_role(self):
+        self.storage.set_user_role("Admin@Example.com", "admin")
+        roles = self.storage.get_user_roles()
+        self.assertEqual(roles, {"admin@example.com": "admin"})
+
+    def test_delete_user_role_records_tombstone(self):
+        self.storage.set_user_role("user@example.com", "renter")
+        existed = self.storage.delete_user_role("user@example.com")
+        self.assertTrue(existed)
+        # Tombstone "revoked" must persist so env-var fallbacks can't silently
+        # restore access. The role isn't removed outright.
+        self.assertEqual(
+            self.storage.get_user_roles(), {"user@example.com": "revoked"}
+        )
+
+    def test_delete_user_role_returns_false_when_absent(self):
+        existed = self.storage.delete_user_role("ghost@example.com")
+        self.assertFalse(existed)
+
+
+class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
+    def test_add_and_get(self):
+        self.storage.add_pending_registration(
+            {"email": "Alice@Example.com", "name": "Alice"}
+        )
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["email"], "Alice@Example.com")
+        self.assertEqual(rows[0]["name"], "Alice")
+
+    def test_remove_pending_registration(self):
+        self.storage.add_pending_registration({"email": "a@example.com"})
+        self.storage.add_pending_registration({"email": "b@example.com"})
+        self.storage.remove_pending_registration("A@Example.com")
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual({r["email"] for r in rows}, {"b@example.com"})
+
+
+class RenterProfilesTestCase(SqlStorageBaseTestCase):
+    def test_save_and_get(self):
+        self.storage.save_renter_profiles(
+            {"renter@example.com": {"name": "Renter R"}}
+        )
+        profiles = self.storage.get_renter_profiles()
+        self.assertEqual(profiles, {"renter@example.com": {"name": "Renter R"}})
+
+
+class RenterContractsTestCase(SqlStorageBaseTestCase):
+    def test_save_and_get_preserves_order(self):
+        contracts = {
+            "renter@example.com": [
+                {"contract_id": "a"},
+                {"contract_id": "b"},
+                {"contract_id": "c"},
+            ]
+        }
+        self.storage.save_renter_contracts(contracts)
+        out = self.storage.get_renter_contracts()
+        self.assertEqual(
+            [c["contract_id"] for c in out["renter@example.com"]],
+            ["a", "b", "c"],
+        )
+
+
+class TicketsTestCase(SqlStorageBaseTestCase):
+    def test_save_and_load_via_path_shim(self):
+        # TicketService calls load_json_file / save_json_file directly with
+        # config.tickets_file. The shim must route to the tickets table.
+        tickets = [
+            {"id": "t1", "title": "leak", "created_at": "2026-01-01"},
+            {"id": "t2", "title": "lock", "created_at": "2026-01-02"},
+        ]
+        self.storage.save_json_file(self.config.tickets_file, tickets)
+        loaded = self.storage.load_json_file(self.config.tickets_file, [])
+        self.assertEqual(sorted(t["id"] for t in loaded), ["t1", "t2"])
+
+
+class LeadCapturesTestCase(SqlStorageBaseTestCase):
+    """Regression coverage for the lead-capture flow under SQLite."""
+
+    def test_add_pending_lead_capture(self):
+        self.storage.add_pending_lead_capture(
+            {"email": "lead@example.com", "submitted_at": "2026-01-01"}
+        )
+        leads = self.storage.get_pending_lead_captures()
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0]["email"], "lead@example.com")
+        self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
+
+    def test_add_pending_lead_capture_dedupes_existing_email(self):
+        # Mirror FileStorageService: repeated submissions don't bloat storage.
+        self.storage.add_pending_lead_capture(
+            {"email": "dup@example.com", "submitted_at": "2026-01-01"}
+        )
+        self.storage.add_pending_lead_capture(
+            {"email": "dup@example.com", "submitted_at": "2026-02-02"}
+        )
+        leads = self.storage.get_pending_lead_captures()
+        self.assertEqual(len(leads), 1)
+        self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
+
+    def test_add_pending_lead_capture_dedupe_is_case_insensitive(self):
+        self.storage.add_pending_lead_capture({"email": "Mixed@Example.com"})
+        self.storage.add_pending_lead_capture({"email": "mixed@example.com"})
+        self.assertEqual(len(self.storage.get_pending_lead_captures()), 1)
+
+    def test_add_pending_lead_capture_ignores_missing_email(self):
+        self.storage.add_pending_lead_capture({"submitted_at": "2026-01-01"})
+        self.assertEqual(self.storage.get_pending_lead_captures(), [])
+
+    def test_remove_pending_lead_capture(self):
+        self.storage.add_pending_lead_capture({"email": "keep@example.com"})
+        self.storage.add_pending_lead_capture({"email": "drop@example.com"})
+        self.storage.remove_pending_lead_capture("DROP@Example.com")
+        leads = self.storage.get_pending_lead_captures()
+        self.assertEqual({lead["email"] for lead in leads}, {"keep@example.com"})
+
+    def test_remove_pending_lead_capture_no_op_on_empty_email(self):
+        self.storage.add_pending_lead_capture({"email": "keep@example.com"})
+        self.storage.remove_pending_lead_capture("")
+        self.assertEqual(len(self.storage.get_pending_lead_captures()), 1)
+
+    def test_load_via_path_shim(self):
+        # Public callers go through the shim with config.lead_capture_file.
+        self.storage.add_pending_lead_capture({"email": "lead@example.com"})
+        loaded = self.storage.load_json_file(self.config.lead_capture_file, [])
+        self.assertEqual([lead["email"] for lead in loaded], ["lead@example.com"])
+
+    def test_save_via_path_shim_replaces_table(self):
+        self.storage.add_pending_lead_capture({"email": "old@example.com"})
+        self.storage.save_json_file(
+            self.config.lead_capture_file,
+            [{"email": "new@example.com", "submitted_at": "2026-03-03"}],
+        )
+        loaded = self.storage.get_pending_lead_captures()
+        self.assertEqual([lead["email"] for lead in loaded], ["new@example.com"])
+
+
+class BinaryFileTestCase(SqlStorageBaseTestCase):
+    """Binary attachments stay on disk even under SQLite storage."""
+
+    def test_save_load_round_trip(self):
+        path = self.base / "uploads" / "contracts" / "abc.pdf"
+        ok = self.storage.save_binary_file(path, b"%PDF-1.4 fake")
+        self.assertTrue(ok)
+        self.assertEqual(self.storage.load_binary_file(path), b"%PDF-1.4 fake")
+
+    def test_save_creates_parent_directories(self):
+        # The contracts/tickets upload directories are pre-created at startup
+        # by AppConfig.ensure_directories, but each ticket gets its own
+        # subdirectory at upload time. mkdir(parents=True) is required.
+        path = self.base / "uploads" / "tickets" / "abc123" / "photo.jpg"
+        ok = self.storage.save_binary_file(path, b"\xff\xd8\xff\xe0")
+        self.assertTrue(ok)
+        self.assertTrue(path.exists())
+
+    def test_load_missing_returns_none(self):
+        self.assertIsNone(self.storage.load_binary_file(self.base / "nope.bin"))
+
+    def test_delete_file_removes_existing(self):
+        path = self.base / "delete_me.bin"
+        self.storage.save_binary_file(path, b"data")
+        self.assertTrue(self.storage.delete_file(path))
+        self.assertFalse(path.exists())
+
+    def test_delete_file_returns_false_when_absent(self):
+        self.assertFalse(self.storage.delete_file(self.base / "ghost.bin"))
+
+
+class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
+    """An unrecognised path must NOT silently corrupt or crash."""
+
+    def test_unknown_load_returns_default(self):
+        out = self.storage.load_json_file(self.base / "unknown.json", [])
+        self.assertEqual(out, [])
+
+    def test_unknown_save_is_a_no_op(self):
+        # Must not raise; the warning is logged but the request flow continues.
+        self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
+
+
+if __name__ == "__main__":
+    unittest.main()
