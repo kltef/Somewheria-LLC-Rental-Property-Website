@@ -5,9 +5,7 @@ from flask import jsonify, render_template, request
 from ..services.auth import (
     get_current_user,
     high_admin_required,
-    is_logged_in,
     login_required,
-    renter_required,
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
