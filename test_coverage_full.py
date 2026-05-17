@@ -3,8 +3,6 @@ import importlib
 import io
 import os
 import runpy
-import shutil
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace

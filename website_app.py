@@ -62,7 +62,7 @@ def _env_port() -> int:
         port = int(val)
         if 1 <= port <= 65535:
             return port
-    return 443
+    return 5000
 
 
 def run_startup_questions() -> dict[str, object]:
