@@ -4,7 +4,7 @@ from collections import deque
 from functools import wraps
 from threading import Lock
 
-from flask import abort, current_app, g, jsonify, request, session
+from flask import abort, current_app, jsonify, request, session
 
 
 CSRF_SESSION_KEY = "_csrf_token"

@@ -1,7 +1,6 @@
 import csv
 import datetime
 import io
-import secrets
 import uuid as uuid_lib
 
 from flask import Response, abort, current_app, jsonify, redirect, render_template, request, send_file, url_for
