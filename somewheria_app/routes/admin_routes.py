@@ -494,12 +494,14 @@ def admin_registrations():
             services.notifications.send_email(
                 "Registration Approved",
                 "Your registration for Somewheria has been approved. You can now log in.",
+                to=email,
             )
         elif action == "reject":
             services.storage.remove_pending_registration(email)
             services.notifications.send_email(
                 "Registration Rejected",
                 "Your registration for Somewheria was not approved at this time.",
+                to=email,
             )
         else:
             return render_template(
@@ -534,6 +536,7 @@ def admin_lead_captures():
                 "Thanks for signing up",
                 "Thanks for signing up to be notified when a new property is listed at Somewheria. "
                 "We'll reach out as soon as something becomes available.",
+                to=email,
             )
         elif action == "reject":
             # Silent reject — no email to the requester.
