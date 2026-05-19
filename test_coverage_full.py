@@ -1155,7 +1155,7 @@ class CoverageStartupExecutionTestCase(unittest.TestCase):
         set_level_mock.assert_called_once_with("INFO")
         fake_services.properties.refresh_cache.assert_called_once()
         fake_services.appointments.print_check_file.assert_called_once()
-        fake_app.run.assert_called_once_with("0.0.0.0", port=5000, debug=False)
+        fake_app.run.assert_called_once_with("0.0.0.0", port=443, debug=False)
 
 
 if __name__ == "__main__":
