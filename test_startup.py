@@ -11,7 +11,18 @@ website_app = importlib.import_module("website_app")
 
 class StartupPromptTestCase(unittest.TestCase):
     def test_run_startup_questions_uses_defaults_when_non_interactive(self):
-        with patch("website_app.sys.stdin.isatty", return_value=False), patch(
+        # Clear PORT/HOST/LOG_LEVEL so the non-interactive branch returns the
+        # in-code defaults instead of whatever the surrounding env happens to
+        # set. patch.dict with clear=False merges; we drop the keys we care
+        # about by passing an explicit removal dict via a clean context.
+        env_overrides = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"PORT", "HOST", "LOG_LEVEL"}
+        }
+        with patch.dict(os.environ, env_overrides, clear=True), patch(
+            "website_app.sys.stdin.isatty", return_value=False
+        ), patch(
             "website_app.sys.stdout.isatty",
             return_value=False,
         ), patch.dict(os.environ, {}, clear=False):

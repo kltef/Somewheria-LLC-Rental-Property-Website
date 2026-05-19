@@ -1140,7 +1140,17 @@ class CoverageStartupExecutionTestCase(unittest.TestCase):
         )
         fake_logger = Mock()
 
-        with patch("somewheria_app.create_app", return_value=fake_app), patch(
+        # Strip PORT/HOST/LOG_LEVEL so the non-interactive defaults branch
+        # returns the in-code defaults rather than whatever the surrounding
+        # env happens to set.
+        env_overrides = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"PORT", "HOST", "LOG_LEVEL"}
+        }
+        with patch.dict(os.environ, env_overrides, clear=True), patch(
+            "somewheria_app.create_app", return_value=fake_app
+        ), patch(
             "somewheria_app.services.console.get_console_logger",
             return_value=fake_logger,
         ), patch("somewheria_app.services.console.set_console_log_level") as set_level_mock, patch(
