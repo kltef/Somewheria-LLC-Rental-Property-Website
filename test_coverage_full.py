@@ -1149,7 +1149,7 @@ class CoverageStartupExecutionTestCase(unittest.TestCase):
         ), patch(
             "sys.stdout.isatty",
             return_value=False,
-        ):
+        ), patch.dict(os.environ, {"PORT": "5000"}):
             runpy.run_module("website_app", run_name="__main__")
 
         set_level_mock.assert_called_once_with("INFO")

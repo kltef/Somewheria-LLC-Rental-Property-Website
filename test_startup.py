@@ -14,7 +14,8 @@ class StartupPromptTestCase(unittest.TestCase):
         with patch("website_app.sys.stdin.isatty", return_value=False), patch(
             "website_app.sys.stdout.isatty",
             return_value=False,
-        ):
+        ), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PORT", None)
             options = website_app.run_startup_questions()
 
         self.assertEqual(options["console_level"], "INFO")
@@ -23,6 +24,15 @@ class StartupPromptTestCase(unittest.TestCase):
         self.assertEqual(options["host"], "0.0.0.0")
         self.assertEqual(options["port"], 443)
         self.assertTrue(options["show_startup_summary"])
+
+    def test_run_startup_questions_reads_port_env(self):
+        with patch("website_app.sys.stdin.isatty", return_value=False), patch(
+            "website_app.sys.stdout.isatty",
+            return_value=False,
+        ), patch.dict(os.environ, {"PORT": "8080"}):
+            options = website_app.run_startup_questions()
+
+        self.assertEqual(options["port"], 8080)
 
     def test_run_startup_questions_reads_interactive_answers(self):
         answers = iter(["debug", "n", "y", "y", "5050", "n"])
