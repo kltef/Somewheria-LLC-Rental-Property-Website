@@ -33,7 +33,7 @@ class StartupPromptTestCase(unittest.TestCase):
         self.assertTrue(options["show_request_logs"])
         self.assertTrue(options["warm_cache"])
         self.assertEqual(options["host"], "0.0.0.0")
-        self.assertEqual(options["port"], 443)
+        self.assertEqual(options["port"], 5000)
         self.assertTrue(options["show_startup_summary"])
 
     def test_run_startup_questions_reads_port_env(self):
