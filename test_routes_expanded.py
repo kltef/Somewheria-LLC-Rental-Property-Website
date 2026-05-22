@@ -145,6 +145,42 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(payload[0]["name"], "Maple House")
         self.assertCountEqual(payload[0]["included_amenities"], ["Parking", "Laundry"])
 
+    def test_for_rent_serves_cached_properties_when_upstream_is_down(self):
+        # Regression: a transient upstream outage used to blank the
+        # listing page because ``_fetch_property_ids`` swallowed the
+        # exception and ``refresh_cache`` then overwrote the cache with
+        # an empty list. Now the upstream failure propagates as
+        # ``UpstreamUnavailable``, the route's try/except catches it,
+        # and the previously-cached properties remain visible.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.seed_property()
+        with patch.object(
+            self.services.properties,
+            "refresh_cache",
+            side_effect=UpstreamUnavailable("upstream down"),
+        ):
+            response = self.client.get("/for-rent")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Maple House", response.data)
+
+    def test_for_rent_json_serves_cached_properties_when_upstream_is_down(self):
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.seed_property()
+        with patch.object(
+            self.services.properties,
+            "refresh_cache",
+            side_effect=UpstreamUnavailable("upstream down"),
+        ):
+            response = self.client.get("/for-rent.json")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["name"], "Maple House")
+
     def test_for_rent_refresh_uses_anonymous_actor_when_logged_out(self):
         with patch.object(self.services.properties, "trigger_background_refresh") as trigger_mock:
             response = self.client.get("/for-rent-refresh.json")

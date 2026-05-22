@@ -188,11 +188,55 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(property_ids, ["prop-1", "prop-2"])
         response.raise_for_status.assert_called_once()
 
-    def test_fetch_property_ids_returns_empty_list_on_failure(self):
-        with patch("somewheria_app.services.properties.requests.get", side_effect=RuntimeError("boom")):
-            property_ids = self.service._fetch_property_ids()
+    def test_fetch_property_ids_raises_upstream_unavailable_on_failure(self):
+        # A network/HTTP failure must surface as ``UpstreamUnavailable`` so
+        # ``refresh_cache`` can leave the existing cache in place. Returning
+        # an empty list here would silently clobber the listings during a
+        # transient upstream outage.
+        from somewheria_app.services.properties import UpstreamUnavailable
 
-        self.assertEqual(property_ids, [])
+        with patch(
+            "somewheria_app.services.properties.requests.get",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service._fetch_property_ids()
+
+    def test_refresh_cache_preserves_existing_cache_on_upstream_failure(self):
+        # The current cache must NOT be blanked when the upstream property
+        # API is temporarily unreachable. ``refresh_cache`` propagates the
+        # ``UpstreamUnavailable`` so the route's try/except can fall back
+        # to serving whatever's already cached.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "_fetch_property_ids",
+            side_effect=UpstreamUnavailable("upstream down"),
+        ):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.refresh_cache()
+
+        self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
+
+    def test_refresh_with_change_log_preserves_cache_on_upstream_failure(self):
+        # ``_refresh_with_change_log`` is invoked from a daemon thread for
+        # admin-triggered refreshes; an upstream blip there must also leave
+        # the cache (and the change log) untouched rather than recording a
+        # spurious "everything was deleted" delta.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            side_effect=UpstreamUnavailable("upstream down"),
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
+        self.notifications.log_site_change.assert_not_called()
 
     def test_fetch_property_ids_rejects_non_dict_payload(self):
         # A misbehaving upstream that returns a top-level list/string must not

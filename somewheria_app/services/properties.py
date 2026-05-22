@@ -40,6 +40,18 @@ class UploadValidationError(ValueError):
     pass
 
 
+class UpstreamUnavailable(RuntimeError):
+    """Raised when the upstream property API cannot be reached.
+
+    Distinguishes a transient network/HTTP failure from a legitimate
+    "upstream has zero properties" response. Callers of
+    :meth:`PropertyService.refresh_cache` rely on this exception to
+    preserve the existing cache during brief outages — without it a 5xx
+    or timeout would silently blank the listing page until the next
+    successful refresh.
+    """
+
+
 def _ensure_safe_image_dimensions(image: Image.Image) -> None:
     width, height = image.size
     if width <= 0 or height <= 0:
@@ -141,6 +153,12 @@ class PropertyService:
             time.sleep(self.config.cache_refresh_interval)
 
     def refresh_cache(self) -> None:
+        # ``fetch_all_properties`` propagates ``UpstreamUnavailable`` from
+        # ``_fetch_property_ids`` on a network / HTTP failure; we let it
+        # bubble up so the caller (route handler, periodic worker) can
+        # decide what to do. The local ``self.cache`` is only reassigned
+        # *after* a successful fetch, so a raise here preserves the
+        # previous cache rather than blanking the listings.
         latest = self.fetch_all_properties()
         with self.cache_lock:
             self.cache = latest
@@ -223,15 +241,24 @@ class PropertyService:
         return [property_info for property_info in results if property_info]
 
     def _fetch_property_ids(self) -> list[str]:
+        # Network / HTTP failure raises ``UpstreamUnavailable`` so callers
+        # (refresh_cache, _refresh_with_change_log) can leave the existing
+        # cache intact instead of overwriting it with the empty list a bare
+        # ``return []`` would produce on a 5xx or timeout.
         try:
             response = requests.get(f"{self.config.api_base_url}/propertiesforrent", timeout=20)
             response.raise_for_status()
             payload = response.json()
-        except Exception:
-            return []
+        except Exception as exc:
+            raise UpstreamUnavailable(
+                f"property id listing unavailable: {exc}"
+            ) from exc
         # A malformed upstream payload (string, list, dict-of-non-list, …) must
         # not silently iterate as characters or unrelated keys downstream — that
-        # would spray the upstream API with junk per-id requests.
+        # would spray the upstream API with junk per-id requests. These shapes
+        # are treated as "upstream returned no properties" rather than a
+        # transient failure, matching the prior behavior for valid-but-empty
+        # responses.
         if not isinstance(payload, dict):
             return []
         ids = payload.get("property_ids", [])
