@@ -974,6 +974,73 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_admin_contracts_export_csv_neutralizes_formula_injection(self):
+        # A malicious admin or hand-edited storage could record a property
+        # name beginning with `=` (or `+`, `-`, `@`). When the resulting CSV
+        # is opened in Excel / LibreOffice / Google Sheets the leading
+        # character is interpreted as the start of a formula. The export
+        # must defuse those cells by prefixing with a single quote.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_renter_contracts",
+            return_value={
+                "=cmd|'/c calc'!A1": [
+                    {
+                        "property_name": "=HYPERLINK(\"http://evil\")",
+                        "start_date": "+1",
+                        "end_date": "-1",
+                        "status": "@SUM(1+1)",
+                        "created_at": "2030-01-01T00:00:00",
+                    }
+                ]
+            },
+        ):
+            response = self.client.get("/admin/contracts/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        data_line = body.splitlines()[1]
+        # Each formula-triggering cell must be prefixed with a single quote.
+        # The renter_email cell contains a comma so csv.writer will quote it;
+        # check the escaped substring instead of the whole field.
+        self.assertIn("'=cmd|'/c calc'!A1", data_line)
+        self.assertIn("'=HYPERLINK", data_line)
+        self.assertIn("'+1", data_line)
+        self.assertIn("'-1", data_line)
+        self.assertIn("'@SUM(1+1)", data_line)
+        # Non-triggering cells stay untouched.
+        self.assertIn("2030-01-01T00:00:00", data_line)
+
+    def test_admin_tickets_export_csv_neutralizes_formula_injection(self):
+        # Any user who can file a ticket can choose its title, which lands
+        # verbatim in the admin CSV export. Without escaping, a title like
+        # ``=cmd|'/c calc'!A1`` becomes an executable formula on open.
+        self.login_as("admin")
+        sample_ticket = {
+            "id": "abc123",
+            "title": "=cmd|'/c calc'!A1",
+            "status": "open",
+            "priority": "normal",
+            "category": "plumbing",
+            "submitted_by": "+renter@example.com",
+            "property_name": "@SUM(1+1)",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-02T00:00:00Z",
+        }
+        with patch.object(self.services.tickets, "list_tickets", return_value=[sample_ticket]):
+            response = self.client.get("/admin/tickets/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        data_line = body.splitlines()[1]
+        self.assertIn("'=cmd|'/c calc'!A1", data_line)
+        self.assertIn("'+renter@example.com", data_line)
+        self.assertIn("'@SUM(1+1)", data_line)
+        # Benign cells are unchanged.
+        self.assertIn("abc123", data_line)
+        self.assertIn("open", data_line)
+
 
     # --- §3.3 Lead capture tests ---
 

@@ -866,6 +866,29 @@ def _csv_filename(prefix: str) -> str:
     return f"{prefix}-{today}.csv"
 
 
+# Leading characters that Excel / LibreOffice / Google Sheets interpret as the
+# start of a formula. A renter who submits a ticket titled ``=cmd|'/c calc'!A1``
+# would otherwise execute that formula when an admin opens the exported file.
+# Defuse by prefixing the cell with a single quote — same mitigation OWASP
+# recommends. Tab and CR are included because some spreadsheet apps treat them
+# as cell-leading triggers via auto-detection.
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value) -> str:
+    """Return ``value`` as a CSV cell that cannot be interpreted as a formula.
+
+    Non-string values are coerced via ``str`` so admins still see the raw data
+    (e.g. integers from JIRA metadata). Empty strings pass through unchanged.
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    if text and text[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + text
+    return text
+
+
 @admin_required
 def admin_contracts_export_csv():
     services = get_services()
@@ -890,12 +913,12 @@ def admin_contracts_export_csv():
         for renter_email, contracts in contracts_by_renter.items():
             for contract in contracts or []:
                 writer.writerow([
-                    renter_email,
-                    contract.get("property_name", ""),
-                    contract.get("start_date", ""),
-                    contract.get("end_date", ""),
-                    contract.get("status", ""),
-                    contract.get("created_at", ""),
+                    _csv_safe(renter_email),
+                    _csv_safe(contract.get("property_name", "")),
+                    _csv_safe(contract.get("start_date", "")),
+                    _csv_safe(contract.get("end_date", "")),
+                    _csv_safe(contract.get("status", "")),
+                    _csv_safe(contract.get("created_at", "")),
                 ])
                 yield buffer.getvalue()
                 buffer.seek(0)
@@ -937,15 +960,15 @@ def admin_tickets_export_csv():
         buffer.truncate(0)
         for ticket in tickets:
             writer.writerow([
-                ticket.get("id", ""),
-                ticket.get("title", ""),
-                ticket.get("status", ""),
-                ticket.get("priority", ""),
-                ticket.get("category", ""),
-                ticket.get("submitted_by", ""),
-                ticket.get("property_name", ""),
-                ticket.get("created_at", ""),
-                ticket.get("updated_at", ""),
+                _csv_safe(ticket.get("id", "")),
+                _csv_safe(ticket.get("title", "")),
+                _csv_safe(ticket.get("status", "")),
+                _csv_safe(ticket.get("priority", "")),
+                _csv_safe(ticket.get("category", "")),
+                _csv_safe(ticket.get("submitted_by", "")),
+                _csv_safe(ticket.get("property_name", "")),
+                _csv_safe(ticket.get("created_at", "")),
+                _csv_safe(ticket.get("updated_at", "")),
             ])
             yield buffer.getvalue()
             buffer.seek(0)
