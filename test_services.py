@@ -140,6 +140,24 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}, {"email": "new@example.com", "name": "New User"}],
         )
 
+    def test_add_pending_registration_returns_true_when_new(self):
+        with patch.object(self.service, "get_pending_registrations", return_value=[]), patch.object(
+            self.service, "save_json_file"
+        ):
+            self.assertTrue(
+                self.service.add_pending_registration({"email": "new@example.com"})
+            )
+
+    def test_add_pending_registration_dedupes_existing_email(self):
+        # A repeated submission (case-insensitive) must not re-save or report
+        # a new row, so the route won't fire a second admin notification.
+        with patch.object(
+            self.service, "get_pending_registrations", return_value=[{"email": "dup@example.com"}]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            result = self.service.add_pending_registration({"email": "DUP@example.com"})
+        self.assertFalse(result)
+        save_json_mock.assert_not_called()
+
     def test_remove_pending_registration_deletes_matching_entry(self):
         with patch.object(
             self.service,

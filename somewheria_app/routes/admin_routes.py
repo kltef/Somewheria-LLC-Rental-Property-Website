@@ -461,15 +461,18 @@ def register():
         reason = request.form.get("reason", "").strip()[:2000]
         if not name or not email or "@" not in email:
             return render_template("register.html", error="Name and a valid email are required.")
-        existing = services.storage.get_pending_registrations()
-        if any(item.get("email", "").lower() == email for item in existing):
-            # Do not re-notify on duplicate to prevent SMTP abuse.
-            return render_template("register.html", success=True)
-        services.storage.add_pending_registration({"name": name, "email": email, "reason": reason})
-        services.notifications.send_email(
-            "New Registration Request",
-            f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+        # Storage de-duplicates by email and reports whether a new row was
+        # stored, so we only notify on a genuinely new request — a duplicate
+        # (even one racing past a separate pre-check) can't trigger a second
+        # admin email.
+        newly_added = services.storage.add_pending_registration(
+            {"name": name, "email": email, "reason": reason}
         )
+        if newly_added:
+            services.notifications.send_email(
+                "New Registration Request",
+                f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+            )
         return render_template("register.html", success=True)
     return render_template("register.html")
 
