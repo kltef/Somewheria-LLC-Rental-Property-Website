@@ -861,6 +861,21 @@ def toggle_sale(id):
         return "Operation failed. Please try again.", 500
 
 
+# Leading characters a spreadsheet (Excel / LibreOffice / Google Sheets)
+# interprets as the start of a formula. Ticket fields (title, submitter, etc.)
+# are populated from a public, unauthenticated submission form, so a value like
+# ``=HYPERLINK(...)`` or ``@SUM(...)`` would execute when an admin opens the
+# export. Prefix such values with a single quote to neutralize them.
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value) -> str:
+    text = "" if value is None else str(value)
+    if text and text[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + text
+    return text
+
+
 def _csv_filename(prefix: str) -> str:
     today = datetime.date.today().isoformat()
     return f"{prefix}-{today}.csv"
@@ -890,12 +905,12 @@ def admin_contracts_export_csv():
         for renter_email, contracts in contracts_by_renter.items():
             for contract in contracts or []:
                 writer.writerow([
-                    renter_email,
-                    contract.get("property_name", ""),
-                    contract.get("start_date", ""),
-                    contract.get("end_date", ""),
-                    contract.get("status", ""),
-                    contract.get("created_at", ""),
+                    _csv_safe(renter_email),
+                    _csv_safe(contract.get("property_name", "")),
+                    _csv_safe(contract.get("start_date", "")),
+                    _csv_safe(contract.get("end_date", "")),
+                    _csv_safe(contract.get("status", "")),
+                    _csv_safe(contract.get("created_at", "")),
                 ])
                 yield buffer.getvalue()
                 buffer.seek(0)
@@ -937,15 +952,15 @@ def admin_tickets_export_csv():
         buffer.truncate(0)
         for ticket in tickets:
             writer.writerow([
-                ticket.get("id", ""),
-                ticket.get("title", ""),
-                ticket.get("status", ""),
-                ticket.get("priority", ""),
-                ticket.get("category", ""),
-                ticket.get("submitted_by", ""),
-                ticket.get("property_name", ""),
-                ticket.get("created_at", ""),
-                ticket.get("updated_at", ""),
+                _csv_safe(ticket.get("id", "")),
+                _csv_safe(ticket.get("title", "")),
+                _csv_safe(ticket.get("status", "")),
+                _csv_safe(ticket.get("priority", "")),
+                _csv_safe(ticket.get("category", "")),
+                _csv_safe(ticket.get("submitted_by", "")),
+                _csv_safe(ticket.get("property_name", "")),
+                _csv_safe(ticket.get("created_at", "")),
+                _csv_safe(ticket.get("updated_at", "")),
             ])
             yield buffer.getvalue()
             buffer.seek(0)
