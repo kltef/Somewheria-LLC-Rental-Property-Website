@@ -974,6 +974,57 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_admin_tickets_export_csv_neutralizes_formula_injection(self):
+        self.login_as("admin")
+        malicious_ticket = {
+            "id": "abc123",
+            "title": "=HYPERLINK(\"http://evil.example\",\"click\")",
+            "status": "open",
+            "priority": "normal",
+            "category": "plumbing",
+            "submitted_by": "+15551234567@example.com",
+            "property_name": "@SUM(1+1)",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-02T00:00:00Z",
+        }
+        with patch.object(self.services.tickets, "list_tickets", return_value=[malicious_ticket]):
+            response = self.client.get("/admin/tickets/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        # Each formula-triggering field must be prefixed with a single quote so
+        # spreadsheet apps render it as literal text rather than evaluating it.
+        self.assertIn("'=HYPERLINK", body)
+        self.assertIn("'+15551234567@example.com", body)
+        self.assertIn("'@SUM(1+1)", body)
+        # And the raw, unescaped formula must NOT appear at the start of a cell.
+        self.assertNotIn(",=HYPERLINK", body)
+
+    def test_admin_contracts_export_csv_neutralizes_formula_injection(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_renter_contracts",
+            return_value={
+                "renter@example.com": [
+                    {
+                        "property_name": "=cmd|'/c calc'!A1",
+                        "start_date": "2030-01-01",
+                        "end_date": "2030-12-31",
+                        "status": "-Active",
+                        "created_at": "2030-01-01T00:00:00",
+                    }
+                ]
+            },
+        ):
+            response = self.client.get("/admin/contracts/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("'=cmd|'/c calc'!A1", body)
+        self.assertIn("'-Active", body)
+        self.assertNotIn(",=cmd", body)
+
 
     # --- §3.3 Lead capture tests ---
 
