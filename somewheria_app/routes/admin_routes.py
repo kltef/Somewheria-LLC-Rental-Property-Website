@@ -642,6 +642,26 @@ def _validate_contract_pdf(uploaded_file) -> bytes | None:
     return raw
 
 
+def _safe_contract_pdf_path(services, pdf_filename: str):
+    """Resolve a stored contract PDF filename to an absolute path inside the
+    upload directory, or return None if the name is missing or escapes the
+    upload root. Filenames are generated server-side as ``<uuid>.pdf`` and
+    should never contain separators, but ``renter_contracts.json`` can be
+    hand-edited, so this re-validates before any filesystem op (download or
+    delete) to prevent path traversal."""
+    if not pdf_filename:
+        return None
+    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
+        return None
+    upload_root = services.config.contract_upload_dir.resolve()
+    pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
+    try:
+        pdf_path.relative_to(upload_root)
+    except ValueError:
+        return None
+    return pdf_path
+
+
 @admin_required
 def admin_contracts():
     services = get_services()
@@ -699,13 +719,15 @@ def admin_contracts():
                     contract_idx = int(contract_index)
                     if renter_email in contracts_data and 0 <= contract_idx < len(contracts_data[renter_email]):
                         removed = contracts_data[renter_email][contract_idx]
-                        # Best-effort delete of the on-disk PDF.
+                        # Best-effort delete of the on-disk PDF. Validate the
+                        # filename the same way the download path does so a
+                        # tampered ``pdf_filename`` can't unlink an arbitrary
+                        # file outside the upload directory.
                         pdf_filename = removed.get("pdf_filename") or ""
-                        if pdf_filename:
+                        safe_pdf_path = _safe_contract_pdf_path(services, pdf_filename)
+                        if safe_pdf_path is not None:
                             try:
-                                services.storage.delete_file(
-                                    services.config.contract_upload_dir / pdf_filename
-                                )
+                                services.storage.delete_file(safe_pdf_path)
                             except Exception:
                                 pass
                         del contracts_data[renter_email][contract_idx]
@@ -795,20 +817,11 @@ def contract_download(contract_id: str):
     if not contract:
         abort(404)
     pdf_filename = contract.get("pdf_filename") or ""
-    if not pdf_filename:
-        abort(404)
-    # Defense-in-depth: only the bare filename component is honoured. The
-    # filename was generated server-side as ``<uuid>.pdf`` so it should never
-    # contain separators, but be paranoid in case of hand-edited storage.
-    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
-        abort(404)
-    pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
-    upload_root = services.config.contract_upload_dir.resolve()
-    try:
-        pdf_path.relative_to(upload_root)
-    except ValueError:
-        abort(404)
-    if not pdf_path.exists():
+    # Defense-in-depth: re-validate the stored filename against path traversal
+    # before touching the filesystem (filenames are server-generated UUIDs but
+    # storage can be hand-edited).
+    pdf_path = _safe_contract_pdf_path(services, pdf_filename)
+    if pdf_path is None or not pdf_path.exists():
         abort(404)
     try:
         return send_file(
