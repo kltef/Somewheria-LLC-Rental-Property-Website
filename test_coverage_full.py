@@ -857,6 +857,45 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         self.assertEqual(client.get("/force-503").status_code, 503)
         self.assertEqual(client.get("/force-504").status_code, 504)
 
+    def test_crash_handler_dedupes_dynamic_route_crashes_by_endpoint(self):
+        # Regression: previously fingerprinted by raw URL path, so every
+        # /thing/<param> value crashed to a distinct fingerprint and the
+        # 10-min cooldown never fired — risking an email storm. Fingerprint
+        # is now keyed on the Flask endpoint, which is stable across
+        # parameter values.
+        import threading
+        import time as time_module
+
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/thing/<param>")
+        def thing_view(param):
+            raise RuntimeError(f"boom-{param}")
+
+        services = app.extensions["somewheria_services"]
+        send_calls: list[tuple[str, str]] = []
+        send_event = threading.Event()
+
+        def fake_send(subject, body, **kwargs):
+            send_calls.append((subject, body))
+            send_event.set()
+            return True
+
+        services.notifications.send_email = fake_send
+
+        client = app.test_client()
+        for value in ("aaa", "bbb", "ccc"):
+            self.assertEqual(client.get(f"/thing/{value}").status_code, 503)
+
+        # The worker that calls send_email is spawned on a daemon thread.
+        # Wait briefly for at least one to fire; the assertion below verifies
+        # that exactly one fired (the others were suppressed by fingerprint).
+        send_event.wait(timeout=2.0)
+        time_module.sleep(0.1)  # give any racing extra threads a chance to land
+        self.assertEqual(len(send_calls), 1)
+
     def test_before_request_skips_static_endpoint(self):
         with self.app.test_client() as client:
             client.get("/static/missing.css")
