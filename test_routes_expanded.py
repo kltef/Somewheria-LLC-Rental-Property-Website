@@ -678,6 +678,27 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Contract removed for renter@example.com.", response.data)
         save_contracts_mock.assert_called_once_with({})
 
+    def test_admin_contracts_delete_rejects_traversal_pdf_filename(self):
+        self.login_as("admin")
+        contracts = {
+            "renter@example.com": [
+                {"property_name": "Maple House", "pdf_filename": "../../../etc/passwd"}
+            ]
+        }
+        with patch.object(self.services.storage, "get_renter_contracts", return_value=contracts), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ), patch.object(self.services.storage, "delete_file") as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={"action": "delete", "renter_email": "renter@example.com", "contract_index": "0"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract removed for renter@example.com.", response.data)
+        # The traversal filename must never reach the filesystem layer.
+        delete_file_mock.assert_not_called()
+
     def test_analytics_dashboard_forbids_standard_admin(self):
         self.login_as("admin")
 
