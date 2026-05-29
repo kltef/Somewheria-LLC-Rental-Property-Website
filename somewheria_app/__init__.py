@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, render_template, request
 from werkzeug.exceptions import HTTPException
@@ -178,16 +178,22 @@ def create_app() -> Flask:
         try:
             path = request.path
             method = request.method
+            endpoint = request.endpoint or ""
             ua = request.headers.get("User-Agent", "")
             remote = request.headers.get("X-Forwarded-For", request.remote_addr or "")
         except Exception:
-            path, method, ua, remote = "(unknown)", "(unknown)", "(unknown)", "(unknown)"
+            path, method, endpoint = "(unknown)", "(unknown)", ""
+            ua, remote = "(unknown)", "(unknown)"
 
-        fingerprint = f"{type(exc).__name__}:{path}"[:200]
+        # Fingerprint by Flask endpoint when available so /property/<uuid> et al.
+        # collapse to a single suppression key instead of one per parameter
+        # value — without this, a sustained crash on a dynamic route would
+        # send one email per unique URL and defeat the 10-min cooldown.
+        fingerprint = f"{type(exc).__name__}:{endpoint or path}"[:200]
 
         body = (
             "The website hit an unhandled error and served the bare fallback response.\n\n"
-            f"Time:    {datetime.utcnow().isoformat()}Z\n"
+            f"Time:    {datetime.now(timezone.utc).replace(tzinfo=None).isoformat()}Z\n"
             f"Request: {method} {path}\n"
             f"Client:  {remote}\n"
             f"Agent:   {ua}\n"
