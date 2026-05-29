@@ -1,521 +1,693 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 flex flex-col items-center py-7 bg-white dark:bg-neutral-950">
-  <div class="max-w-[960px] w-full relative">
-    <div class="bg-white dark:bg-neutral-900 rounded-xl mb-5 relative">
-      <!-- Carousel -->
-      <div id="carouselFrame" class="relative flex justify-center items-center cursor-zoom-in" style="height: 360px; overflow:hidden; touch-action: pan-y;">
-        {% set image_count = property.photos | length %}
-        <img 
-          id="carouselImg" 
-          src="{{ property.thumbnail }}" 
-          alt="Property Image" 
-          class="rounded object-cover w-full h-80 transition-all duration-300 bg-neutral-100 dark:bg-neutral-950"
-          style="max-height: 340px; touch-action: pan-y; will-change: transform;"
-        />
-        <button id="carouselPrev" class="absolute left-1 top-1/2 -translate-y-1/2 px-2 py-2 rounded-full bg-neutral-200 dark:bg-neutral-800 hover:bg-blue-100 dark:hover:bg-blue-900 text-[#111518] dark:text-white" style="z-index:15;">
-          &#8249;
-        </button>
-        <button id="carouselNext" class="absolute right-1 top-1/2 -translate-y-1/2 px-2 py-2 rounded-full bg-neutral-200 dark:bg-neutral-800 hover:bg-blue-100 dark:hover:bg-blue-900 text-[#111518] dark:text-white" style="z-index:15;">
-          &#8250;
-        </button>
-        <div id="carouselCounter" class="absolute top-3 right-4 px-3 py-1 rounded-full bg-black/55 text-white text-xs font-semibold tracking-wide" style="z-index:15;">
-          1 / {{ image_count if image_count > 0 else 1 }}
-        </div>
-        <div class="absolute bottom-2 right-5 flex gap-1">
-          {% for idx in range(image_count) %}
-            <span class="block w-2 h-2 rounded-full {% if idx==0 %}bg-blue-500{% else %}bg-neutral-300 dark:bg-neutral-700{% endif %} carousel-dot" data-idx="{{ idx }}"></span>
-          {% endfor %}
-        </div>
+{# Property Details — Direction C "Split-screen": fixed gallery left, scrolling info right.
+   All selectors are scoped under #pd so the wireframe tokens never leak into the shared
+   header/footer that base.html renders. #}
+<style>
+  #pd {
+    --brand-blue:       #2563eb;
+    --brand-blue-hover: #1d4ed8;
+    --brand-blue-press: #1e40af;
+    --ink:        #111518;
+    --bg-app:     #f5f5f5;
+    --bg-surface: #ffffff;
+    --bg-subtle:  #fafafa;
+    --bg-hover:   #eaedf1;
+    --border:     #e5e5e5;
+    --fg:         #111518;
+    --fg-muted:   #4b5563;
+    --fg-subtle:  #6b7280;
+    --success:    #059669;
+
+    --radius-sm:   0.25rem;
+    --radius-md:   0.5rem;
+    --radius-lg:   0.75rem;
+    --radius-full: 9999px;
+    --shadow-card:  0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px -1px rgba(0,0,0,.1);
+    --shadow-pop:   0 8px 24px rgba(17,21,24,.08);
+    --shadow-sheet: 0 24px 60px rgba(17,21,24,.18);
+
+    --accent:       var(--brand-blue);
+    --accent-hover: var(--brand-blue-hover);
+    --accent-press: var(--brand-blue-press);
+
+    --pad-section: 2.5rem;
+    --gap-block:   1.5rem;
+    --pad-card:    1.5rem;
+    --stat-num:    1.75rem;
+
+    font-family: "Plus Jakarta Sans", "Noto Sans", sans-serif;
+    background: var(--bg-app);
+    color: var(--fg);
+  }
+
+  /* Dark mode — base.html toggles `.dark` on <html>. Re-point the tokens. */
+  html.dark #pd {
+    --ink:        #ffffff;
+    --bg-app:     #0a0a0a;
+    --bg-surface: #171717;
+    --bg-subtle:  #262626;
+    --bg-hover:   #262626;
+    --border:     #262626;
+    --fg:         #ffffff;
+    --fg-muted:   #a3a3a3;
+    --fg-subtle:  #9aa3ad;
+    --accent-press: #93c5fd;
+  }
+
+  #pd * { box-sizing: border-box; }
+
+  /* ---- generic blocks ---- */
+  #pd .crumb {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-size: 0.85rem; font-weight: 600; color: var(--accent);
+    text-decoration: none; cursor: pointer;
+  }
+  #pd .crumb:hover { color: var(--accent-hover); }
+  #pd .sec-title {
+    font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em;
+    color: var(--ink); margin: 0 0 0.85rem;
+  }
+  #pd .body-copy {
+    font-size: 1rem; line-height: 1.6rem; color: var(--fg); margin: 0; text-wrap: pretty;
+  }
+  #pd .muted { color: var(--fg-muted); }
+
+  /* ---- stats bar ---- */
+  #pd .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--bg-surface); overflow: hidden;
+  }
+  #pd .stat { padding: var(--pad-card); border-right: 1px solid var(--border); text-align: left; }
+  #pd .stat:last-child { border-right: none; }
+  #pd .stats.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  #pd .stats.cols-2 .stat { border-right: 1px solid var(--border); }
+  #pd .stats.cols-2 .stat:nth-child(2n) { border-right: none; }
+  #pd .stats.cols-2 .stat:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  #pd .stat-num {
+    font-size: var(--stat-num); font-weight: 800; line-height: 1.1;
+    color: var(--ink); letter-spacing: -0.02em; white-space: nowrap;
+  }
+  #pd .stat-num .stat-unit { font-size: 0.8rem; font-weight: 600; color: var(--fg-subtle); margin-left: 0.2rem; }
+  #pd .stat-label {
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--fg-subtle); margin-top: 0.25rem;
+  }
+  #pd .stat-price .stat-num { color: var(--accent-press); }
+
+  /* ---- amenity chips ---- */
+  #pd .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  #pd .chip {
+    font-size: 0.85rem; font-weight: 500; color: var(--fg);
+    background: var(--bg-subtle); border: 1px solid var(--border);
+    padding: 0.4rem 0.8rem; border-radius: var(--radius-full);
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  #pd .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  /* ---- details grid ---- */
+  #pd .facts {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 0;
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    overflow: hidden; background: var(--bg-surface);
+  }
+  #pd .fact { padding: 0.85rem var(--pad-card); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+  #pd .fact:nth-child(2n) { border-right: none; }
+  #pd .fact:nth-last-child(-n+1) { border-bottom: none; }
+  #pd .fact:nth-last-child(2):nth-child(odd) { border-bottom: none; }
+  #pd .fact-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); }
+  #pd .fact-val { font-size: 0.95rem; font-weight: 600; color: var(--ink); margin-top: 0.2rem; }
+
+  /* ---- map block ---- */
+  #pd .map {
+    position: relative; border: 1px solid var(--border); border-radius: var(--radius-lg);
+    overflow: hidden; min-height: 220px;
+    background:
+      repeating-linear-gradient(0deg, var(--map-grid) 0 1px, transparent 1px 46px),
+      repeating-linear-gradient(90deg, var(--map-grid) 0 1px, transparent 1px 46px),
+      var(--map-bg);
+    --map-grid: #e9ece8; --map-bg: #f1f3ee;
+  }
+  html.dark #pd .map { --map-grid: #1f2937; --map-bg: #111827; }
+  #pd .map::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      linear-gradient(115deg, transparent 46%, var(--map-road) 46% 48%, transparent 48%),
+      linear-gradient(20deg, transparent 62%, var(--map-road) 62% 64%, transparent 64%);
+    --map-road: #dfe3da;
+  }
+  html.dark #pd .map::before { --map-road: #273244; }
+  #pd .map-pin { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -100%); color: var(--accent); filter: drop-shadow(0 4px 6px rgba(0,0,0,.25)); }
+  #pd .map-card {
+    position: absolute; left: 1rem; bottom: 1rem; background: var(--bg-surface);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop); padding: 0.7rem 0.9rem; max-width: 70%;
+  }
+  #pd .map-card .addr { font-size: 0.85rem; font-weight: 600; color: var(--ink); }
+  #pd .map-link { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; color: var(--accent); margin-top: 0.25rem; text-decoration: none; }
+  #pd .map-link:hover { color: var(--accent-hover); }
+
+  /* ---- gallery / carousel ---- */
+  #pd .carousel {
+    position: relative; border-radius: var(--radius-lg); overflow: hidden;
+    background: var(--bg-subtle); cursor: zoom-in;
+  }
+  #pd .carousel .photo-img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    will-change: transform; touch-action: pan-y;
+  }
+  #pd .carousel.is-empty { display: grid; place-items: center; min-height: 320px; }
+  #pd .carousel .empty-note { color: var(--fg-subtle); font-size: 0.9rem; }
+  #pd .car-chip {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 38px; height: 38px; border-radius: 50%; border: none;
+    background: rgba(255,255,255,.85); color: #111518; font-size: 1.2rem; line-height: 1;
+    cursor: pointer; box-shadow: var(--shadow-pop); display: grid; place-items: center; z-index: 5;
+  }
+  #pd .car-chip.left { left: 0.85rem; }
+  #pd .car-chip.right { right: 0.85rem; }
+  #pd .car-counter {
+    position: absolute; right: 0.85rem; bottom: 0.85rem; background: rgba(0,0,0,.55);
+    color: #fff; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-full); z-index: 5;
+  }
+  #pd .car-dots { position: absolute; left: 50%; bottom: 0.85rem; transform: translateX(-50%); display: flex; gap: 0.4rem; z-index: 5; }
+  #pd .car-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.55); cursor: pointer; }
+  #pd .car-dot.is-on { background: #fff; }
+  #pd .thumbs { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex: none; }
+  #pd .thumb { flex: 1; height: 64px; border-radius: var(--radius-sm); overflow: hidden; cursor: pointer; opacity: 0.6; border: 2px solid transparent; background: var(--bg-subtle); padding: 0; }
+  #pd .thumb.is-on { opacity: 1; border-color: var(--accent); }
+  #pd .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* ---- tour ---- */
+  #pd .tour-frame { position: relative; width: 100%; padding-top: 56.25%; overflow: hidden; border-radius: var(--radius-lg); background: var(--bg-subtle); }
+  #pd .tour-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  /* ---- buttons / request card ---- */
+  #pd .btn {
+    appearance: none; border: none; font-family: inherit; font-weight: 700;
+    border-radius: var(--radius-sm); cursor: pointer; padding: 0.7rem 1rem; font-size: 0.95rem;
+    background: var(--accent); color: #fff; transition: background .18s ease;
+  }
+  #pd .btn:hover { background: var(--accent-hover); }
+  #pd .btn.full { width: 100%; }
+  #pd .req-card {
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--bg-surface); box-shadow: var(--shadow-card); padding: var(--pad-card);
+  }
+  #pd .req-price { font-size: 1.65rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
+  #pd .req-price .per { font-size: 0.9rem; font-weight: 600; color: var(--fg-subtle); }
+  #pd .req-meta { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.15rem; }
+
+  /* ---- split-screen scaffold (C) ---- */
+  #pd .split-screen { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; }
+  #pd .split-gallery {
+    position: sticky; top: 0; height: 100vh; background: var(--bg-app);
+    padding: 1.5rem; display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  #pd .split-gallery .carousel { flex: 1; }
+  #pd .split-info { padding: 2.5rem; display: flex; flex-direction: column; gap: var(--pad-section); max-width: 640px; }
+  #pd .split-info section { margin: 0; }
+
+  @media (max-width: 880px) {
+    #pd .split-screen { grid-template-columns: 1fr; }
+    #pd .split-gallery { position: static; height: auto; }
+    #pd .split-gallery .carousel { min-height: 300px; }
+    #pd .split-info { padding: 1.5rem; max-width: none; }
+    #pd .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* ---- appointment modal ---- */
+  #pd .am-scrim {
+    position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.42);
+    display: grid; place-items: center; padding: 1.25rem; animation: pd-am-fade .18s ease;
+  }
+  @keyframes pd-am-fade { from { opacity: 0; } }
+  #pd .am-modal {
+    width: 100%; max-width: 420px; max-height: calc(100vh - 2.5rem);
+    background: var(--bg-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-sheet);
+    display: flex; flex-direction: column; overflow: hidden; animation: pd-am-rise .22s ease;
+  }
+  @keyframes pd-am-rise { from { transform: translateY(8px); opacity: 0; } }
+  #pd .am-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+    padding: 1.1rem 1.25rem 0.9rem; border-bottom: 1px solid var(--border); flex: none;
+  }
+  #pd .am-head .ttl { font-size: 1.1rem; font-weight: 800; color: var(--ink); letter-spacing: -0.01em; }
+  #pd .am-head .sub { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.15rem; }
+  #pd .am-x {
+    appearance: none; border: none; cursor: pointer; width: 32px; height: 32px; flex: none;
+    border-radius: var(--radius-full); background: var(--bg-hover); color: var(--ink); font-size: 1.2rem; line-height: 1;
+  }
+  #pd .am-x:hover { background: var(--border); }
+  #pd .am-body { padding: 1.25rem; overflow: auto; }
+  #pd .am-foot { padding: 1rem 1.25rem; border-top: 1px solid var(--border); flex: none; }
+  #pd .am-field { margin-bottom: 0.85rem; }
+  #pd .am-field label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--fg-muted); margin-bottom: 0.3rem; }
+  #pd .am-field input, #pd .am-field select {
+    width: 100%; height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 0 0.75rem; font-family: inherit; font-size: 0.92rem; background: var(--bg-surface); color: var(--fg);
+  }
+  #pd .am-field input:focus, #pd .am-field select:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+  #pd .am-seg { display: flex; gap: 0.5rem; }
+  #pd .am-seg button {
+    flex: 1; height: 40px; border: 1px solid var(--border); background: var(--bg-surface);
+    border-radius: var(--radius-sm); font: inherit; font-size: 0.88rem; font-weight: 600; color: var(--fg-muted); cursor: pointer;
+  }
+  #pd .am-seg button.is-on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  #pd .am-fine { font-size: 0.74rem; color: var(--fg-subtle); text-align: center; margin: 0.7rem 0 0; }
+  #pd .am-err { font-size: 0.78rem; color: #dc2626; margin: 0.2rem 0 0; min-height: 1rem; }
+  #pd .am-ok { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0.7rem; padding: 2rem 1.5rem; }
+  #pd .am-ok .ck { width: 56px; height: 56px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); display: grid; place-items: center; }
+  #pd .am-ok .h { font-size: 1.15rem; font-weight: 800; color: var(--ink); }
+  #pd .am-ok .p { font-size: 0.88rem; color: var(--fg-muted); max-width: 280px; line-height: 1.4; }
+
+  /* ---- lightbox ---- */
+  #pd .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 320; display: none; align-items: center; justify-content: center; touch-action: pan-y; }
+  #pd .lightbox.is-open { display: flex; }
+  #pd .lightbox img { max-height: 90vh; max-width: 92vw; object-fit: contain; border-radius: var(--radius-md); box-shadow: 0 24px 60px rgba(0,0,0,.6); user-select: none; }
+  #pd .lb-btn { position: absolute; background: transparent; border: none; color: #fff; cursor: pointer; }
+  #pd .lb-close { top: 0.75rem; right: 1rem; font-size: 2rem; line-height: 1; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); }
+  #pd .lb-close:hover, #pd .lb-nav:hover { background: rgba(255,255,255,.1); }
+  #pd .lb-nav { top: 50%; transform: translateY(-50%); font-size: 2.25rem; font-weight: 700; padding: 0.5rem 0.85rem; border-radius: var(--radius-sm); }
+  #pd .lb-nav.left { left: 0.5rem; }
+  #pd .lb-nav.right { right: 0.5rem; }
+  #pd .lb-counter { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); color: #fff; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); }
+</style>
+
+{% set image_count = property.photos | length %}
+{% set maps_url = "https://www.google.com/maps/search/?api=1&query=" ~ (property.address | urlencode) %}
+<div id="pd">
+  <div class="split-screen">
+    <!-- LEFT · fixed gallery -->
+    <div class="split-gallery">
+      <div id="carouselFrame" class="carousel {% if image_count == 0 %}is-empty{% endif %}">
+        {% if image_count > 0 %}
+          <img id="carouselImg" class="photo-img" src="{{ property.thumbnail or property.photos[0] }}" alt="{{ property.name }} photo" />
+          <button id="carouselPrev" class="car-chip left" type="button" aria-label="Previous photo" style="display:none">&#8249;</button>
+          <button id="carouselNext" class="car-chip right" type="button" aria-label="Next photo">&#8250;</button>
+          <div id="carouselCounter" class="car-counter">1 / {{ image_count }}</div>
+          <div class="car-dots">
+            {% for idx in range(image_count) %}
+              <span class="car-dot {% if idx == 0 %}is-on{% endif %} carousel-dot" data-idx="{{ idx }}"></span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <span class="empty-note">No photos available</span>
+        {% endif %}
       </div>
-      {% if property.tour_url %}
-        <div class="px-4 pt-3 pb-1 flex justify-end">
-          <a href="#tour-embed" class="inline-flex items-center gap-2 bg-blue-600 text-white text-sm font-semibold px-3 py-2 rounded hover:bg-blue-700">
-            View 3D tour
-          </a>
+      {% if image_count > 1 %}
+        <div class="thumbs">
+          {% for photo in property.photos %}
+            <button type="button" class="thumb {% if loop.index0 == 0 %}is-on{% endif %}" data-idx="{{ loop.index0 }}" aria-label="View photo {{ loop.index }}">
+              <img src="{{ photo }}" alt="" loading="lazy" />
+            </button>
+          {% endfor %}
         </div>
       {% endif %}
     </div>
-    {% if property.tour_url %}
-      <section id="tour-embed" class="px-4 pt-2 pb-6">
-        <h2 class="text-[#111518] dark:text-white text-[22px] font-bold pb-3 pt-2">3D virtual tour</h2>
-        <div class="relative w-full overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-900" style="padding-top: 56.25%;">
-          <iframe
-            src="{{ property.tour_url }}"
-            title="3D virtual tour of {{ property.name }}"
-            class="absolute inset-0 w-full h-full border-0"
-            loading="lazy"
-            allow="fullscreen; xr-spatial-tracking"
-            allowfullscreen
-            referrerpolicy="no-referrer"
-            sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+
+    <!-- RIGHT · scrolling info -->
+    <div class="split-info">
+      <div>
+        <a class="crumb" href="{{ url_for('for_rent') }}">&#8249; Back to listings</a>
+        <h1 style="font-size:1.8rem;font-weight:800;margin:0.6rem 0 0.25rem;letter-spacing:-0.02em;color:var(--ink)">{{ property.name }}</h1>
+        <div class="muted" style="display:inline-flex;align-items:center;gap:0.35rem;font-size:0.95rem">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+          {{ property.address }}
+        </div>
+        {% if property.tour_url %}
+          <div style="margin-top:0.75rem">
+            <a href="#tour-embed" class="btn" style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.45rem 0.85rem">View 3D tour</a>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="stats cols-2">
+        <div class="stat"><div class="stat-num">{{ property.bedrooms }}</div><div class="stat-label">Bedrooms</div></div>
+        <div class="stat"><div class="stat-num">{{ property.bathrooms }}</div><div class="stat-label">Bathrooms</div></div>
+        <div class="stat"><div class="stat-num">{{ property.sqft }}<span class="stat-unit">sq ft</span></div><div class="stat-label">Interior</div></div>
+        <div class="stat stat-price"><div class="stat-num">${{ property.rent }}<span class="stat-unit">/mo</span></div><div class="stat-label">Rent</div></div>
+      </div>
+
+      <section>
+        <h2 class="sec-title">About this home</h2>
+        <p class="body-copy">{{ property.description or property.blurb }}</p>
+      </section>
+
+      <section>
+        <h2 class="sec-title">Amenities</h2>
+        {% if property.included_amenities %}
+          <div class="chips">
+            {% for amenity in property.included_amenities %}
+              <span class="chip"><span class="dot"></span>{{ amenity }}</span>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="body-copy muted">No amenities listed.</p>
+        {% endif %}
+      </section>
+
+      <section>
+        <h2 class="sec-title">Property Details</h2>
+        <div class="facts">
+          <div class="fact"><div class="fact-label">Lease term</div><div class="fact-val">{{ property.lease_length }}</div></div>
+          <div class="fact"><div class="fact-label">Deposit</div><div class="fact-val">${{ property.deposit }}</div></div>
+          <div class="fact"><div class="fact-label">Pets allowed</div><div class="fact-val">{{ property.pets_allowed }}</div></div>
+          <div class="fact"><div class="fact-label">ADA Accessible</div><div class="fact-val">{{ property.ada_accessible }}</div></div>
         </div>
       </section>
-    {% endif %}
-    <!-- Main content -->
-    <h1 class="text-[#111518] dark:text-white text-[22px] font-bold tracking-tight px-4 pb-3 pt-5">{{ property.name }}</h1>
-    <p class="text-[#111518] dark:text-white text-base pb-3 pt-1 px-4">{{ property.blurb }}</p>
-    <h2 class="text-[#111518] dark:text-white text-[22px] font-bold px-4 pb-3 pt-5">Property Details</h2>
-    <div class="p-4 grid grid-cols-2">
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pr-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Address</p><p class="text-[#111518] dark:text-white text-sm">{{ property.address }}</p><a href="https://www.google.com/maps/search/?api=1&query={{ property.address | urlencode }}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 mt-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"><svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>Open in Maps</a></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Rent</p><p class="text-[#111518] dark:text-white text-sm">${{ property.rent }}/month</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pr-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Deposit</p><p class="text-[#111518] dark:text-white text-sm">${{ property.deposit }}</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Square Footage</p><p class="text-[#111518] dark:text-white text-sm">{{ property.sqft }} sq ft</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pr-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Bedrooms</p><p class="text-[#111518] dark:text-white text-sm">{{ property.bedrooms }}</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Bathrooms</p><p class="text-[#111518] dark:text-white text-sm">{{ property.bathrooms }}</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pr-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Lease Term</p><p class="text-[#111518] dark:text-white text-sm">{{ property.lease_length }}</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Amenities</p><p class="text-[#111518] dark:text-white text-sm">{{ property.included_amenities|join(', ') }}</p></div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pr-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">Pets Allowed</p>
-        <p class="text-[#111518] dark:text-white text-sm">
-          {% if property.pets_allowed is defined %}
-            {{ property.pets_allowed }}
-          {% else %}
-            Unknown
-          {% endif %}
-        </p>
-      </div>
-      <div class="flex flex-col gap-1 border-t border-neutral-200 dark:border-neutral-800 py-4 pl-2"><p class="text-gray-600 dark:text-neutral-400 text-sm">ADA Accessible</p>
-        <p class="text-[#111518] dark:text-white text-sm">
-          {% if property.ada_accessible is defined %}
-            {{ property.ada_accessible }}
-          {% else %}
-            Unknown
-          {% endif %}
-        </p>
-      </div>
-    </div>
-    <h2 class="text-[#111518] dark:text-white text-[22px] font-bold px-4 pb-3 pt-5">Description</h2>
-    <p class="text-[#111518] dark:text-white text-base pb-3 pt-1 px-4">{{ property.description or property.blurb }}</p>
-    <!-- Request Appointment Button -->
-    <div class="px-4 pt-6 flex justify-end">
-      <button id="openCalModal" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 font-bold shadow">
-        Request Appointment
-      </button>
-    </div>
-    <!-- Lightbox overlay (§3.2) -->
-    <div id="lightbox" class="fixed inset-0 bg-black/90 z-[100] hidden items-center justify-center" style="touch-action: pan-y;">
-      <button id="lightboxClose" aria-label="Close" class="absolute top-3 right-4 text-white text-3xl font-bold leading-none px-3 py-1 rounded hover:bg-white/10">&times;</button>
-      <button id="lightboxPrev" aria-label="Previous image" class="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 text-white text-4xl font-bold px-3 py-2 rounded hover:bg-white/10">&#8249;</button>
-      <button id="lightboxNext" aria-label="Next image" class="absolute right-2 sm:right-6 top-1/2 -translate-y-1/2 text-white text-4xl font-bold px-3 py-2 rounded hover:bg-white/10">&#8250;</button>
-      <img id="lightboxImg" src="" alt="Property image" class="max-h-[90vh] max-w-[92vw] object-contain rounded shadow-2xl select-none" draggable="false"/>
-      <div id="lightboxCounter" class="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-black/55 text-white text-xs font-semibold tracking-wide">1 / 1</div>
-    </div>
-    <!-- Calendar Modal -->
-    <div id="calModal" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 hidden">
-      <div class="bg-white dark:bg-neutral-900 rounded p-6 w-full max-w-[370px] shadow">
-        <div class="flex justify-between items-center mb-5">
-          <div class="text-lg font-bold text-[#111518] dark:text-white">Request an Appointment</div>
-          <button onclick="closeCalModal()" class="bg-neutral-200 dark:bg-neutral-800 rounded px-2 py-1 text-lg leading-none text-[#111518] dark:text-white">&times;</button>
-        </div>
-        <form id="apptForm">
-          <label for="apptName" class="font-semibold text-sm text-[#111518] dark:text-white">Your Name:</label>
-          <input id="apptName" type="text" required class="w-full border rounded mb-3 p-2 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"/>
-          <label class="font-semibold text-sm block mb-2 text-[#111518] dark:text-white">Choose Date:</label>
-          <input id="apptDate" name="date" type="date" min="{{ nowdate }}" required class="mb-3 border rounded p-2 w-full bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"/>
-          <label for="contactMethod" class="font-semibold text-sm block mb-2 text-[#111518] dark:text-white">Preferred Contact Method:</label>
-          <select id="contactMethod" name="contactMethod" class="w-full border rounded mb-3 p-2 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
-            <option value="email">Email</option>
-            <option value="text">Text</option>
-          </select>
-          <div id="contactInfoContainer">
-            <label for="contactInfo" class="font-semibold text-sm block mb-2 text-[#111518] dark:text-white">Your Email:</label>
-            <input id="contactInfo" type="email" name="contactInfo" required class="w-full border rounded mb-3 p-2 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"/>
+
+      {% if property.tour_url %}
+        <section id="tour-embed">
+          <h2 class="sec-title">3D virtual tour</h2>
+          <div class="tour-frame">
+            <iframe
+              src="{{ property.tour_url }}"
+              title="3D virtual tour of {{ property.name }}"
+              loading="lazy"
+              allow="fullscreen; xr-spatial-tracking"
+              allowfullscreen
+              referrerpolicy="no-referrer"
+              sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
           </div>
-          <div id="apptDateFeedback" class="text-red-400 text-xs mb-2"></div>
-          <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 w-full">Request Booking</button>
-          <div id="apptSubmitFeedback" class="text-green-400 text-xs mt-2"></div>
-        </form>
+        </section>
+      {% endif %}
+
+      <section>
+        <h2 class="sec-title">Location</h2>
+        <div class="map">
+          <span class="map-pin"><svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg></span>
+          <div class="map-card">
+            <div class="addr">{{ property.address }}</div>
+            <a class="map-link" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+              Open in Maps
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <div class="req-card" style="position:sticky;bottom:1rem">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div style="flex:1">
+            <div class="req-price" style="font-size:1.3rem">${{ property.rent }}<span class="per">/mo</span></div>
+            <div class="req-meta">{{ property.lease_length }} lease &middot; ${{ property.deposit }} deposit</div>
+          </div>
+          <button id="openCalModal" class="btn" type="button">Request Appointment</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="lightbox">
+    <button id="lightboxClose" class="lb-btn lb-close" type="button" aria-label="Close">&times;</button>
+    <button id="lightboxPrev" class="lb-btn lb-nav left" type="button" aria-label="Previous image">&#8249;</button>
+    <button id="lightboxNext" class="lb-btn lb-nav right" type="button" aria-label="Next image">&#8250;</button>
+    <img id="lightboxImg" src="" alt="Property image" draggable="false" />
+    <div id="lightboxCounter" class="lb-counter">1 / 1</div>
+  </div>
+
+  <!-- Appointment modal -->
+  <div id="calModal" class="am-scrim" style="display:none">
+    <div class="am-modal" role="dialog" aria-modal="true" aria-labelledby="apptTitle">
+      <div class="am-head">
+        <div>
+          <div class="ttl" id="apptTitle">Request an Appointment</div>
+          <div class="sub">{{ property.name }}</div>
+        </div>
+        <button id="closeCalModal" class="am-x" type="button" aria-label="Close">&times;</button>
+      </div>
+      <form id="apptForm">
+        <div class="am-body">
+          <div class="am-field">
+            <label for="apptName">Your name</label>
+            <input id="apptName" type="text" required placeholder="Jordan Rivera" />
+          </div>
+          <div class="am-field">
+            <label for="apptDate">Choose a date</label>
+            <input id="apptDate" name="date" type="date" min="{{ nowdate }}" required />
+          </div>
+          <div class="am-field">
+            <label>Preferred contact method</label>
+            <div class="am-seg" id="contactSeg">
+              <button type="button" class="is-on" data-method="email">Email</button>
+              <button type="button" data-method="text">Text</button>
+            </div>
+          </div>
+          <div class="am-field" style="margin-bottom:0">
+            <label id="contactInfoLabel" for="contactInfo">Your email</label>
+            <input id="contactInfo" name="contactInfo" type="email" required placeholder="you@example.com" />
+          </div>
+          <div id="apptDateFeedback" class="am-err"></div>
+        </div>
+        <div class="am-foot">
+          <button type="submit" class="btn full">Request Booking</button>
+          <p class="am-fine">Free to request — we'll confirm within a day.</p>
+          <div id="apptSubmitFeedback" class="am-err" style="text-align:center"></div>
+        </div>
+      </form>
+      <div id="apptSuccess" class="am-ok" style="display:none">
+        <div class="ck">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <div class="h">Appointment requested!</div>
+        <div class="p">We'll confirm your viewing of {{ property.name }} within a day — keep an eye on your inbox.</div>
+        <button id="successDone" class="btn" type="button" style="margin-top:0.4rem">Done</button>
       </div>
     </div>
   </div>
 </div>
+
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  // Carousel with swipe support
+document.addEventListener('DOMContentLoaded', function () {
   // eslint-disable-next-line
   var photos = {{ (property.photos or [])|tojson }};
-  let currentIdx = 0;
-  const imgEl = document.getElementById('carouselImg');
-  const prevBtn = document.getElementById('carouselPrev');
-  const nextBtn = document.getElementById('carouselNext');
-  const counterEl = document.getElementById('carouselCounter');
-  const dots = document.querySelectorAll('.carousel-dot');
-  
-  const carouselFrame = document.getElementById('carouselFrame');
-  let pointerStartX = null;
-  let pointerStartY = null;
-  let pointerCurrentX = null;
-  let isPointerActive = false;
-  let isSwipeLocked = false;
-  const swipeThreshold = 45;
-  const swipeVerticalAllowance = 70;
-  
+  // eslint-disable-next-line
+  var bookedDates = {{ booked_dates|tojson }};
+
+  var currentIdx = 0;
+  var imgEl = document.getElementById('carouselImg');
+  var prevBtn = document.getElementById('carouselPrev');
+  var nextBtn = document.getElementById('carouselNext');
+  var counterEl = document.getElementById('carouselCounter');
+  var dots = document.querySelectorAll('.carousel-dot');
+  var thumbs = document.querySelectorAll('.thumb');
+  var carouselFrame = document.getElementById('carouselFrame');
+
+  // ---- Carousel ----
   function updateCarousel() {
-    if (photos.length === 0) return;
-    
-    const photo = photos[currentIdx];
+    if (photos.length === 0 || !imgEl) return;
     imgEl.style.transform = 'translateX(0)';
     imgEl.style.opacity = '1';
     imgEl.style.transition = 'transform 0.3s ease, opacity 0.25s ease';
+    imgEl.src = photos[currentIdx];
 
-    if (photo && photo.startsWith('data:image')) {
-      imgEl.src = photo;
-    } else if (photo) {
-      imgEl.src = photo;
-    }
-    
-    // Update dots
-    dots.forEach((dot, idx) => {
-      dot.classList.toggle('bg-blue-500', idx === currentIdx);
-      dot.classList.toggle('bg-neutral-300', idx !== currentIdx);
-      dot.classList.toggle('dark:bg-neutral-700', idx !== currentIdx);
-    });
-    
-    // Update button states
-    prevBtn.style.display = currentIdx === 0 ? 'none' : 'block';
-    nextBtn.style.display = currentIdx === photos.length - 1 ? 'none' : 'block';
+    dots.forEach(function (dot, idx) { dot.classList.toggle('is-on', idx === currentIdx); });
+    thumbs.forEach(function (thumb, idx) { thumb.classList.toggle('is-on', idx === currentIdx); });
 
-    if (counterEl) {
-      const totalPhotos = photos.length || 1;
-      const currentPhoto = photos.length === 0 ? 1 : currentIdx + 1;
-      counterEl.textContent = `${currentPhoto} / ${totalPhotos}`;
-    }
+    if (prevBtn) prevBtn.style.display = currentIdx === 0 ? 'none' : 'grid';
+    if (nextBtn) nextBtn.style.display = currentIdx === photos.length - 1 ? 'none' : 'grid';
+    if (counterEl) counterEl.textContent = (currentIdx + 1) + ' / ' + photos.length;
   }
-  
-  function nextSlide() {
-    if (currentIdx < photos.length - 1) {
-      currentIdx++;
-      updateCarousel();
-    }
+  function nextSlide() { if (currentIdx < photos.length - 1) { currentIdx++; updateCarousel(); } }
+  function prevSlide() { if (currentIdx > 0) { currentIdx--; updateCarousel(); } }
+
+  if (prevBtn) prevBtn.addEventListener('click', function (e) { e.stopPropagation(); prevSlide(); });
+  if (nextBtn) nextBtn.addEventListener('click', function (e) { e.stopPropagation(); nextSlide(); });
+  dots.forEach(function (dot, idx) { dot.addEventListener('click', function (e) { e.stopPropagation(); currentIdx = idx; updateCarousel(); }); });
+  thumbs.forEach(function (thumb, idx) { thumb.addEventListener('click', function () { currentIdx = idx; updateCarousel(); }); });
+
+  // ---- Swipe / drag on the main frame ----
+  var pStartX = null, pStartY = null, pCurX = null, pActive = false, pLocked = false;
+  var swipeThreshold = 45, swipeVAllow = 70;
+  function resetSwipe() {
+    if (imgEl) { imgEl.style.transform = 'translateX(0)'; imgEl.style.opacity = '1'; imgEl.style.transition = 'transform 0.2s ease, opacity 0.2s ease'; }
+    pStartX = pStartY = pCurX = null; pActive = false; pLocked = false;
   }
-  
-  function prevSlide() {
-    if (currentIdx > 0) {
-      currentIdx--;
-      updateCarousel();
-    }
-  }
-  
-  // Button event listeners
-  if (prevBtn) prevBtn.addEventListener('click', prevSlide);
-  if (nextBtn) nextBtn.addEventListener('click', nextSlide);
-  
-  // Dot navigation
-  dots.forEach((dot, idx) => {
-    dot.addEventListener('click', () => {
-      currentIdx = idx;
-      updateCarousel();
-    });
-  });
-  
-  function resetSwipeState() {
-    if (imgEl) {
-      imgEl.style.transform = 'translateX(0)';
-      imgEl.style.opacity = '1';
-      imgEl.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
-    }
-    pointerStartX = null;
-    pointerStartY = null;
-    pointerCurrentX = null;
-    isPointerActive = false;
-    isSwipeLocked = false;
-  }
-
-  function startSwipe(clientX, clientY) {
-    pointerStartX = clientX;
-    pointerStartY = clientY;
-    pointerCurrentX = clientX;
-    isPointerActive = true;
-    isSwipeLocked = false;
-  }
-
-  function trackSwipe(clientX, clientY) {
-    if (!isPointerActive || pointerStartX === null || pointerStartY === null) {
-      return false;
-    }
-
-    const deltaX = clientX - pointerStartX;
-    const deltaY = clientY - pointerStartY;
-    pointerCurrentX = clientX;
-
-    if (!isSwipeLocked) {
-      isSwipeLocked = Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaY) < swipeVerticalAllowance;
-    }
-
-    if (isSwipeLocked && imgEl) {
-      const limitedDeltaX = Math.max(-72, Math.min(72, deltaX * 0.35));
-      const opacityShift = Math.max(0.82, 1 - (Math.abs(limitedDeltaX) / 220));
+  function startSwipe(x, y) { pStartX = x; pStartY = y; pCurX = x; pActive = true; pLocked = false; }
+  function trackSwipe(x, y) {
+    if (!pActive || pStartX === null) return false;
+    var dx = x - pStartX, dy = y - pStartY; pCurX = x;
+    if (!pLocked) pLocked = Math.abs(dx) > Math.abs(dy) && Math.abs(dy) < swipeVAllow;
+    if (pLocked && imgEl) {
+      var lim = Math.max(-72, Math.min(72, dx * 0.35));
       imgEl.style.transition = 'none';
-      imgEl.style.transform = `translateX(${limitedDeltaX}px)`;
-      imgEl.style.opacity = String(opacityShift);
+      imgEl.style.transform = 'translateX(' + lim + 'px)';
+      imgEl.style.opacity = String(Math.max(0.82, 1 - (Math.abs(lim) / 220)));
     }
-
-    return isSwipeLocked;
+    return pLocked;
   }
-
   function finishSwipe() {
-    if (!isPointerActive || pointerStartX === null || pointerCurrentX === null) {
-      resetSwipeState();
-      return;
-    }
-
-    const totalDeltaX = pointerCurrentX - pointerStartX;
-
-    if (Math.abs(totalDeltaX) >= swipeThreshold) {
-      if (totalDeltaX < 0) {
-        nextSlide();
-      } else {
-        prevSlide();
-      }
-    }
-
-    resetSwipeState();
+    if (!pActive || pStartX === null || pCurX === null) { resetSwipe(); return; }
+    var total = pCurX - pStartX;
+    if (Math.abs(total) >= swipeThreshold) { total < 0 ? nextSlide() : prevSlide(); }
+    resetSwipe();
   }
-
-  // Touch and drag support
-  if (carouselFrame) {
-    carouselFrame.addEventListener('touchstart', (e) => {
-      const touch = e.touches[0];
-      if (!touch) {
-        return;
-      }
-
-      startSwipe(touch.clientX, touch.clientY);
-    }, { passive: true });
-
-    carouselFrame.addEventListener('touchmove', (e) => {
-      const touch = e.touches[0];
-      if (!touch) {
-        return;
-      }
-
-      if (trackSwipe(touch.clientX, touch.clientY)) {
-        e.preventDefault();
-      }
-    }, { passive: false });
-
+  if (carouselFrame && photos.length > 0) {
+    carouselFrame.addEventListener('touchstart', function (e) { var t = e.touches[0]; if (t) startSwipe(t.clientX, t.clientY); }, { passive: true });
+    carouselFrame.addEventListener('touchmove', function (e) { var t = e.touches[0]; if (t && trackSwipe(t.clientX, t.clientY)) e.preventDefault(); }, { passive: false });
     carouselFrame.addEventListener('touchend', finishSwipe);
-    carouselFrame.addEventListener('touchcancel', resetSwipeState);
-
-    carouselFrame.addEventListener('mousedown', (e) => {
-      startSwipe(e.clientX, e.clientY);
-    });
-
-    carouselFrame.addEventListener('mousemove', (e) => {
-      if (!isPointerActive) {
-        return;
-      }
-
-      trackSwipe(e.clientX, e.clientY);
-    });
-
+    carouselFrame.addEventListener('touchcancel', resetSwipe);
+    carouselFrame.addEventListener('mousedown', function (e) { startSwipe(e.clientX, e.clientY); });
+    carouselFrame.addEventListener('mousemove', function (e) { if (pActive) trackSwipe(e.clientX, e.clientY); });
     carouselFrame.addEventListener('mouseup', finishSwipe);
-    carouselFrame.addEventListener('mouseleave', resetSwipeState);
+    carouselFrame.addEventListener('mouseleave', resetSwipe);
   }
-  
-  // Keyboard navigation
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') {
-      prevSlide();
-    } else if (e.key === 'ArrowRight') {
-      nextSlide();
-    }
+
+  document.addEventListener('keydown', function (e) {
+    if (lightboxOpen) return;
+    if (e.key === 'ArrowLeft') prevSlide();
+    else if (e.key === 'ArrowRight') nextSlide();
   });
-  
-  // Initialize carousel
   updateCarousel();
 
-  // --- §3.2 Lightbox ---
-  const lightbox = document.getElementById('lightbox');
-  const lightboxImg = document.getElementById('lightboxImg');
-  const lightboxClose = document.getElementById('lightboxClose');
-  const lightboxPrev = document.getElementById('lightboxPrev');
-  const lightboxNext = document.getElementById('lightboxNext');
-  const lightboxCounter = document.getElementById('lightboxCounter');
-  let lightboxOpen = false;
+  // ---- Lightbox ----
+  var lightbox = document.getElementById('lightbox');
+  var lightboxImg = document.getElementById('lightboxImg');
+  var lbCounter = document.getElementById('lightboxCounter');
+  var lbPrev = document.getElementById('lightboxPrev');
+  var lbNext = document.getElementById('lightboxNext');
+  var lightboxOpen = false;
 
-  function lightboxRender() {
+  function lbRender() {
     if (photos.length === 0) return;
-    const idx = ((currentIdx % photos.length) + photos.length) % photos.length;
-    currentIdx = idx;
-    lightboxImg.src = photos[idx];
-    if (lightboxCounter) lightboxCounter.textContent = `${idx + 1} / ${photos.length}`;
-    if (lightboxPrev) lightboxPrev.style.display = photos.length > 1 ? 'block' : 'none';
-    if (lightboxNext) lightboxNext.style.display = photos.length > 1 ? 'block' : 'none';
-    // Keep main carousel in sync.
+    currentIdx = ((currentIdx % photos.length) + photos.length) % photos.length;
+    lightboxImg.src = photos[currentIdx];
+    if (lbCounter) lbCounter.textContent = (currentIdx + 1) + ' / ' + photos.length;
+    var multi = photos.length > 1;
+    if (lbPrev) lbPrev.style.display = multi ? 'block' : 'none';
+    if (lbNext) lbNext.style.display = multi ? 'block' : 'none';
     updateCarousel();
   }
-  function openLightbox() {
-    if (photos.length === 0 || !lightbox) return;
-    lightboxOpen = true;
-    lightbox.classList.remove('hidden');
-    lightbox.classList.add('flex');
-    document.body.style.overflow = 'hidden';
-    lightboxRender();
-  }
-  function closeLightbox() {
-    if (!lightbox) return;
-    lightboxOpen = false;
-    lightbox.classList.add('hidden');
-    lightbox.classList.remove('flex');
-    document.body.style.overflow = 'auto';
-  }
-  function lightboxStep(delta) {
-    if (photos.length === 0) return;
-    currentIdx = ((currentIdx + delta) % photos.length + photos.length) % photos.length;
-    lightboxRender();
-  }
+  function openLightbox() { if (photos.length === 0 || !lightbox) return; lightboxOpen = true; lightbox.classList.add('is-open'); document.body.style.overflow = 'hidden'; lbRender(); }
+  function closeLightbox() { if (!lightbox) return; lightboxOpen = false; lightbox.classList.remove('is-open'); document.body.style.overflow = 'auto'; }
+  function lbStep(d) { if (photos.length === 0) return; currentIdx += d; lbRender(); }
 
   if (carouselFrame) {
-    carouselFrame.addEventListener('click', (e) => {
-      // Don't trigger when clicking the prev/next/dot controls.
+    carouselFrame.addEventListener('click', function (e) {
       if (e.target.closest('button') || e.target.classList.contains('carousel-dot')) return;
       openLightbox();
     });
   }
-  if (lightboxClose) lightboxClose.addEventListener('click', closeLightbox);
-  if (lightboxPrev) lightboxPrev.addEventListener('click', (e) => { e.stopPropagation(); lightboxStep(-1); });
-  if (lightboxNext) lightboxNext.addEventListener('click', (e) => { e.stopPropagation(); lightboxStep(1); });
-  if (lightbox) lightbox.addEventListener('click', (e) => {
-    if (e.target === lightbox) closeLightbox();
-  });
-  document.addEventListener('keydown', (e) => {
+  document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+  lbPrev.addEventListener('click', function (e) { e.stopPropagation(); lbStep(-1); });
+  lbNext.addEventListener('click', function (e) { e.stopPropagation(); lbStep(1); });
+  lightbox.addEventListener('click', function (e) { if (e.target === lightbox) closeLightbox(); });
+  document.addEventListener('keydown', function (e) {
     if (!lightboxOpen) return;
     if (e.key === 'Escape') closeLightbox();
-    else if (e.key === 'ArrowLeft') lightboxStep(-1);
-    else if (e.key === 'ArrowRight') lightboxStep(1);
+    else if (e.key === 'ArrowLeft') lbStep(-1);
+    else if (e.key === 'ArrowRight') lbStep(1);
   });
+  (function () {
+    var sx = null, sy = null;
+    lightbox.addEventListener('touchstart', function (e) { var t = e.touches[0]; if (t) { sx = t.clientX; sy = t.clientY; } }, { passive: true });
+    lightbox.addEventListener('touchend', function (e) {
+      if (sx === null) return;
+      var t = e.changedTouches && e.changedTouches[0]; if (!t) return;
+      var dx = t.clientX - sx, dy = t.clientY - sy; sx = sy = null;
+      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) lbStep(dx < 0 ? 1 : -1);
+    }, { passive: true });
+  })();
 
-  // Mobile swipe inside the lightbox.
-  if (lightbox) {
-    let lbStartX = null, lbStartY = null;
-    lightbox.addEventListener('touchstart', (e) => {
-      const t = e.touches[0]; if (!t) return;
-      lbStartX = t.clientX; lbStartY = t.clientY;
-    }, { passive: true });
-    lightbox.addEventListener('touchend', (e) => {
-      if (lbStartX === null) return;
-      const t = (e.changedTouches && e.changedTouches[0]); if (!t) return;
-      const dx = t.clientX - lbStartX;
-      const dy = t.clientY - lbStartY;
-      lbStartX = lbStartY = null;
-      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
-        lightboxStep(dx < 0 ? 1 : -1);
-      }
-    }, { passive: true });
-  }
-  
-  // Modal functionality
-  const modal = document.getElementById('calModal');
-  const openBtn = document.getElementById('openCalModal');
-  const closeBtn = modal.querySelector('button[onclick="closeCalModal()"]');
-  const form = document.getElementById('apptForm');
-  const contactMethod = document.getElementById('contactMethod');
-  const contactInfoContainer = document.getElementById('contactInfoContainer');
-  const contactInfo = document.getElementById('contactInfo');
-  const dateInput = document.getElementById('apptDate');
-  const dateFeedback = document.getElementById('apptDateFeedback');
-  const submitFeedback = document.getElementById('apptSubmitFeedback');
-  
-  // Booked dates from server
-  // eslint-disable-next-line
-  const bookedDates = {{ booked_dates|tojson }};
-  
-  function openCalModal() {
-    modal.classList.remove('hidden');
+  // ---- Appointment modal ----
+  var modal = document.getElementById('calModal');
+  var openBtn = document.getElementById('openCalModal');
+  var closeBtn = document.getElementById('closeCalModal');
+  var form = document.getElementById('apptForm');
+  var successView = document.getElementById('apptSuccess');
+  var successDone = document.getElementById('successDone');
+  var seg = document.getElementById('contactSeg');
+  var contactInfo = document.getElementById('contactInfo');
+  var contactInfoLabel = document.getElementById('contactInfoLabel');
+  var dateInput = document.getElementById('apptDate');
+  var dateFeedback = document.getElementById('apptDateFeedback');
+  var submitFeedback = document.getElementById('apptSubmitFeedback');
+  var contactMethod = 'email';
+
+  function openModal() {
+    modal.style.display = 'grid';
     document.body.style.overflow = 'hidden';
+    form.style.display = '';
+    successView.style.display = 'none';
   }
-  
-  function closeCalModal() {
-    modal.classList.add('hidden');
+  function closeModal() {
+    modal.style.display = 'none';
     document.body.style.overflow = 'auto';
     form.reset();
     dateFeedback.textContent = '';
     submitFeedback.textContent = '';
   }
-  
-  // Event listeners
-  if (openBtn) openBtn.addEventListener('click', openCalModal);
-  if (closeBtn) closeBtn.addEventListener('click', closeCalModal);
-  
-  // Close modal when clicking outside
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) {
-      closeCalModal();
-    }
-  });
-  
-  // Contact method change
-  if (contactMethod) {
-    contactMethod.addEventListener('change', function() {
-      const label = contactInfoContainer.querySelector('label');
-      const input = contactInfo;
-      
-      if (this.value === 'email') {
-        label.textContent = 'Your Email:';
-        input.type = 'email';
-        input.placeholder = 'Enter your email';
-      } else {
-        label.textContent = 'Your Phone:';
-        input.type = 'tel';
-        input.placeholder = 'Enter your phone number';
-      }
+  if (openBtn) openBtn.addEventListener('click', openModal);
+  if (closeBtn) closeBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+  if (successDone) successDone.addEventListener('click', closeModal);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modal.style.display === 'grid') closeModal(); });
+
+  // Segmented contact-method toggle
+  if (seg) {
+    seg.querySelectorAll('button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('is-on'); });
+        btn.classList.add('is-on');
+        contactMethod = btn.getAttribute('data-method');
+        if (contactMethod === 'email') {
+          contactInfoLabel.textContent = 'Your email';
+          contactInfo.type = 'email';
+          contactInfo.placeholder = 'you@example.com';
+        } else {
+          contactInfoLabel.textContent = 'Your phone';
+          contactInfo.type = 'tel';
+          contactInfo.placeholder = '(555) 123-4567';
+        }
+      });
     });
   }
-  
-  // Date validation
+
+  // Booked-date validation
   if (dateInput) {
-    dateInput.addEventListener('change', function() {
-      const selectedDate = this.value;
+    dateInput.addEventListener('change', function () {
       dateFeedback.textContent = '';
-      
-      if (bookedDates.includes(selectedDate)) {
-        dateFeedback.textContent = 'This date is already booked. Please select another date.';
+      if (bookedDates.indexOf(this.value) !== -1) {
+        dateFeedback.textContent = 'This date is already booked. Please choose another date.';
         this.setCustomValidity('Date is already booked');
       } else {
         this.setCustomValidity('');
       }
     });
   }
-  
-  // Form submission
+
+  // Submit
   if (form) {
-    form.addEventListener('submit', function(e) {
+    form.addEventListener('submit', function (e) {
       e.preventDefault();
-      
-      const formData = {
+      submitFeedback.textContent = '';
+      var payload = {
         name: document.getElementById('apptName').value,
         date: dateInput.value,
-        contact_method: contactMethod.value,
+        contact_method: contactMethod,
         contact_info: contactInfo.value
       };
-      
       fetch('/property/{{ property.id }}/schedule', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       })
-      .then(response => response.json())
-      .then(data => {
-        if (data.success) {
-          submitFeedback.textContent = 'Appointment request sent successfully!';
-          submitFeedback.className = 'text-green-400 text-xs mt-2';
-          form.reset();
-          setTimeout(() => {
-            closeCalModal();
-          }, 2000);
-        } else {
-          submitFeedback.textContent = data.error || 'Failed to send request. Please try again.';
-          submitFeedback.className = 'text-red-400 text-xs mt-2';
-        }
-      })
-      .catch(error => {
-        console.error('Error:', error);
-        submitFeedback.textContent = 'An error occurred. Please try again.';
-        submitFeedback.className = 'text-red-400 text-xs mt-2';
-      });
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.success) {
+            form.style.display = 'none';
+            successView.style.display = 'flex';
+          } else {
+            submitFeedback.textContent = data.error || 'Failed to send request. Please try again.';
+          }
+        })
+        .catch(function () { submitFeedback.textContent = 'An error occurred. Please try again.'; });
     });
   }
 });
