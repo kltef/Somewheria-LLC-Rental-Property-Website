@@ -178,16 +178,20 @@ def submit_lead_capture():
     email = (request.form.get("email") or "").strip().lower()[:254]
     if not email or "@" not in email:
         return jsonify(success=False, error="A valid email is required."), 400
-    services.storage.add_pending_lead_capture(
+    added = services.storage.add_pending_lead_capture(
         {
             "email": email,
             "submitted_at": datetime.datetime.now().isoformat(),
         }
     )
-    services.notifications.send_email(
-        "New Lead Capture",
-        f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
-    )
+    # Only notify on first submission. Storage de-dupes silently by email,
+    # so without this guard a repeat submitter (rate-limited at 3/10min)
+    # would still generate one admin email per click for the same address.
+    if added:
+        services.notifications.send_email(
+            "New Lead Capture",
+            f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
+        )
     return jsonify(success=True)
 
 

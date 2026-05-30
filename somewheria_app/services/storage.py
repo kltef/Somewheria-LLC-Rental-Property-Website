@@ -99,15 +99,20 @@ class FileStorageService:
     def get_pending_lead_captures(self) -> list[dict]:
         return self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
 
-    def add_pending_lead_capture(self, lead: dict) -> None:
+    def add_pending_lead_capture(self, lead: dict) -> bool:
+        """Append a new lead. Returns True on insert, False when the email is
+        already pending. The caller relies on this to suppress the admin
+        notification email on duplicates — without it, a renter hitting the
+        submit button repeatedly would generate one admin email per click
+        even though the storage layer keeps only one entry.
+        """
         leads = self.get_pending_lead_captures()
-        # De-duplicate by email so a repeated submission doesn't bloat the file
-        # or give the requester a way to flood the admin UI.
         target_email = (lead.get("email") or "").lower()
         if target_email and any(item.get("email", "").lower() == target_email for item in leads):
-            return
+            return False
         leads.append(lead)
         self.save_json_file(self.config.lead_capture_file, leads)
+        return True
 
     def remove_pending_lead_capture(self, email: str) -> None:
         leads = [

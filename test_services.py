@@ -157,9 +157,10 @@ class FileStorageServiceTestCase(unittest.TestCase):
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
         ), patch.object(self.service, "save_json_file") as save_json_mock:
-            self.service.add_pending_lead_capture(
+            added = self.service.add_pending_lead_capture(
                 {"email": "new@example.com", "submitted_at": "2026-01-01"}
             )
+        self.assertTrue(added)
         save_json_mock.assert_called_once_with(
             self.config.lead_capture_file,
             [
@@ -169,11 +170,13 @@ class FileStorageServiceTestCase(unittest.TestCase):
         )
 
     def test_add_pending_lead_capture_dedupes_existing_email(self):
-        # Repeated submissions with the same email should not bloat the file.
+        # Repeated submissions with the same email should not bloat the file
+        # and must return False so the route can skip the admin notification.
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "dup@example.com"}]
         ), patch.object(self.service, "save_json_file") as save_json_mock:
-            self.service.add_pending_lead_capture({"email": "dup@example.com"})
+            added = self.service.add_pending_lead_capture({"email": "dup@example.com"})
+        self.assertFalse(added)
         save_json_mock.assert_not_called()
 
     def test_remove_pending_lead_capture_filters_matching_email(self):

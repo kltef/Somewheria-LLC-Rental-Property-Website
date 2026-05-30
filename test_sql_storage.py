@@ -120,33 +120,42 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
     """Regression coverage for the lead-capture flow under SQLite."""
 
     def test_add_pending_lead_capture(self):
-        self.storage.add_pending_lead_capture(
+        added = self.storage.add_pending_lead_capture(
             {"email": "lead@example.com", "submitted_at": "2026-01-01"}
         )
+        self.assertTrue(added)
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual(len(leads), 1)
         self.assertEqual(leads[0]["email"], "lead@example.com")
         self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
 
     def test_add_pending_lead_capture_dedupes_existing_email(self):
-        # Mirror FileStorageService: repeated submissions don't bloat storage.
-        self.storage.add_pending_lead_capture(
+        # Mirror FileStorageService: repeated submissions don't bloat storage,
+        # and the second call must report False so the route skips the email.
+        first = self.storage.add_pending_lead_capture(
             {"email": "dup@example.com", "submitted_at": "2026-01-01"}
         )
-        self.storage.add_pending_lead_capture(
+        second = self.storage.add_pending_lead_capture(
             {"email": "dup@example.com", "submitted_at": "2026-02-02"}
         )
+        self.assertTrue(first)
+        self.assertFalse(second)
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual(len(leads), 1)
         self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
 
     def test_add_pending_lead_capture_dedupe_is_case_insensitive(self):
-        self.storage.add_pending_lead_capture({"email": "Mixed@Example.com"})
-        self.storage.add_pending_lead_capture({"email": "mixed@example.com"})
+        self.assertTrue(
+            self.storage.add_pending_lead_capture({"email": "Mixed@Example.com"})
+        )
+        self.assertFalse(
+            self.storage.add_pending_lead_capture({"email": "mixed@example.com"})
+        )
         self.assertEqual(len(self.storage.get_pending_lead_captures()), 1)
 
     def test_add_pending_lead_capture_ignores_missing_email(self):
-        self.storage.add_pending_lead_capture({"submitted_at": "2026-01-01"})
+        added = self.storage.add_pending_lead_capture({"submitted_at": "2026-01-01"})
+        self.assertFalse(added)
         self.assertEqual(self.storage.get_pending_lead_captures(), [])
 
     def test_remove_pending_lead_capture(self):
