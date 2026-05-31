@@ -242,6 +242,22 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Date cannot be in the past.")
 
+    def test_schedule_appointment_rejects_far_future_date(self):
+        too_far = (datetime.date.today() + datetime.timedelta(days=400)).isoformat()
+
+        response = self.client.post(
+            "/property/prop-1/schedule",
+            json={
+                "name": "Alex",
+                "date": too_far,
+                "contact_method": "email",
+                "contact_info": "alex@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("within", response.get_json()["error"])
+
     def test_schedule_appointment_returns_404_when_property_is_missing(self):
         future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
         with patch.object(self.services.properties, "fetch_live_property_name", return_value=None):

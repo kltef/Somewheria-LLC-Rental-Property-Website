@@ -64,7 +64,15 @@ MAX_NAME_LEN = 120
 
 
 def _now_iso() -> str:
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    # ``datetime.utcnow()`` is deprecated in Python 3.12+; use an aware UTC
+    # now and strip the tzinfo so the wire format stays a bare
+    # ``YYYY-MM-DDTHH:MM:SSZ`` string identical to what older tickets carry.
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0, tzinfo=None)
+        .isoformat()
+        + "Z"
+    )
 
 
 class TicketService:
