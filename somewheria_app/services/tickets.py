@@ -64,7 +64,10 @@ MAX_NAME_LEN = 120
 
 
 def _now_iso() -> str:
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    # ``datetime.utcnow()`` is deprecated in Python 3.12 and slated for removal;
+    # use a timezone-aware UTC clock and emit the same ``YYYY-MM-DDTHH:MM:SSZ``
+    # shape so persisted timestamps and existing tests stay byte-identical.
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class TicketService:
