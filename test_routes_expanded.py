@@ -1474,6 +1474,67 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
                 except OSError:
                     pass
 
+    def test_ticket_service_add_photo_cleans_orphan_on_save_failure(self):
+        """If persisting the ticket JSON fails after the photo is on disk,
+        the orphaned image file must be removed so static/uploads/tickets/
+        doesn't accumulate dead bytes on every save error."""
+        from somewheria_app.services.properties import UploadValidationError
+
+        services = self.services
+        with patch.object(services.notifications, "send_email", return_value=True):
+            ticket = services.tickets.create_ticket(
+                {
+                    "title": "Outlet",
+                    "description": "Sparks",
+                    "category": "electrical",
+                    "priority": "urgent",
+                },
+                "renter@example.com",
+            )
+        ticket_dir = self.services.config.ticket_upload_dir / ticket["id"]
+        try:
+
+            class _Upload:
+                def __init__(self, name, blob):
+                    self.filename = name
+                    self.stream = BytesIO(blob)
+
+            with patch.object(
+                services.tickets, "_save", side_effect=OSError("disk full")
+            ):
+                with self.assertRaises(UploadValidationError):
+                    services.tickets.add_photo(
+                        ticket["id"],
+                        _Upload("orphan.png", self._png_bytes()),
+                        "renter@example.com",
+                    )
+
+            # The photo must NOT remain on disk after a failed save.
+            if ticket_dir.exists():
+                remaining = list(ticket_dir.iterdir())
+                self.assertEqual(
+                    remaining,
+                    [],
+                    f"expected ticket upload dir to be empty, found {remaining}",
+                )
+        finally:
+            if ticket_dir.exists():
+                for child in ticket_dir.iterdir():
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+                try:
+                    ticket_dir.rmdir()
+                except OSError:
+                    pass
+            tickets_file = self.services.config.tickets_file
+            if tickets_file.exists():
+                try:
+                    tickets_file.unlink()
+                except OSError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()
