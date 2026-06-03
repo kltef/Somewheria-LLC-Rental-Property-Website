@@ -7,6 +7,7 @@ import smtplib
 from email.message import EmailMessage
 
 from .console import get_console_logger
+from .validation import is_valid_email
 
 
 class NotificationService:
@@ -22,7 +23,7 @@ class NotificationService:
             return False
 
         recipient = (to or self.config.email_recipient or "").strip()
-        if not recipient or "@" not in recipient:
+        if not is_valid_email(recipient):
             self.console.warning("No valid recipient for email '%s' (to=%r); skipping.", subject, to)
             return False
 

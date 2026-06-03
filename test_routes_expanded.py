@@ -342,6 +342,20 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Name and a valid email are required.", response.data)
 
+    def test_register_rejects_malformed_email(self):
+        for garbage in ("@", "a@", "@b.com", "a@b"):
+            with patch.object(self.services.storage, "add_pending_registration") as add_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as send_email_mock:
+                response = self.client.post(
+                    "/register",
+                    data={"name": "Jamie", "email": garbage, "reason": "Need access"},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Name and a valid email are required.", response.data)
+            add_mock.assert_not_called()
+            send_email_mock.assert_not_called()
+
     def test_register_saves_pending_registration_and_sends_email(self):
         with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
             self.services.storage,
@@ -1069,6 +1083,17 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.post("/lead-captures", data={"email": "not-an-email"})
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"valid email", response.data)
+
+    def test_submit_lead_capture_rejects_malformed_emails(self):
+        # Catches the cases the previous "@ in value" check let through.
+        for garbage in ("@", "a@", "@b.com", "a@b", "user @example.com"):
+            with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as send_email_mock:
+                response = self.client.post("/lead-captures", data={"email": garbage})
+            self.assertEqual(response.status_code, 400, garbage)
+            add_mock.assert_not_called()
+            send_email_mock.assert_not_called()
 
     def test_submit_lead_capture_saves_and_emails(self):
         with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
