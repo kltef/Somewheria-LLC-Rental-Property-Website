@@ -821,6 +821,58 @@ class AnalyticsPruningTestCase(unittest.TestCase):
         self.assertEqual(tracker.site_visits["2030-01-08"], 4)
         self.assertEqual(tracker.site_visits["2030-01-10"], 1)
 
+    def test_concurrent_prune_does_not_race(self):
+        """Many threads pruning simultaneously must not raise.
+
+        Without the lock guarding ``_prune_old_buckets``, two threads can race
+        such that one's list-comprehension snapshot of ``bucket.keys()`` is
+        invalidated by another's ``del``, raising RuntimeError ("dictionary
+        changed size during iteration") or KeyError. The fix wraps the
+        read-modify-write under ``_lock``.
+        """
+        import sys
+        import threading
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        tracker = AnalyticsTracker(analytics_days=3)
+        for i in range(500):
+            day = f"2024-01-{(i % 28) + 1:02d}"
+            tracker.site_visits[day] = i
+            tracker.unique_users[day].add(f"user-{i}@example.com")
+            tracker.logins[day] = i
+            tracker.errors[day] = i
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(16)
+        # Tighten the GC switch interval so threads actually contend.
+        original_interval = sys.getswitchinterval()
+        sys.setswitchinterval(0.00001)
+
+        def worker():
+            try:
+                barrier.wait()
+                with tracker._lock:
+                    tracker._prune_old_buckets("2030-01-10")
+            except BaseException as exc:  # noqa: BLE001 - test must surface any
+                errors.append(exc)
+
+        try:
+            threads = [threading.Thread(target=worker) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(original_interval)
+
+        self.assertEqual(errors, [])
+        # All historical buckets should be gone; the dict-level dispatch must
+        # have completed cleanly across every thread.
+        self.assertEqual(len(tracker.site_visits), 0)
+        self.assertEqual(len(tracker.unique_users), 0)
+        self.assertEqual(len(tracker.logins), 0)
+        self.assertEqual(len(tracker.errors), 0)
+
 
 class RateLimiterTestCase(unittest.TestCase):
     def _make_limiter(self):
