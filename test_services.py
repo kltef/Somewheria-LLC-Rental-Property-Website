@@ -333,6 +333,27 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(normalized["thumbnail"], "photo-1.jpg")
 
+    def test_normalize_property_coerces_null_description_to_empty_string(self):
+        # Upstream sometimes returns ``"description": null`` for partially
+        # filled listings. Previously this crashed in the pets-inference branch
+        # (``description.lower()`` on None) — fetch_property_record swallowed the
+        # exception and the property silently dropped out of the listing.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "description": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["description"], "")
+        self.assertEqual(normalized["blurb"], "")
+        self.assertEqual(normalized["pets_allowed"], "Unknown")
+
+    def test_normalize_property_coerces_non_string_description_to_empty_string(self):
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "description": 42}, "prop-1"
+        )
+
+        self.assertEqual(normalized["description"], "")
+        self.assertEqual(normalized["blurb"], "")
+
     def test_property_payload_from_form_merges_custom_amenities(self):
         form = DummyForm(
             values={

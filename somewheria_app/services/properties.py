@@ -332,8 +332,16 @@ class PropertyService:
         normalized.setdefault("sqft", "N/A")
         normalized.setdefault("deposit", "N/A")
         normalized.setdefault("address", "N/A")
-        normalized["description"] = normalized.get("description", "")
-        normalized.setdefault("blurb", normalized["description"])
+        # Coerce a null / non-string description to "". Upstream occasionally
+        # returns ``"description": null`` for partially-filled listings; without
+        # this the ``.lower()`` call below raises AttributeError, fetch_property_record
+        # swallows it as a generic "failed to fetch", and the property drops out
+        # of the listing entirely.
+        description = normalized.get("description")
+        if not isinstance(description, str):
+            description = ""
+        normalized["description"] = description
+        normalized.setdefault("blurb", description)
         normalized.setdefault("lease_length", "12 months")
         normalized.setdefault("name", "Property")
         normalized.setdefault("photos", [])
