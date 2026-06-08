@@ -354,6 +354,44 @@ class PropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(normalized["description"], "")
         self.assertEqual(normalized["blurb"], "")
 
+    def test_normalize_property_coerces_null_included_amenities_to_empty_list(self):
+        # Same upstream-shape bug as the description coercion above: a
+        # ``"included_amenities": null`` payload made the pets-inference branch
+        # iterate over None and raise TypeError, which fetch_property_record
+        # swallowed as a generic failure so the property dropped silently from
+        # the listing.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+        self.assertEqual(normalized["pets_allowed"], "Unknown")
+
+    def test_normalize_property_infers_pets_from_description_when_amenities_null(self):
+        # The null-amenities guard must not block the description fallback
+        # for pet inference.
+        normalized = self.service.normalize_property(
+            {
+                "name": "Maple",
+                "included_amenities": None,
+                "description": "Dog-friendly home; pet deposit required.",
+            },
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+        self.assertEqual(normalized["pets_allowed"], "Yes")
+
+    def test_normalize_property_coerces_non_list_included_amenities_to_empty_list(self):
+        # A malformed upstream payload that returns a string (or any other
+        # non-list) for included_amenities must not crash; the string would
+        # iterate per-character and silently misclassify the pets flag.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": "Parking, Laundry"}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+
     def test_property_payload_from_form_merges_custom_amenities(self):
         form = DummyForm(
             values={
