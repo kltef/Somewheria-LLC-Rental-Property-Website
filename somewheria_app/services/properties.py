@@ -540,6 +540,14 @@ class PropertyService:
         self._safe_zillow_publish("publish_update", {**update_payload, "id": property_id})
 
     def delete_property(self, property_id: str, actor_email: str) -> None:
+        # Validate the id at the boundary so a malformed value (e.g. "../foo"
+        # routed through Flask's default <string> converter) can't smuggle
+        # path segments into the outbound DELETE URL. ``update_property`` and
+        # ``toggle_sale`` are implicitly protected because they look the id
+        # up in the cache first; ``delete_property`` skips that lookup so the
+        # check has to live here.
+        if not PROPERTY_ID_PATTERN.match(property_id or ""):
+            raise KeyError("Invalid property id.")
         response = requests.delete(f"{self.config.api_base_url}/properties/{property_id}", timeout=20)
         if response.status_code not in (200, 204):
             raise RuntimeError(f"Remote API responded {response.status_code}: {response.text}")
