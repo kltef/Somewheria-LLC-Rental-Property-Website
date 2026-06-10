@@ -1071,7 +1071,9 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"valid email", response.data)
 
     def test_submit_lead_capture_saves_and_emails(self):
-        with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
+        with patch.object(
+            self.services.storage, "add_pending_lead_capture", return_value=True
+        ) as add_mock, patch.object(
             self.services.notifications, "send_email"
         ) as send_email_mock:
             response = self.client.post(
@@ -1085,6 +1087,24 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(called_with["email"], "lead@example.com")
         self.assertIn("submitted_at", called_with)
         send_email_mock.assert_called_once()
+
+    def test_submit_lead_capture_duplicate_does_not_email_admin(self):
+        # Duplicate submissions must NOT trigger another admin notification —
+        # otherwise an attacker rotating IPs could flood the inbox even with
+        # the per-IP rate limit, since the storage layer silently no-ops on
+        # repeats. The endpoint still returns success to avoid leaking which
+        # emails are already pending.
+        with patch.object(
+            self.services.storage, "add_pending_lead_capture", return_value=False
+        ), patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock:
+            response = self.client.post(
+                "/lead-captures", data={"email": "lead@example.com"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json().get("success"))
+        send_email_mock.assert_not_called()
 
     def test_admin_lead_captures_page_loads_for_admin(self):
         self.login_as("admin")

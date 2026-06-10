@@ -236,22 +236,25 @@ class SqlStorageService:
             ).fetchall()
         return [loads(row["payload"]) for row in rows]
 
-    def add_pending_lead_capture(self, lead: dict) -> None:
-        # Mirror FileStorageService: de-duplicate by email so a repeated
-        # submission doesn't bloat the table or flood the admin UI.
+    def add_pending_lead_capture(self, lead: dict) -> bool:
+        """Persist ``lead``. Returns True if this was a new email, False on
+        duplicate (or missing email) so callers can suppress repeated admin
+        notifications. Mirrors FileStorageService.
+        """
         target_email = (lead.get("email") or "").strip().lower()
         if not target_email:
-            return
+            return False
         with self.db.transaction() as conn:
             existing = conn.execute(
                 "SELECT 1 FROM lead_captures WHERE email = ?", (target_email,)
             ).fetchone()
             if existing is not None:
-                return
+                return False
             conn.execute(
                 "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
                 (target_email, dumps(lead)),
             )
+        return True
 
     def remove_pending_lead_capture(self, email: str) -> None:
         email_lc = (email or "").strip().lower()

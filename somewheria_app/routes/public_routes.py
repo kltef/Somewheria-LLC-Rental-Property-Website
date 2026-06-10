@@ -178,16 +178,22 @@ def submit_lead_capture():
     email = (request.form.get("email") or "").strip().lower()[:254]
     if not email or "@" not in email:
         return jsonify(success=False, error="A valid email is required."), 400
-    services.storage.add_pending_lead_capture(
+    # Only notify the admin inbox on a NEW lead. A duplicate submission silently
+    # no-ops at the storage layer; emailing on duplicates lets an attacker
+    # rotating IPs flood the inbox even with the per-IP rate limit in place.
+    # Mirrors the registration flow which also suppresses notifications on
+    # repeat submissions.
+    is_new = services.storage.add_pending_lead_capture(
         {
             "email": email,
             "submitted_at": datetime.datetime.now().isoformat(),
         }
     )
-    services.notifications.send_email(
-        "New Lead Capture",
-        f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
-    )
+    if is_new:
+        services.notifications.send_email(
+            "New Lead Capture",
+            f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
+        )
     return jsonify(success=True)
 
 
