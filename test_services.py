@@ -354,6 +354,38 @@ class PropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(normalized["description"], "")
         self.assertEqual(normalized["blurb"], "")
 
+    def test_normalize_property_coerces_null_included_amenities_to_empty_list(self):
+        # Upstream sometimes returns ``"included_amenities": null`` for
+        # partially filled listings. Previously this crashed in the
+        # pets-inference branch (``for item in None``) — fetch_property_record
+        # swallowed the exception and the property silently dropped out of the
+        # listing, the same data-loss mode the description coercion guards against.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+        self.assertEqual(normalized["pets_allowed"], "Unknown")
+
+    def test_normalize_property_coerces_null_included_utilities_fallback_to_empty_list(self):
+        # When ``included_amenities`` is absent and the legacy
+        # ``included_utilities`` key is None, setdefault propagates the None
+        # — same crash, same disappear-from-listing symptom.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_utilities": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+
+    def test_normalize_property_coerces_string_included_amenities_to_empty_list(self):
+        # A stringly-typed amenities value would iterate character-by-character
+        # in the pets-inference branch, polluting inference. Coerce to [].
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": "wifi, water"}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+
     def test_property_payload_from_form_merges_custom_amenities(self):
         form = DummyForm(
             values={

@@ -326,6 +326,15 @@ class PropertyService:
         if property_id:
             normalized["id"] = property_id
         normalized.setdefault("included_amenities", normalized.get("included_utilities", []))
+        # Coerce a null / non-list amenities value to []. Upstream sometimes
+        # returns ``"included_amenities": null`` (or ``"included_utilities": null``
+        # with no ``included_amenities``), in which case ``setdefault`` leaves the
+        # None in place. Without this guard the pets-inference branch below
+        # raises TypeError on ``for item in None``; fetch_property_record swallows
+        # it and the property drops out of the listing entirely — the same
+        # silent data-loss mode previously seen with ``description: null``.
+        if not isinstance(normalized["included_amenities"], list):
+            normalized["included_amenities"] = []
         normalized.setdefault("bedrooms", "N/A")
         normalized.setdefault("bathrooms", "N/A")
         normalized.setdefault("rent", "N/A")
