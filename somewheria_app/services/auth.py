@@ -1,8 +1,42 @@
+import re
 from functools import wraps
 
 from flask import abort, jsonify, redirect, session, url_for
 
 from .registry import get_services
+
+
+# Pragmatic email pattern for boundary input validation. Intentionally tighter
+# than the bare ``"@" in value`` check the public routes used to do — that let
+# obvious junk like ``@``, ``a@``, ``@b``, and ``a@b`` through, which then
+# stored garbage rows in pending_registrations / lead_captures and triggered an
+# admin notification email per submission. The pattern requires a non-empty
+# local part, a domain with at least one dot, and a TLD of two-plus letters;
+# it is deliberately not a full RFC 5322 implementation (those are huge and
+# still wrong) — boundary sanity, not strict conformance.
+# ``fullmatch`` (no ^/$ anchors) is deliberate: with ``re.match`` and a
+# trailing ``$``, Python's default-mode regex would still match an input
+# with a trailing newline ("foo@bar.com\n"), defeating the validator for
+# clients that POST raw form bodies without normalizing whitespace.
+_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9_.%+\-]+@[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}")
+# RFC 5321 caps the full address at 254 octets; reject anything longer at the
+# boundary before regex-matching to keep pathological inputs cheap.
+_EMAIL_MAX_LEN = 254
+
+
+def is_valid_email(value) -> bool:
+    """Return True when ``value`` looks like a real email address.
+
+    Used at public input boundaries (registration, lead capture) where the
+    consequence of accepting garbage is a stored pending row plus an admin
+    notification email — both of which the dedup guards downstream can't
+    fully neutralize for a hostile client cycling unique strings.
+    """
+    if not isinstance(value, str):
+        return False
+    if not value or len(value) > _EMAIL_MAX_LEN:
+        return False
+    return _EMAIL_PATTERN.fullmatch(value) is not None
 
 
 class AuthService:

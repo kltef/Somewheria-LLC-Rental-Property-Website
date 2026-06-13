@@ -10,6 +10,7 @@ from ..services.auth import (
     get_current_user,
     high_admin_required,
     is_logged_in,
+    is_valid_email,
     renter_required,
     role_rank,
 )
@@ -459,7 +460,7 @@ def register():
         name = request.form.get("name", "").strip()[:120]
         email = request.form.get("email", "").strip().lower()[:254]
         reason = request.form.get("reason", "").strip()[:2000]
-        if not name or not email or "@" not in email:
+        if not name or not is_valid_email(email):
             return render_template("register.html", error="Name and a valid email are required.")
         existing = services.storage.get_pending_registrations()
         if any(item.get("email", "").lower() == email for item in existing):

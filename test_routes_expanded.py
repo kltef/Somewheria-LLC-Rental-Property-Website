@@ -342,6 +342,28 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Name and a valid email are required.", response.data)
 
+    def test_register_rejects_obvious_garbage_emails(self):
+        # Match the lead-capture guard: addresses lacking a TLD or with an
+        # empty local / host part are rejected without touching storage or
+        # the admin-notification path. Otherwise the registration list fills
+        # with junk that admins still have to dismiss one by one.
+        for bogus in ("@", "a@", "@a", "a@b", "user@host", "user@.com"):
+            with self.subTest(email=bogus):
+                with patch.object(
+                    self.services.storage, "get_pending_registrations", return_value=[]
+                ), patch.object(
+                    self.services.storage, "add_pending_registration"
+                ) as add_mock, patch.object(
+                    self.services.notifications, "send_email"
+                ) as send_email_mock:
+                    response = self.client.post(
+                        "/register", data={"name": "Pat", "email": bogus}
+                    )
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"Name and a valid email are required.", response.data)
+                add_mock.assert_not_called()
+                send_email_mock.assert_not_called()
+
     def test_register_saves_pending_registration_and_sends_email(self):
         with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
             self.services.storage,
@@ -1069,6 +1091,27 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.post("/lead-captures", data={"email": "not-an-email"})
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"valid email", response.data)
+
+    def test_submit_lead_capture_rejects_obvious_garbage_emails(self):
+        # The original ``"@" in email`` check let through obvious junk like
+        # "@", "a@", "@a", "a@b", and addresses without a TLD — each one of
+        # which stored a row and triggered a "New Lead Capture" admin email.
+        # The tightened validator must reject them at the route boundary
+        # without touching storage or notifications.
+        for bogus in ("@", "a@", "@a", "a@b", "user@host", "user@.com", "a@b."):
+            with self.subTest(email=bogus):
+                with patch.object(
+                    self.services.storage, "add_pending_lead_capture"
+                ) as add_mock, patch.object(
+                    self.services.notifications, "send_email"
+                ) as send_email_mock:
+                    response = self.client.post(
+                        "/lead-captures", data={"email": bogus}
+                    )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(b"valid email", response.data)
+                add_mock.assert_not_called()
+                send_email_mock.assert_not_called()
 
     def test_submit_lead_capture_saves_and_emails(self):
         with patch.object(

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
 from somewheria_app.services.appointments import AppointmentService
-from somewheria_app.services.auth import AuthService
+from somewheria_app.services.auth import AuthService, is_valid_email
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService
 from somewheria_app.services.storage import FileStorageService
@@ -72,6 +72,51 @@ class AuthServiceTestCase(unittest.TestCase):
         role = self.service.get_user_role("guest@example.com")
 
         self.assertEqual(role, "guest")
+
+
+class IsValidEmailTestCase(unittest.TestCase):
+    def test_accepts_typical_real_addresses(self):
+        for email in (
+            "user@example.com",
+            "first.last@example.co.uk",
+            "name+tag@example.com",
+            "with-hyphen@sub.example.com",
+            "underscore_user@example.io",
+            "digits123@example.org",
+        ):
+            with self.subTest(email=email):
+                self.assertTrue(is_valid_email(email))
+
+    def test_rejects_obvious_junk(self):
+        for email in (
+            "",
+            "@",
+            "a@",
+            "@b",
+            "a@b",          # no dot in domain
+            "user@host",    # no TLD
+            "user@.com",    # empty host before dot
+            "user@example.c",  # one-letter TLD
+            "user@example..com",  # consecutive dots in domain
+            "spaces in@example.com",
+            "user@exa mple.com",
+            "user@example.com\n",  # trailing newline
+        ):
+            with self.subTest(email=email):
+                self.assertFalse(is_valid_email(email))
+
+    def test_rejects_non_strings(self):
+        for value in (None, 42, ["a@b.com"], {"email": "a@b.com"}):
+            with self.subTest(value=value):
+                self.assertFalse(is_valid_email(value))
+
+    def test_rejects_addresses_over_rfc_length_cap(self):
+        # 254 chars max per RFC 5321; anything longer is rejected outright
+        # without engaging the regex engine on a pathological input.
+        local = "a" * 250
+        too_long = f"{local}@b.co"
+        self.assertGreater(len(too_long), 254)
+        self.assertFalse(is_valid_email(too_long))
 
 
 class FileStorageServiceTestCase(unittest.TestCase):
