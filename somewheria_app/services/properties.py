@@ -347,15 +347,30 @@ class PropertyService:
         normalized.setdefault("photos", [])
         if not isinstance(normalized["photos"], list):
             normalized["photos"] = []
-        pets_allowed = normalized.get("pets_allowed", "Unknown")
-        if isinstance(pets_allowed, bool):
-            pets_allowed = "Yes" if pets_allowed else "No"
-        elif "included_amenities" in normalized and any(
-            "pet" in str(item).lower() for item in normalized["included_amenities"]
-        ):
-            pets_allowed = "Yes"
-        elif "description" in normalized and "pet" in normalized["description"].lower():
-            pets_allowed = "Yes"
+        pets_allowed_raw = normalized.get("pets_allowed", "Unknown")
+        if isinstance(pets_allowed_raw, bool):
+            pets_allowed = "Yes" if pets_allowed_raw else "No"
+        elif isinstance(pets_allowed_raw, str):
+            lowered = pets_allowed_raw.strip().lower()
+            if lowered in {"yes", "true", "1"}:
+                pets_allowed = "Yes"
+            elif lowered in {"no", "false", "0"}:
+                pets_allowed = "No"
+            else:
+                # Only infer from amenities / description when the upstream
+                # value is missing or unrecognized — otherwise a property
+                # whose description reads "No pets allowed" would have its
+                # explicit "No" flipped to "Yes" by the substring match.
+                pets_allowed = "Unknown"
+                if any(
+                    "pet" in str(item).lower()
+                    for item in normalized.get("included_amenities", [])
+                ):
+                    pets_allowed = "Yes"
+                elif "pet" in normalized["description"].lower():
+                    pets_allowed = "Yes"
+        else:
+            pets_allowed = "Unknown"
         normalized["pets_allowed"] = pets_allowed
         ada_accessible = None
         for key in (
