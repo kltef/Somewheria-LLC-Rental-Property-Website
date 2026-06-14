@@ -299,6 +299,20 @@ PETS_CASES = [
     ({"pets_allowed": False, "included_amenities": ["Pet Friendly"]}, "No"),
     ({"pets_allowed": "Unknown", "included_amenities": ["Pet Friendly"]}, "Yes"),
     ({"pets_allowed": "Unknown", "description": "pets ok"}, "Yes"),
+    # An explicit "No" from upstream must win over a substring like "no pets"
+    # in the description or amenities — otherwise a property whose own listing
+    # says "No pets allowed" would render as pets-allowed=Yes.
+    ({"pets_allowed": "No", "description": "No pets allowed"}, "No"),
+    ({"pets_allowed": "No", "included_amenities": ["No pets"]}, "No"),
+    # Explicit "Yes"/"No" (case-insensitive, including true/false/1/0 forms)
+    # should be respected without falling through to the substring inference.
+    ({"pets_allowed": "Yes"}, "Yes"),
+    ({"pets_allowed": "yes"}, "Yes"),
+    ({"pets_allowed": "no"}, "No"),
+    ({"pets_allowed": "true"}, "Yes"),
+    ({"pets_allowed": "false"}, "No"),
+    ({"pets_allowed": "1"}, "Yes"),
+    ({"pets_allowed": "0"}, "No"),
     ({}, "Unknown"),
 ]
 
