@@ -238,6 +238,56 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
         self.notifications.log_site_change.assert_not_called()
 
+    def test_fetch_all_properties_preserves_cache_when_every_record_fetch_fails(self):
+        # IDs listing succeeds, but every per-property details fetch fails
+        # (transient 5xx on the details endpoint). Without the guard,
+        # fetch_all_properties would return [] and refresh_cache would blank
+        # the listings; with the guard it raises UpstreamUnavailable so the
+        # existing cache survives the outage.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "_fetch_property_ids",
+            return_value=["prop-1", "prop-2", "prop-3"],
+        ), patch.object(
+            self.service,
+            "fetch_property_record",
+            return_value=None,
+        ):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.fetch_all_properties()
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.refresh_cache()
+
+        # Cache untouched -- /for-rent's try/except falls back to it.
+        self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
+
+    def test_fetch_all_properties_returns_partial_results_when_some_records_fetch(self):
+        # Mixed success/failure should NOT raise — return the successful
+        # records (matching pre-existing partial-failure behavior) and let
+        # refresh_cache overwrite. This keeps the new guard narrow: it only
+        # fires when *every* per-property fetch failed.
+        good = {"id": "prop-1", "name": "Maple"}
+        with patch.object(
+            self.service,
+            "_fetch_property_ids",
+            return_value=["prop-1", "prop-2"],
+        ), patch.object(
+            self.service,
+            "fetch_property_record",
+            side_effect=[good, None],
+        ):
+            self.assertEqual(self.service.fetch_all_properties(), [good])
+
+    def test_fetch_all_properties_empty_id_listing_does_not_raise(self):
+        # Upstream legitimately reporting zero properties is not an outage.
+        # An empty ID list must propagate as an empty result so refresh_cache
+        # can clear the cache when properties are actually all removed.
+        with patch.object(self.service, "_fetch_property_ids", return_value=[]):
+            self.assertEqual(self.service.fetch_all_properties(), [])
+
     def test_fetch_property_ids_rejects_non_dict_payload(self):
         # A misbehaving upstream that returns a top-level list/string must not
         # silently iterate as characters or unrelated keys downstream.

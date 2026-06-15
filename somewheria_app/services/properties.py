@@ -238,7 +238,19 @@ class PropertyService:
         property_ids = self._fetch_property_ids()
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             results = list(executor.map(self.fetch_property_record, property_ids))
-        return [property_info for property_info in results if property_info]
+        successful = [property_info for property_info in results if property_info]
+        # If the ID listing came back with properties but EVERY per-property
+        # fetch returned None, that is a systemic outage of the details / photos
+        # endpoint (5xx, timeout, DNS), not "every property was deleted." Raise
+        # so refresh_cache leaves the existing cache in place — mirroring the
+        # behavior already in place for _fetch_property_ids network failures.
+        # Without this guard a brief details-endpoint outage blanks /for-rent
+        # until the next successful refresh.
+        if property_ids and not successful:
+            raise UpstreamUnavailable(
+                f"all {len(property_ids)} per-property fetches failed"
+            )
+        return successful
 
     def _fetch_property_ids(self) -> list[str]:
         # Network / HTTP failure raises ``UpstreamUnavailable`` so callers
