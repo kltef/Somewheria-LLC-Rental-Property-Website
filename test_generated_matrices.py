@@ -43,6 +43,14 @@ class GeneratedRouteMatrixTestCase(unittest.TestCase):
         with self.services.properties.cache_lock:
             self.original_cache = copy.deepcopy(self.services.properties.cache)
             self.services.properties.cache = []
+        # The PropertyService is shared across this whole test class.
+        # refresh_cache coalesces back-to-back calls inside a small window
+        # to suppress upstream fanout storms; in this test suite that means
+        # the Nth test would see the (N-1)th test's timestamp and skip its
+        # own refresh, leaving the seeded property in cache and changing
+        # which template branch renders. Reset the coalesce timestamp so
+        # each test starts from a clean "no recent refresh" state.
+        self.services.properties._last_refresh_monotonic = 0.0
         self.original_google_client_id = self.services.config.google_client_id
         self.original_google_client_secret = self.services.config.google_client_secret
         self.seed_property()
