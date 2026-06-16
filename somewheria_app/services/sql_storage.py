@@ -99,15 +99,21 @@ class SqlStorageService:
             rows = conn.execute("SELECT payload FROM pending_registrations").fetchall()
         return [loads(row["payload"]) for row in rows]
 
-    def add_pending_registration(self, registration: dict) -> None:
+    def add_pending_registration(self, registration: dict) -> bool:
         email = (registration.get("email") or "").strip().lower()
         if not email:
-            return
+            return False
         with self.db.transaction() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM pending_registrations WHERE email = ?", (email,)
+            ).fetchone()
+            if existing:
+                return False
             conn.execute(
-                "INSERT OR REPLACE INTO pending_registrations(email, payload) VALUES (?, ?)",
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
                 (email, dumps(registration)),
             )
+        return True
 
     def remove_pending_registration(self, email: str) -> None:
         email = (email or "").strip().lower()

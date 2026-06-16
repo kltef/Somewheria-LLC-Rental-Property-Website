@@ -361,6 +361,24 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         )
         send_email_mock.assert_called_once()
 
+    def test_register_duplicate_does_not_send_email(self):
+        # When storage reports the email is already pending (returns False),
+        # the route must not fire a second admin notification.
+        with patch.object(
+            self.services.storage, "add_pending_registration", return_value=False
+        ) as add_pending_mock, patch.object(
+            self.services.notifications,
+            "send_email",
+        ) as send_email_mock:
+            response = self.client.post(
+                "/register",
+                data={"name": "Jamie", "email": "jamie@example.com", "reason": "Need access"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        add_pending_mock.assert_called_once()
+        send_email_mock.assert_not_called()
+
     def test_admin_registrations_page_loads_for_admin(self):
         self.login_as("admin")
         with patch.object(self.services.storage, "get_pending_registrations", return_value=[]):
