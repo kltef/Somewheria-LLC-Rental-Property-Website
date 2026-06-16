@@ -114,6 +114,16 @@ def sanitize_tour_url(raw: str) -> str:
 
 
 class PropertyService:
+    # Concurrent /for-rent and /for-rent.json hits each used to fire their
+    # own upstream fanout (one ID listing + per-property detail/photos), so
+    # a small burst multiplied AWS API Gateway / Lambda cost N-fold. The
+    # synchronous refresh now serializes on a single lock, and any caller
+    # arriving within REFRESH_COALESCE_SECONDS of the previous attempt
+    # piggybacks on the already-fresh cache without making upstream calls.
+    # The window is small enough that the cache stays effectively
+    # request-fresh and large enough to absorb a realistic burst.
+    REFRESH_COALESCE_SECONDS = 2.0
+
     def __init__(self, config, notifications, zillow=None) -> None:
         self.config = config
         self.notifications = notifications
@@ -125,6 +135,8 @@ class PropertyService:
         self.logger = get_console_logger("properties")
         self.cache = []
         self.cache_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
+        self._last_refresh_monotonic = 0.0
         self.refresh_thread = None
 
     def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
@@ -153,16 +165,34 @@ class PropertyService:
             time.sleep(self.config.cache_refresh_interval)
 
     def refresh_cache(self) -> None:
-        # ``fetch_all_properties`` propagates ``UpstreamUnavailable`` from
-        # ``_fetch_property_ids`` on a network / HTTP failure; we let it
-        # bubble up so the caller (route handler, periodic worker) can
+        # Serialize concurrent refreshes so at most one upstream fanout is
+        # in flight per process. Followers that arrive while the leader is
+        # still fetching queue on the lock; once the leader returns, each
+        # follower sees the just-updated timestamp and skips its own
+        # fanout. ``fetch_all_properties`` propagates ``UpstreamUnavailable``
+        # from ``_fetch_property_ids`` on a network / HTTP failure; we let
+        # it bubble up so the caller (route handler, periodic worker) can
         # decide what to do. The local ``self.cache`` is only reassigned
         # *after* a successful fetch, so a raise here preserves the
         # previous cache rather than blanking the listings.
-        latest = self.fetch_all_properties()
-        with self.cache_lock:
-            self.cache = latest
-        self.logger.info("Cache refreshed with %s properties", len(self.cache))
+        with self._refresh_lock:
+            if (
+                time.monotonic() - self._last_refresh_monotonic
+                < self.REFRESH_COALESCE_SECONDS
+            ):
+                return
+            try:
+                latest = self.fetch_all_properties()
+                with self.cache_lock:
+                    self.cache = latest
+                self.logger.info("Cache refreshed with %s properties", len(self.cache))
+            finally:
+                # Record the attempt time on both success AND failure: an
+                # upstream outage means queued followers should serve the
+                # existing cache via the route's UpstreamUnavailable
+                # fallback rather than each retry the dead endpoint in
+                # series.
+                self._last_refresh_monotonic = time.monotonic()
 
     def get_cached_properties(self) -> list[dict]:
         with self.cache_lock:
