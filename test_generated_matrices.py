@@ -120,6 +120,7 @@ class GeneratedRouteMatrixTestCase(unittest.TestCase):
                 stack.enter_context(patch.object(self.services.properties, "toggle_sale"))
             if path == "/property/prop-1/schedule":
                 stack.enter_context(patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"))
+                stack.enter_context(patch.object(self.services.appointments, "book", return_value=True))
                 stack.enter_context(patch.object(self.services.notifications, "send_email"))
             if path == "/google/login":
                 self.services.config.google_client_id = "client-id"
