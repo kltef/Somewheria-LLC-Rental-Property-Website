@@ -851,6 +851,36 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn("/manage-listings", response.headers["Location"])
         toggle_sale_mock.assert_called_once_with("prop-1", "admin@example.com")
 
+    def test_property_routes_do_not_double_log_site_change(self):
+        # The property service layer already calls log_site_change for create,
+        # update, delete, toggle-sale, and image upload. The route layer used
+        # to call it a second time, inflating site_changes.log and
+        # double-counting created/deleted events in recent_listing_activity
+        # (which feeds the admin dashboard chart). Guard against the
+        # regression by verifying no log_site_change calls originate from the
+        # routes themselves when the service methods are mocked out.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.properties, "create_property"), patch.object(
+            self.services.properties, "update_property"
+        ), patch.object(self.services.properties, "delete_property"), patch.object(
+            self.services.properties, "toggle_sale"
+        ), patch.object(
+            self.services.properties, "upload_image", return_value="/static/uploads/x.jpg"
+        ), patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_mock:
+            self.client.post("/save-edit/new", data={"name": "Maple"})
+            self.client.post("/save-edit/prop-1", data={"name": "Maple"})
+            self.client.post("/delete-listing/prop-1")
+            self.client.post("/toggle-sale/prop-1")
+            self.client.post(
+                "/upload-image/prop-1",
+                data={"file": (BytesIO(b"image"), "photo.png")},
+                content_type="multipart/form-data",
+            )
+
+        log_mock.assert_not_called()
+
     def test_google_callback_shows_oauth_error_screen_when_not_configured(self):
         self.services.config.google_client_id = ""
         self.services.config.google_client_secret = ""
