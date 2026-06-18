@@ -5,10 +5,12 @@ import traceback
 from datetime import datetime, timedelta, timezone
 
 from flask import Flask, render_template, request
+from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 from .config import AppConfig
 from .routes.admin_routes import register_admin_routes
+from .routes.api_routes import register_api_routes
 from .routes.auth_routes import register_auth_routes
 from .routes.public_routes import register_public_routes
 from .routes.pwa_routes import register_pwa_routes
@@ -21,6 +23,7 @@ from .services.console import setup_console_logger
 from .services.jira import JiraClient
 from .services.notifications import NotificationService
 from .services.properties import PropertyService
+from .services.push_notifications import PushNotificationService
 from .services.registry import Services, set_services
 from .services.security import register_csrf, register_security_headers
 from .services.storage import FileStorageService
@@ -77,7 +80,8 @@ def create_app() -> Flask:
     zillow = ZillowPublisher(config, notifications)
     properties = PropertyService(config, notifications, zillow=zillow)
     jira = JiraClient(config, notifications)
-    tickets = TicketService(config, storage, notifications, jira=jira)
+    push_notifications = PushNotificationService(config, storage)
+    tickets = TicketService(config, storage, notifications, jira=jira, push_notifications=push_notifications)
 
     set_services(
         app,
@@ -92,6 +96,7 @@ def create_app() -> Flask:
             tickets=tickets,
             zillow=zillow,
             jira=jira,
+            push_notifications=push_notifications,
         ),
     )
 
@@ -101,9 +106,15 @@ def create_app() -> Flask:
     register_csrf(app)
     register_security_headers(app)
 
+    # CORS for /api/* — scoped to mobile origins only so browser session routes
+    # are completely unaffected. Defaults to "*" in development (no env var set).
+    cors_origins = config.mobile_cors_origins if config.mobile_cors_origins else "*"
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}})
+
     register_auth_routes(app)
     register_public_routes(app)
     register_admin_routes(app)
+    register_api_routes(app)
     register_pwa_routes(app)
     register_ticket_routes(app)
     register_webhook_routes(app)

@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "Somewheria Rentals",
+    "slug": "somewheria-rentals",
+    "version": "1.0.0",
+    "scheme": "somewheria",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#111518"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.somewheria.rentals",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to attach photos to maintenance tickets.",
+        "NSPhotoLibraryUsageDescription": "Used to attach photos to maintenance tickets."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#111518"
+      },
+      "package": "com.somewheria.rentals",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#111518",
+          "defaultChannel": "default"
+        }
+      ],
+      "expo-secure-store",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_YOUR_IOS_CLIENT_ID"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

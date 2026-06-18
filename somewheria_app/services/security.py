@@ -61,6 +61,10 @@ def _csrf_before_request() -> None:
     _get_or_create_csrf_token()
     if request.method in CSRF_SAFE_METHODS:
         return
+    # /api/v1/ routes use JWT auth via Authorization header — no session cookie
+    # means no CSRF token is available. JWT in the header serves the same purpose.
+    if request.path.startswith("/api/v1/"):
+        return
     endpoint = request.endpoint or ""
     if endpoint in CSRF_EXEMPT_ENDPOINTS:
         return

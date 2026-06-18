@@ -68,13 +68,14 @@ def _now_iso() -> str:
 
 
 class TicketService:
-    def __init__(self, config, storage, notifications, jira=None) -> None:
+    def __init__(self, config, storage, notifications, jira=None, push_notifications=None) -> None:
         self.config = config
         self.storage = storage
         self.notifications = notifications
-        # ``jira`` is optional so existing tests that construct TicketService
-        # directly (without a JiraClient) continue to pass.
+        # ``jira`` and ``push_notifications`` are optional so existing tests that
+        # construct TicketService directly continue to pass without them.
         self.jira = jira
+        self.push_notifications = push_notifications
         self.logger = get_console_logger("tickets")
         # Retry backoffs (seconds). 1s/4s/16s = max ~21s of retry per ticket,
         # entirely off the request thread so JIRA being slow never blocks the
@@ -415,6 +416,21 @@ class TicketService:
                 )
             except Exception:
                 pass
+
+            # Notify the renter's mobile device if status changed.
+            if "status" in changed and self.push_notifications:
+                try:
+                    self.push_notifications.send_to_user(
+                        (ticket.get("submitted_by") or "").lower(),
+                        title=f"Ticket update: {ticket.get('title', '')[:40]}",
+                        body=f"Status: {changed['status'].replace('_', ' ')}",
+                        data={"ticket_id": ticket_id, "type": "ticket_update"},
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Push notification failed for ticket %s: %s", ticket_id, exc
+                    )
+
             return ticket
         return None
 

@@ -51,6 +51,14 @@ class AppConfig:
     jira_api_token: str = field(default_factory=lambda: os.getenv("JIRA_API_TOKEN", ""))
     jira_user_email: str = field(default_factory=lambda: os.getenv("JIRA_USER_EMAIL", ""))
     jira_webhook_secret: str = field(default_factory=lambda: os.getenv("JIRA_WEBHOOK_SECRET", ""))
+    # Mobile API JWT. JWT_SECRET_KEY MUST be a stable value in production —
+    # the default (falling back to secret_key) changes on every restart when
+    # SECRET_KEY is also absent, invalidating all issued mobile tokens.
+    jwt_secret_key: str = field(default_factory=lambda: os.getenv("JWT_SECRET_KEY", os.getenv("SECRET_KEY", secrets.token_hex(32))))
+    jwt_expiry_hours: int = field(default_factory=lambda: int(os.getenv("JWT_EXPIRY_HOURS", "168")))
+    # Comma-separated list of allowed CORS origins for /api/* routes.
+    # Example: MOBILE_CORS_ORIGINS=exp://192.168.1.5:8081,capacitor://localhost
+    mobile_cors_origins: list[str] = field(default_factory=lambda: _csv_env("MOBILE_CORS_ORIGINS"))
 
     def __post_init__(self) -> None:
         self.template_dir = self.base_dir / "templates"
@@ -68,6 +76,7 @@ class AppConfig:
         self.tickets_file = self.base_dir / "tickets.json"
         self.sqlite_file = self.base_dir / "somewheria.sqlite3"
         self.lead_capture_file = self.base_dir / "pending_lead_captures.json"
+        self.push_tokens_file = self.base_dir / "push_tokens.json"
 
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)

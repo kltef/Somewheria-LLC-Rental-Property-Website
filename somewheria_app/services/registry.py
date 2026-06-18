@@ -15,6 +15,7 @@ class Services:
     tickets: object
     zillow: object
     jira: object
+    push_notifications: object = None
 
 
 def set_services(app, services: Services) -> None:
