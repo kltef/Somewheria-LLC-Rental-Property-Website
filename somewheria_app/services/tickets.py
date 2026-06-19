@@ -27,6 +27,7 @@ from .properties import (
     UploadValidationError,
     _ensure_safe_image_dimensions,
 )
+from .validation import is_valid_email
 
 
 MAX_TICKET_PHOTOS = 5
@@ -351,7 +352,7 @@ class TicketService:
         if not ticket.get("email_updates"):
             return
         recipient = (ticket.get("submitted_by") or "").strip()
-        if not recipient or "@" not in recipient:
+        if not is_valid_email(recipient):
             return
         try:
             self.notifications.send_email(subject, body, to=recipient)

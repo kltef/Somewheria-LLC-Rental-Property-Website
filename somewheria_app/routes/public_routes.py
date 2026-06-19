@@ -9,6 +9,7 @@ from ..services.auth import (
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 MAX_NAME_LEN = 120
@@ -186,7 +187,7 @@ def report_issue():
 def submit_lead_capture():
     services = get_services()
     email = (request.form.get("email") or "").strip().lower()[:254]
-    if not email or "@" not in email:
+    if not is_valid_email(email):
         return jsonify(success=False, error="A valid email is required."), 400
     added = services.storage.add_pending_lead_capture(
         {

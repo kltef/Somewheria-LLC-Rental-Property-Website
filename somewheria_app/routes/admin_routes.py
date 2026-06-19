@@ -16,6 +16,7 @@ from ..services.auth import (
 from ..services.properties import BLANK_PROPERTY, UploadValidationError
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 ALLOWED_ROLES = ("renter", "admin", "high_admin")
@@ -459,7 +460,7 @@ def register():
         name = request.form.get("name", "").strip()[:120]
         email = request.form.get("email", "").strip().lower()[:254]
         reason = request.form.get("reason", "").strip()[:2000]
-        if not name or not email or "@" not in email:
+        if not name or not is_valid_email(email):
             return render_template("register.html", error="Name and a valid email are required.")
         # Storage de-duplicates by email and reports whether a new row was
         # stored, so we only notify on a genuinely new request — a duplicate

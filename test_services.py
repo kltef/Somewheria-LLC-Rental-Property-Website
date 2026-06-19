@@ -11,6 +11,7 @@ from somewheria_app.services.auth import AuthService
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService
 from somewheria_app.services.storage import FileStorageService
+from somewheria_app.services.validation import is_valid_email
 
 
 class DummyForm:
@@ -1170,6 +1171,49 @@ class ZillowPublisherTestCase(unittest.TestCase):
         self.assertIn("success_count", snapshot)
         self.assertIn("failure_count", snapshot)
         self.assertIn("recent_errors", snapshot)
+
+
+class EmailValidationTestCase(unittest.TestCase):
+    def test_accepts_typical_addresses(self):
+        for value in (
+            "user@example.com",
+            "first.last@example.co.uk",
+            "user+tag@sub.example.com",
+            "a@b.co",
+            "USER@EXAMPLE.COM",
+            "hyphen-name@domain-with-hyphen.io",
+            "name_1@example.museum",
+        ):
+            self.assertTrue(is_valid_email(value), value)
+
+    def test_rejects_obvious_junk(self):
+        for value in (
+            "",
+            "@",
+            "a@",
+            "@b.com",
+            "a@b",                # no TLD
+            "a@b.",               # trailing dot
+            "a@.b",               # leading dot in domain
+            "a@b..c",             # consecutive dots
+            "user @example.com",  # space in local
+            "user@exa mple.com",  # space in domain
+            "user@@example.com",  # multiple @
+            "not-an-email",
+            "user@-example.com",  # label starts with hyphen
+            "user@example-.com",  # label ends with hyphen
+        ):
+            self.assertFalse(is_valid_email(value), value)
+
+    def test_rejects_non_strings(self):
+        self.assertFalse(is_valid_email(None))
+        self.assertFalse(is_valid_email(12345))
+        self.assertFalse(is_valid_email(["a@b.com"]))
+        self.assertFalse(is_valid_email({"email": "a@b.com"}))
+
+    def test_rejects_oversized_strings(self):
+        long_local = "a" * 255
+        self.assertFalse(is_valid_email(f"{long_local}@example.com"))
 
 
 if __name__ == "__main__":
