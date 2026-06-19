@@ -16,6 +16,7 @@ from ..services.auth import (
 from ..services.properties import BLANK_PROPERTY, UploadValidationError
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.timeutil import utcnow_iso
 from ..services.validation import is_valid_email
 
 
@@ -698,7 +699,7 @@ def admin_contracts():
                             "end_date": end_date,
                             "status": status,
                             "pdf_filename": pdf_filename,
-                            "created_at": datetime.datetime.now().isoformat(),
+                            "created_at": utcnow_iso(),
                         }
                     )
                     services.storage.save_renter_contracts(contracts_data)

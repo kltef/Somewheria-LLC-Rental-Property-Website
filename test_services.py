@@ -1345,6 +1345,62 @@ class TicketsNowIsoTestCase(unittest.TestCase):
         self.assertLessEqual(delta, 2)
 
 
+class TimeUtilTestCase(unittest.TestCase):
+    """Lock the shared UTC timestamp helper.
+
+    Everything that writes a wire-format timestamp (tickets, the JSONL change
+    log, contract metadata, lead-capture submissions, …) routes through
+    ``utcnow_iso``. The ``YYYY-MM-DDTHH:MM:SSZ`` shape is part of the contract
+    AnalyticsTracker.recent_listing_activity relies on (it slices ``ts[:7]``
+    for the month bucket).
+    """
+
+    def test_utcnow_iso_is_seconds_precision_utc_z(self):
+        import datetime as _dt
+        from somewheria_app.services.timeutil import utcnow_iso
+
+        value = utcnow_iso()
+        self.assertEqual(len(value), 20)
+        self.assertTrue(value.endswith("Z"))
+        parsed = _dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        now_utc = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+        self.assertLessEqual(abs((parsed - now_utc).total_seconds()), 2)
+
+    def test_tickets_now_iso_routes_through_shared_helper(self):
+        # The previous bug split timestamp generation across two helpers; if
+        # tickets ever re-introduces its own implementation, this guard fails
+        # loud so the change-log/recent_listing_activity bucket logic doesn't
+        # silently regress.
+        from somewheria_app.services import tickets, timeutil
+
+        self.assertIs(tickets._now_iso, timeutil.utcnow_iso)
+
+
+class NotificationsChangeLogTimestampTestCase(unittest.TestCase):
+    def test_log_site_change_writes_utc_z_timestamp(self):
+        # Naive local-time isoformat() looks UTC-shaped but isn't, so
+        # AnalyticsTracker.recent_listing_activity buckets entries by the
+        # wrong calendar month when the server's local date and UTC date
+        # straddle midnight. The change-log writer must emit Z-suffixed UTC.
+        import json as _json
+
+        config = SimpleNamespace(change_log_file=Path("/tmp/test_change_log.log"))
+        analytics = Mock()
+        service = NotificationService(config, analytics)
+        handle = mock_open()
+        with patch.object(Path, "open", handle):
+            service.log_site_change("admin@example.com", "property_created", {"id": "p1"})
+
+        written = "".join(call.args[0] for call in handle().write.call_args_list).strip()
+        entry = _json.loads(written)
+        self.assertTrue(
+            entry["timestamp"].endswith("Z"),
+            f"timestamp not Z-suffixed UTC: {entry['timestamp']!r}",
+        )
+        # ``ts[:7]`` is the YYYY-MM slice recent_listing_activity uses.
+        self.assertRegex(entry["timestamp"][:7], r"^\d{4}-\d{2}$")
+
+
 class EmailValidationTestCase(unittest.TestCase):
     def test_accepts_typical_addresses(self):
         for value in (

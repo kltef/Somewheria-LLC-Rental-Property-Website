@@ -1,5 +1,4 @@
 import collections
-import datetime
 import html
 import json
 import re
@@ -7,6 +6,7 @@ import smtplib
 from email.message import EmailMessage
 
 from .console import get_console_logger
+from .timeutil import utcnow_iso
 from .validation import is_valid_email
 
 
@@ -106,7 +106,11 @@ class NotificationService:
     def log_site_change(self, user_email: str, action: str, extra: dict | None = None) -> None:
         try:
             entry = {
-                "timestamp": datetime.datetime.now().isoformat(),
+                # UTC so analytics.recent_listing_activity buckets entries by
+                # the same calendar month regardless of the server's local
+                # timezone — a naive local-time isoformat() looks UTC-shaped
+                # but silently drifts buckets across the midnight boundary.
+                "timestamp": utcnow_iso(),
                 "user": user_email or "anonymous",
                 "action": action,
                 "extra": extra or {},

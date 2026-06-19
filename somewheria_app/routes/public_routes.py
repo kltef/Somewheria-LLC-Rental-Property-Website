@@ -9,6 +9,7 @@ from ..services.auth import (
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.timeutil import utcnow_iso
 from ..services.validation import is_valid_email
 
 
@@ -143,7 +144,7 @@ def schedule_appointment(uuid):
         f"For date: {iso_date}\n"
         f"Contact method: {contact_method}\n"
         f"Contact info: {contact_info}\n"
-        f"Requested at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"Requested at: {utcnow_iso()}"
     )
     services.notifications.send_email("Viewing Appointment Request", message)
     return jsonify(success=True)
@@ -196,7 +197,7 @@ def submit_lead_capture():
     added = services.storage.add_pending_lead_capture(
         {
             "email": email,
-            "submitted_at": datetime.datetime.now().isoformat(),
+            "submitted_at": utcnow_iso(),
         }
     )
     # Only notify admins on a genuinely new lead. Repeated submissions of an
