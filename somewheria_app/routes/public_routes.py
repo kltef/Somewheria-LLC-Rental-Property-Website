@@ -132,11 +132,15 @@ def schedule_appointment(uuid):
     if not property_name:
         return jsonify(success=False, error="Property not found."), 404
 
+    iso_date = requested_date.isoformat()
+    if not services.appointments.book(uuid, iso_date):
+        return jsonify(success=False, error="That date is already booked."), 409
+
     message = (
         "Appointment requested!\n\n"
         f"Property: {property_name}\n"
         f"Requested by: {name}\n"
-        f"For date: {date}\n"
+        f"For date: {iso_date}\n"
         f"Contact method: {contact_method}\n"
         f"Contact info: {contact_info}\n"
         f"Requested at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"

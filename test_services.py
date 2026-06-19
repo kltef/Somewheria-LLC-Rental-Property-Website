@@ -307,6 +307,25 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-01-10", "2030-01-11"})
         self.assertEqual(loaded["prop-2"], {"2030-02-01"})
 
+    def test_book_persists_new_appointment(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01"})
+
+    def test_book_rejects_double_booking(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        self.assertFalse(self.service.book("prop-1", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01"})
+
+    def test_book_accumulates_distinct_dates(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        self.assertTrue(self.service.book("prop-1", "2030-05-02"))
+        self.assertTrue(self.service.book("prop-2", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
+        self.assertEqual(loaded["prop-2"], {"2030-05-01"})
+
 
 class PropertyServiceTestCase(unittest.TestCase):
     def setUp(self):

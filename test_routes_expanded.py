@@ -277,6 +277,8 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
     def test_schedule_appointment_success_sends_email(self):
         future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
         with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(
             self.services.notifications,
             "send_email",
         ) as send_email_mock:
@@ -295,6 +297,43 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         send_email_mock.assert_called_once()
         self.assertIn("Viewing Appointment Request", send_email_mock.call_args[0][0])
         self.assertIn("Maple House", send_email_mock.call_args[0][1])
+
+    def test_schedule_appointment_persists_booking(self):
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=True
+        ) as book_mock, patch.object(self.services.notifications, "send_email"):
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        book_mock.assert_called_once_with("prop-1", future_date)
+
+    def test_schedule_appointment_rejects_double_booking(self):
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=False
+        ), patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "That date is already booked.")
+        send_email_mock.assert_not_called()
 
     def test_about_page_loads(self):
         response = self.client.get("/about")
