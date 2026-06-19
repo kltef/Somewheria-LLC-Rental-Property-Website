@@ -9,7 +9,6 @@ The service is intentionally small and synchronous — it mirrors the
 
 from __future__ import annotations
 
-import datetime
 import os
 import secrets
 import threading
@@ -27,6 +26,7 @@ from .properties import (
     UploadValidationError,
     _ensure_safe_image_dimensions,
 )
+from .timeutil import utcnow_iso
 from .validation import is_valid_email
 
 
@@ -64,16 +64,11 @@ MAX_CONTACT_LEN = 200
 MAX_NAME_LEN = 120
 
 
-def _now_iso() -> str:
-    # ``datetime.utcnow()`` is deprecated in Python 3.12+; use an aware UTC
-    # now and strip the tzinfo so the wire format stays a bare
-    # ``YYYY-MM-DDTHH:MM:SSZ`` string identical to what older tickets carry.
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .replace(microsecond=0, tzinfo=None)
-        .isoformat()
-        + "Z"
-    )
+# Thin alias for backwards compatibility — call sites inside this module
+# already use ``_now_iso``; the implementation lives in services.timeutil
+# so notifications/log entries and contract/lead timestamps stay on the
+# same UTC wire format.
+_now_iso = utcnow_iso
 
 
 class TicketService:
