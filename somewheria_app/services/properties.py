@@ -368,6 +368,14 @@ class PropertyService:
         if property_id:
             normalized["id"] = property_id
         normalized.setdefault("included_amenities", normalized.get("included_utilities", []))
+        # Mirror the description/photos coercion: upstream occasionally returns
+        # ``"included_amenities": null`` (or a misshaped non-list) for partially
+        # filled listings. Without this guard the ``any()`` iteration in the
+        # pets-inference branch below raises TypeError, fetch_property_record
+        # swallows it as a generic "failed to fetch", and the property drops
+        # out of the listing entirely.
+        if not isinstance(normalized["included_amenities"], list):
+            normalized["included_amenities"] = []
         normalized.setdefault("bedrooms", "N/A")
         normalized.setdefault("bathrooms", "N/A")
         normalized.setdefault("rent", "N/A")
