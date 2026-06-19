@@ -27,7 +27,9 @@ import argparse
 import gzip
 import os
 import shutil
+import sqlite3
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,12 +45,52 @@ def _default_db_path() -> Path:
     return AppConfig().sqlite_file
 
 
+def _consistent_snapshot(src: Path, dest: Path) -> None:
+    """Write a consistent snapshot of the SQLite DB at ``src`` to ``dest``.
+
+    Uses SQLite's online backup API rather than a raw byte copy. With WAL
+    mode (which ``Database._connect`` enables), the on-disk file alone does
+    not include uncommitted-but-WAL-resident pages, and a raw copy taken
+    while the writer is mid-checkpoint can capture a torn state. The backup
+    API takes care of both by reading through SQLite, so the destination is
+    a self-contained, internally consistent database file regardless of
+    whether the writer is active.
+    """
+    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    try:
+        dest_conn = sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+    finally:
+        src_conn.close()
+
+
 def compress(src: Path, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     dest = dest_dir / f"{src.stem}-{stamp}.sqlite3.gz"
-    with src.open("rb") as src_f, gzip.open(dest, "wb", compresslevel=6) as dst_f:
-        shutil.copyfileobj(src_f, dst_f)
+    # Snapshot via the SQLite backup API into a sibling temp file inside the
+    # staging dir, gzip it, then unlink the intermediate. Doing the snapshot
+    # first means the read pressure on the live DB is bounded by the backup
+    # call itself rather than dragged out across the gzip stream.
+    fd, snapshot_name = tempfile.mkstemp(
+        prefix=src.stem + ".",
+        suffix=".sqlite3.snapshot",
+        dir=str(dest_dir),
+    )
+    os.close(fd)
+    snapshot_path = Path(snapshot_name)
+    try:
+        _consistent_snapshot(src, snapshot_path)
+        with snapshot_path.open("rb") as src_f, gzip.open(dest, "wb", compresslevel=6) as dst_f:
+            shutil.copyfileobj(src_f, dst_f)
+    finally:
+        try:
+            snapshot_path.unlink()
+        except OSError:
+            pass
     return dest
 
 
