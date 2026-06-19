@@ -1306,6 +1306,35 @@ class ZillowPublisherTestCase(unittest.TestCase):
         self.assertIn("recent_errors", snapshot)
 
 
+class TicketsNowIsoTestCase(unittest.TestCase):
+    """Lock the on-disk timestamp format for tickets.
+
+    Ticket payloads persisted to ``tickets.json`` (and the SQLite mirror) use
+    ``_now_iso`` for ``created_at`` / ``updated_at`` / per-note ``at``.
+    Existing fixtures and admin CSV exports assume the
+    ``YYYY-MM-DDTHH:MM:SSZ`` shape — second precision, trailing ``Z``, no
+    offset. Changing this would silently break downstream consumers, so we
+    pin the format here.
+    """
+
+    def test_now_iso_is_seconds_precision_utc_z(self):
+        import datetime as _dt
+        from somewheria_app.services.tickets import _now_iso
+
+        value = _now_iso()
+        # Length is 20: "YYYY-MM-DDTHH:MM:SSZ".
+        self.assertEqual(len(value), 20)
+        self.assertTrue(value.endswith("Z"))
+        # Parsing strips the trailing Z and yields a naive datetime equal to
+        # the current UTC second.
+        parsed = _dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        now_utc = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+        # Allow a couple of seconds of slack to avoid flakiness if the clock
+        # ticks between the two reads.
+        delta = abs((parsed - now_utc).total_seconds())
+        self.assertLessEqual(delta, 2)
+
+
 class EmailValidationTestCase(unittest.TestCase):
     def test_accepts_typical_addresses(self):
         for value in (

@@ -31,7 +31,7 @@ import sqlite3
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +69,7 @@ def _consistent_snapshot(src: Path, dest: Path) -> None:
 
 def compress(src: Path, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dest = dest_dir / f"{src.stem}-{stamp}.sqlite3.gz"
     # Snapshot via the SQLite backup API into a sibling temp file inside the
     # staging dir, gzip it, then unlink the intermediate. Doing the snapshot
@@ -168,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     retention = int(os.getenv("BACKUP_RETENTION_DAYS", "7"))
     pruned = prune_local(args.staging_dir, retention)
     if pruned:
-        cutoff_dt = datetime.utcnow() - timedelta(days=retention)
-        print(f"Pruned {pruned} local artifact(s) older than {cutoff_dt.isoformat()}Z")
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention)
+        print(f"Pruned {pruned} local artifact(s) older than {cutoff_dt.replace(tzinfo=None).isoformat()}Z")
 
     return 0
 
