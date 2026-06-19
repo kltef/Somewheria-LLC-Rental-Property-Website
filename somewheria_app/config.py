@@ -51,6 +51,12 @@ class AppConfig:
     jira_api_token: str = field(default_factory=lambda: os.getenv("JIRA_API_TOKEN", ""))
     jira_user_email: str = field(default_factory=lambda: os.getenv("JIRA_USER_EMAIL", ""))
     jira_webhook_secret: str = field(default_factory=lambda: os.getenv("JIRA_WEBHOOK_SECRET", ""))
+    # Whether to send a Priority field on maintenance-ticket issues. Default on,
+    # but some JIRA projects don't expose Priority on the create screen, which
+    # makes the create call 400. Set JIRA_SET_PRIORITY=0 in that case.
+    jira_set_priority: bool = field(
+        default_factory=lambda: os.getenv("JIRA_SET_PRIORITY", "1") == "1"
+    )
 
     def __post_init__(self) -> None:
         self.template_dir = self.base_dir / "templates"

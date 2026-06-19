@@ -1,24 +1,42 @@
-"""JIRA integration for maintenance tickets — Phase 3 §6.
+"""JIRA integration for maintenance tickets + public site-bug reports.
 
-This is a SCAFFOLD. We do not yet have JIRA credentials, so no real HTTP
-requests are made to atlassian.net even when the env vars are populated.
-``create_issue`` returns a fake key so the rest of the wiring (storage,
-webhook lookup, template link) can be exercised end-to-end.
+Both issue-creating methods (``create_issue`` for property maintenance
+tickets, ``create_site_report`` for the public ``/report-issue`` form) build
+a ``fields`` payload and hand it to ``_post_issue``, which makes a real HTTP
+call to the JIRA Cloud REST API.
 
-Pattern matches the email/Zillow stubs elsewhere in the codebase: missing
-credentials -> log a warning at construction time and operate as a no-op.
+The client is a no-op until all four credentials are present (matches the
+email/Zillow stubs elsewhere): missing credentials -> warn once at
+construction and ``is_configured()`` returns False, so callers skip the post
+entirely. Once ``JIRA_BASE_URL``/``JIRA_PROJECT_KEY``/``JIRA_API_TOKEN``/
+``JIRA_USER_EMAIL`` are set, issues are created for real.
 
-When real credentials land, the only thing that needs to change is the
-body of ``create_issue`` (swap the stubbed return for a real
-``requests.post`` to ``{base}/rest/api/3/issue``). Field mapping and the
-webhook reverse-mapping should not need to change.
+Implementation notes:
+* Uses the **v2** REST endpoint (``/rest/api/2/issue``) because it accepts a
+  plain-text ``description`` string. The v3 endpoint requires Atlassian
+  Document Format (a nested JSON doc) instead.
+* Auth is HTTP Basic with the account email + API token — the JIRA **Cloud**
+  scheme. Self-hosted Server/Data Center would use a Bearer PAT instead.
+* The webhook reverse-mapping (``map_jira_status``) is unaffected.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
+import requests
+
 from .console import get_console_logger
+
+
+# JIRA Cloud create-issue endpoint. v2 (not v3) so ``description`` can be a
+# plain string rather than Atlassian Document Format.
+_CREATE_ISSUE_PATH = "/rest/api/2/issue"
+
+# Per-request timeout (seconds). Kept short so a slow JIRA can't tie up a
+# worker; the maintenance path retries around this, and the public-report
+# path runs it off the request thread.
+_HTTP_TIMEOUT = 10
 
 
 # JIRA priority names map cleanly to our four-step ladder. Anything we
@@ -54,6 +72,9 @@ class JiraClient:
         self.project_key = getattr(config, "jira_project_key", "") or ""
         self.api_token = getattr(config, "jira_api_token", "") or ""
         self.user_email = getattr(config, "jira_user_email", "") or ""
+        # Whether to attach a Priority field to maintenance issues. Off-by-env
+        # for projects whose create screen has no Priority field (would 400).
+        self.set_priority = bool(getattr(config, "jira_set_priority", True))
 
         if not self.is_configured():
             self.logger.warning(
@@ -66,11 +87,39 @@ class JiraClient:
 
     # ------------------------------------------------------------------ create
 
-    def create_issue(self, ticket: dict) -> Optional[str]:
-        """Map a local ticket -> JIRA issue and return the new issue key.
+    def _post_issue(self, fields: dict) -> Optional[str]:
+        """POST a built ``fields`` dict to JIRA and return the new issue key.
 
-        Returns ``None`` when not configured. Returns a stub key when
-        configured (no real HTTP call yet — credentials pending).
+        Raises ``requests.RequestException`` on transport or non-2xx HTTP
+        error (after logging JIRA's error body) so the caller's retry/fallback
+        path runs. Assumes ``is_configured()`` — callers guard before building
+        the payload.
+        """
+        url = f"{self.base_url}{_CREATE_ISSUE_PATH}"
+        try:
+            resp = requests.post(
+                url,
+                auth=(self.user_email, self.api_token),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json={"fields": fields},
+                timeout=_HTTP_TIMEOUT,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            # JIRA returns a JSON error body (e.g. unknown issuetype, field not
+            # on screen) — surface it so misconfiguration is diagnosable.
+            body = getattr(getattr(exc, "response", None), "text", "") or ""
+            self.logger.error("JIRA create failed (%s): %s %s", url, exc, body[:500])
+            raise
+        key = (resp.json() or {}).get("key")
+        self.logger.info("Created JIRA issue %s in project %s", key, self.project_key)
+        return key
+
+    def create_issue(self, ticket: dict) -> Optional[str]:
+        """Map a local maintenance ticket -> JIRA issue; return the issue key.
+
+        Returns ``None`` when not configured. Raises on JIRA HTTP failure so
+        the TicketService retry loop can react.
         """
         if not self.is_configured():
             return None
@@ -84,24 +133,19 @@ class JiraClient:
         )
         category = (ticket.get("category") or "other").lower()
 
-        payload = {
-            "fields": {
-                "project": {"key": self.project_key},
-                "summary": title,
-                "description": f"{description}\n\nProperty: {property_name}\nSubmitter: {submitter}",
-                "priority": {"name": priority_name},
-                "labels": [category],
-                "issuetype": {"name": "Task"},
-            }
+        fields = {
+            "project": {"key": self.project_key},
+            "summary": title,
+            "description": f"{description}\n\nProperty: {property_name}\nSubmitter: {submitter}",
+            "labels": [category],
+            "issuetype": {"name": "Task"},
         }
+        # Priority is opt-out: omitted when the project's create screen lacks
+        # the field (JIRA_SET_PRIORITY=0) to avoid a 400.
+        if self.set_priority:
+            fields["priority"] = {"name": priority_name}
 
-        # No real HTTP — credentials still pending. Log enough that the ops
-        # team can see exactly what *would* be sent once the toggle flips.
-        self.logger.info(
-            "would create JIRA issue in project=%s priority=%s labels=%s summary=%r",
-            self.project_key, priority_name, payload["fields"]["labels"], title,
-        )
-        return "STUB-1"
+        return self._post_issue(fields)
 
     def create_site_report(
         self,
@@ -120,9 +164,9 @@ class JiraClient:
         triage/backlog status in JIRA for a human to confirm before they mix
         in with planned work, not straight into an active sprint.
 
-        Returns ``None`` when not configured. Returns a stub key when
-        configured (no real HTTP call yet — same scaffold state as
-        ``create_issue``; see the module docstring).
+        Returns ``None`` when not configured. Raises on JIRA HTTP failure so
+        the caller can fall back (the public route runs this off-thread and
+        emails the admin regardless).
         """
         if not self.is_configured():
             return None
@@ -145,23 +189,14 @@ class JiraClient:
         if user_agent:
             meta.append(f"User-Agent: {user_agent}")
 
-        payload = {
-            "fields": {
-                "project": {"key": self.project_key},
-                "summary": summary,
-                "description": "\n".join(meta) + "\n\n" + (description or "(no description)"),
-                "labels": ["public-reported", "site-bug"],
-                "issuetype": {"name": "Bug"},
-            }
+        fields = {
+            "project": {"key": self.project_key},
+            "summary": summary,
+            "description": "\n".join(meta) + "\n\n" + (description or "(no description)"),
+            "labels": ["public-reported", "site-bug"],
+            "issuetype": {"name": "Bug"},
         }
-
-        # No real HTTP — credentials still pending. Log what WOULD be sent so
-        # the flow is observable end-to-end (mirrors create_issue).
-        self.logger.info(
-            "would create JIRA Bug in project=%s labels=%s summary=%r",
-            self.project_key, payload["fields"]["labels"], summary,
-        )
-        return "STUB-1"
+        return self._post_issue(fields)
 
     # --------------------------------------------------------------- webhook
 

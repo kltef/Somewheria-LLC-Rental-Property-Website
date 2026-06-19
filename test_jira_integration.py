@@ -7,7 +7,15 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+
+def _fake_jira_response(key="STUB-1"):
+    """A stand-in for requests.Response from a successful JIRA create."""
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"key": key, "id": "10001"}
+    return resp
 
 # Ensure background JIRA threads run inline so we can assert on jira_key
 # right after create_ticket() returns.
@@ -26,6 +34,7 @@ class JiraClientTestCase(unittest.TestCase):
             jira_api_token="tok",
             jira_user_email="bot@example.com",
             jira_webhook_secret="hunter2",
+            jira_set_priority=True,
         )
         base.update(overrides)
         return SimpleNamespace(**base)
@@ -35,37 +44,77 @@ class JiraClientTestCase(unittest.TestCase):
         self.assertFalse(client.is_configured())
         self.assertIsNone(client.create_issue({"title": "x", "description": "y"}))
 
-    def test_create_issue_returns_stub_key_when_configured(self):
+    def test_create_issue_posts_to_jira_v2_with_basic_auth(self):
         client = JiraClient(self._make_config(), notifications=MagicMock())
         self.assertTrue(client.is_configured())
-        key = client.create_issue({
-            "title": "Leak",
-            "description": "Under the sink",
-            "property_name": "Maple House",
-            "submitted_by": "renter@example.com",
-            "priority": "high",
-            "category": "plumbing",
-        })
-        self.assertEqual(key, "STUB-1")
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("MAINT-7")
+            key = client.create_issue({
+                "title": "Leak",
+                "description": "Under the sink",
+                "property_name": "Maple House",
+                "submitted_by": "renter@example.com",
+                "priority": "high",
+                "category": "plumbing",
+            })
+        self.assertEqual(key, "MAINT-7")
+        # Real HTTP call shape: v2 endpoint, Basic auth, timeout, Task type.
+        args, kwargs = post.call_args
+        self.assertTrue(args[0].endswith("/rest/api/2/issue"))
+        self.assertEqual(kwargs["auth"], ("bot@example.com", "tok"))
+        self.assertIn("timeout", kwargs)
+        fields = kwargs["json"]["fields"]
+        self.assertEqual(fields["issuetype"], {"name": "Task"})
+        self.assertEqual(fields["priority"], {"name": "High"})
+
+    def test_create_issue_omits_priority_when_disabled(self):
+        client = JiraClient(
+            self._make_config(jira_set_priority=False), notifications=MagicMock()
+        )
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("MAINT-8")
+            client.create_issue({"title": "t", "description": "d", "priority": "high"})
+        self.assertNotIn("priority", post.call_args.kwargs["json"]["fields"])
+
+    def test_create_issue_raises_on_http_error(self):
+        import requests
+        client = JiraClient(self._make_config(), notifications=MagicMock())
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            resp = MagicMock()
+            resp.raise_for_status.side_effect = requests.HTTPError("400")
+            resp.text = '{"errors": {"issuetype": "invalid"}}'
+            post.return_value = resp
+            with self.assertRaises(requests.RequestException):
+                client.create_issue({"title": "t", "description": "d"})
 
     def test_create_site_report_no_op_when_unconfigured(self):
         client = JiraClient(self._make_config(jira_api_token=""), notifications=MagicMock())
         self.assertIsNone(client.create_site_report("Pat", "The map is broken"))
 
-    def test_create_site_report_returns_stub_key_when_configured(self):
+    def test_create_site_report_posts_bug_with_public_label(self):
         client = JiraClient(self._make_config(), notifications=MagicMock())
-        key = client.create_site_report(
-            "Pat",
-            "Photos won't load on the for-rent page",
-            page_url="https://site/for-rent",
-            user_agent="Safari/17",
-        )
-        self.assertEqual(key, "STUB-1")
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("WEB-3")
+            key = client.create_site_report(
+                "Pat",
+                "Photos won't load on the for-rent page",
+                page_url="https://site/for-rent",
+                user_agent="Safari/17",
+            )
+        self.assertEqual(key, "WEB-3")
+        fields = post.call_args.kwargs["json"]["fields"]
+        self.assertEqual(fields["issuetype"], {"name": "Bug"})
+        self.assertIn("public-reported", fields["labels"])
+        # Auto-captured diagnostics ride along in the description.
+        self.assertIn("https://site/for-rent", fields["description"])
+        self.assertIn("Safari/17", fields["description"])
 
     def test_create_site_report_tolerates_blank_description(self):
         # A blank description shouldn't raise on the summary first-line lookup.
         client = JiraClient(self._make_config(), notifications=MagicMock())
-        self.assertEqual(client.create_site_report("Pat", "   "), "STUB-1")
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("WEB-4")
+            self.assertEqual(client.create_site_report("Pat", "   "), "WEB-4")
 
     def test_status_reverse_mapping(self):
         self.assertEqual(JiraClient.map_jira_status("Open"), "open")
@@ -76,14 +125,23 @@ class JiraClientTestCase(unittest.TestCase):
         self.assertIsNone(JiraClient.map_jira_status(""))
 
     def test_priority_mapping_via_payload_inspection(self):
-        # Indirectly assert mapping via the log. Easier path: check that the
-        # configured client doesn't blow up on each priority.
+        # Each priority maps to the expected JIRA name in the posted payload.
+        expected = {
+            "low": "Low", "normal": "Medium", "high": "High",
+            "urgent": "Highest", "bogus": "Medium",
+        }
         client = JiraClient(self._make_config(), notifications=MagicMock())
-        for prio in ("low", "normal", "high", "urgent", "bogus"):
-            self.assertEqual(client.create_issue({
-                "title": "t", "description": "d", "priority": prio,
-                "category": "other",
-            }), "STUB-1")
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("MAINT-1")
+            for prio, jira_name in expected.items():
+                client.create_issue({
+                    "title": "t", "description": "d", "priority": prio,
+                    "category": "other",
+                })
+                self.assertEqual(
+                    post.call_args.kwargs["json"]["fields"]["priority"],
+                    {"name": jira_name},
+                )
 
 
 class NowIsoFormatTestCase(unittest.TestCase):
@@ -160,13 +218,15 @@ class TicketServiceJiraWiringTestCase(unittest.TestCase):
             jira_user_email="bot@example.com", jira_webhook_secret="s",
         ), self.notifications)
         svc = TicketService(self.config, self.storage, self.notifications, jira=client)
-        ticket = svc.create_ticket(
-            {"title": "Heater", "description": "Cold"}, submitter_email="r@example.com"
-        )
+        with patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("MAINT-42")
+            ticket = svc.create_ticket(
+                {"title": "Heater", "description": "Cold"}, submitter_email="r@example.com"
+            )
         stored = json.loads(self.tickets_path.read_text("utf-8"))[0]
         self.assertEqual(stored["id"], ticket["id"])
-        self.assertEqual(stored["jira_key"], "STUB-1")
-        self.assertEqual(svc.find_by_jira_key("STUB-1")["id"], ticket["id"])
+        self.assertEqual(stored["jira_key"], "MAINT-42")
+        self.assertEqual(svc.find_by_jira_key("MAINT-42")["id"], ticket["id"])
 
     def test_jira_failure_does_not_block_creation(self):
         client = MagicMock()
@@ -209,8 +269,11 @@ class JiraWebhookRouteTestCase(unittest.TestCase):
         # endpoint from a 400, not Flask's TESTING shortcut).
         self.client = self.app.test_client()
         self.services = self.app.extensions["somewheria_services"]
-        # Seed a ticket with a jira_key.
-        with self.app.app_context():
+        # Seed a ticket with a jira_key. Patch the JIRA HTTP call so the mirror
+        # create returns a known key without touching the network.
+        with self.app.app_context(), \
+                patch("somewheria_app.services.jira.requests.post") as post:
+            post.return_value = _fake_jira_response("STUB-1")
             created = self.services.tickets.create_ticket(
                 {"title": "Leaky", "description": "Drips"},
                 submitter_email="renter@example.com",
