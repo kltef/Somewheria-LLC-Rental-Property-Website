@@ -409,6 +409,16 @@ class PropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(normalized["included_amenities"], [])
         self.assertEqual(normalized["pets_allowed"], "Unknown")
 
+    def test_normalize_property_coerces_null_included_utilities_fallback_to_empty_list(self):
+        # When ``included_amenities`` is absent and the legacy
+        # ``included_utilities`` key is None, setdefault propagates the None
+        # — same crash, same disappear-from-listing symptom.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_utilities": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+
     def test_normalize_property_infers_pets_from_description_when_amenities_null(self):
         # The null-amenities guard must not block the description fallback
         # for pet inference.
