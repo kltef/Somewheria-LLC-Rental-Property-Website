@@ -570,10 +570,19 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
             "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
-        ):
+        ) as smtp_ctor:
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertTrue(result)
+        # The SMTP constructor MUST be called with a timeout so a slow / hung
+        # Gmail relay cannot block the calling thread forever — crash-handler
+        # emails run in daemon threads and would otherwise pile up.
+        ctor_kwargs = smtp_ctor.call_args.kwargs
+        ctor_args = smtp_ctor.call_args.args
+        self.assertEqual(ctor_args[0], "smtp.gmail.com")
+        self.assertEqual(ctor_args[1], 587)
+        self.assertIn("timeout", ctor_kwargs)
+        self.assertGreater(ctor_kwargs["timeout"], 0)
         smtp_instance.starttls.assert_called_once()
         smtp_instance.login.assert_called_once_with("sender@example.com", "app-pass")
         smtp_instance.send_message.assert_called_once()

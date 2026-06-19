@@ -10,6 +10,15 @@ from .console import get_console_logger
 from .validation import is_valid_email
 
 
+# Hard cap on the SMTP socket so a slow / unreachable Gmail relay can't hang
+# the calling thread indefinitely. Crash-handler emails run in daemon
+# threads — without a timeout, an outage upstream would silently accumulate
+# stuck threads (one per unique crash fingerprint per 10 minutes) holding
+# sockets and file descriptors. 30s is generous for a real TLS+login+send
+# round trip while still bounding worst-case stalls.
+SMTP_TIMEOUT_SECONDS = 30
+
+
 class NotificationService:
     def __init__(self, config, analytics) -> None:
         self.config = config
@@ -35,7 +44,7 @@ class NotificationService:
         message.add_alternative(self._html_email_body(subject, body), subtype="html")
 
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=SMTP_TIMEOUT_SECONDS) as server:
                 server.starttls()
                 server.login(self.config.email_sender, app_password)
                 server.send_message(message)
