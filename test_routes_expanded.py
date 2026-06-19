@@ -242,6 +242,22 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Date cannot be in the past.")
 
+    def test_schedule_appointment_rejects_far_future_date(self):
+        too_far = (datetime.date.today() + datetime.timedelta(days=400)).isoformat()
+
+        response = self.client.post(
+            "/property/prop-1/schedule",
+            json={
+                "name": "Alex",
+                "date": too_far,
+                "contact_method": "email",
+                "contact_info": "alex@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("within", response.get_json()["error"])
+
     def test_schedule_appointment_returns_404_when_property_is_missing(self):
         future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
         with patch.object(self.services.properties, "fetch_live_property_name", return_value=None):
@@ -261,6 +277,8 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
     def test_schedule_appointment_success_sends_email(self):
         future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
         with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(
             self.services.notifications,
             "send_email",
         ) as send_email_mock:
@@ -279,6 +297,43 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         send_email_mock.assert_called_once()
         self.assertIn("Viewing Appointment Request", send_email_mock.call_args[0][0])
         self.assertIn("Maple House", send_email_mock.call_args[0][1])
+
+    def test_schedule_appointment_persists_booking(self):
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=True
+        ) as book_mock, patch.object(self.services.notifications, "send_email"):
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        book_mock.assert_called_once_with("prop-1", future_date)
+
+    def test_schedule_appointment_rejects_double_booking(self):
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"), patch.object(
+            self.services.appointments, "book", return_value=False
+        ), patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "That date is already booked.")
+        send_email_mock.assert_not_called()
 
     def test_about_page_loads(self):
         response = self.client.get("/about")
@@ -342,6 +397,20 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Name and a valid email are required.", response.data)
 
+    def test_register_rejects_malformed_email(self):
+        for garbage in ("@", "a@", "@b.com", "a@b"):
+            with patch.object(self.services.storage, "add_pending_registration") as add_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as send_email_mock:
+                response = self.client.post(
+                    "/register",
+                    data={"name": "Jamie", "email": garbage, "reason": "Need access"},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Name and a valid email are required.", response.data)
+            add_mock.assert_not_called()
+            send_email_mock.assert_not_called()
+
     def test_register_saves_pending_registration_and_sends_email(self):
         with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
             self.services.storage,
@@ -360,6 +429,24 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             {"name": "Jamie", "email": "jamie@example.com", "reason": "Need access"}
         )
         send_email_mock.assert_called_once()
+
+    def test_register_duplicate_does_not_send_email(self):
+        # When storage reports the email is already pending (returns False),
+        # the route must not fire a second admin notification.
+        with patch.object(
+            self.services.storage, "add_pending_registration", return_value=False
+        ) as add_pending_mock, patch.object(
+            self.services.notifications,
+            "send_email",
+        ) as send_email_mock:
+            response = self.client.post(
+                "/register",
+                data={"name": "Jamie", "email": "jamie@example.com", "reason": "Need access"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        add_pending_mock.assert_called_once()
+        send_email_mock.assert_not_called()
 
     def test_admin_registrations_page_loads_for_admin(self):
         self.login_as("admin")
@@ -678,6 +765,27 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Contract removed for renter@example.com.", response.data)
         save_contracts_mock.assert_called_once_with({})
 
+    def test_admin_contracts_delete_rejects_traversal_pdf_filename(self):
+        self.login_as("admin")
+        contracts = {
+            "renter@example.com": [
+                {"property_name": "Maple House", "pdf_filename": "../../../etc/passwd"}
+            ]
+        }
+        with patch.object(self.services.storage, "get_renter_contracts", return_value=contracts), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ), patch.object(self.services.storage, "delete_file") as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={"action": "delete", "renter_email": "renter@example.com", "contract_index": "0"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract removed for renter@example.com.", response.data)
+        # The traversal filename must never reach the filesystem layer.
+        delete_file_mock.assert_not_called()
+
     def test_analytics_dashboard_forbids_standard_admin(self):
         self.login_as("admin")
 
@@ -811,6 +919,36 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/manage-listings", response.headers["Location"])
         toggle_sale_mock.assert_called_once_with("prop-1", "admin@example.com")
+
+    def test_property_routes_do_not_double_log_site_change(self):
+        # The property service layer already calls log_site_change for create,
+        # update, delete, toggle-sale, and image upload. The route layer used
+        # to call it a second time, inflating site_changes.log and
+        # double-counting created/deleted events in recent_listing_activity
+        # (which feeds the admin dashboard chart). Guard against the
+        # regression by verifying no log_site_change calls originate from the
+        # routes themselves when the service methods are mocked out.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.properties, "create_property"), patch.object(
+            self.services.properties, "update_property"
+        ), patch.object(self.services.properties, "delete_property"), patch.object(
+            self.services.properties, "toggle_sale"
+        ), patch.object(
+            self.services.properties, "upload_image", return_value="/static/uploads/x.jpg"
+        ), patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_mock:
+            self.client.post("/save-edit/new", data={"name": "Maple"})
+            self.client.post("/save-edit/prop-1", data={"name": "Maple"})
+            self.client.post("/delete-listing/prop-1")
+            self.client.post("/toggle-sale/prop-1")
+            self.client.post(
+                "/upload-image/prop-1",
+                data={"file": (BytesIO(b"image"), "photo.png")},
+                content_type="multipart/form-data",
+            )
+
+        log_mock.assert_not_called()
 
     def test_google_callback_shows_oauth_error_screen_when_not_configured(self):
         self.services.config.google_client_id = ""
@@ -974,44 +1112,23 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_admin_tickets_export_csv_neutralizes_formula_injection(self):
-        self.login_as("admin")
-        malicious_ticket = {
-            "id": "abc123",
-            "title": "=HYPERLINK(\"http://evil.example\",\"click\")",
-            "status": "open",
-            "priority": "normal",
-            "category": "plumbing",
-            "submitted_by": "+15551234567@example.com",
-            "property_name": "@SUM(1+1)",
-            "created_at": "2030-01-01T00:00:00Z",
-            "updated_at": "2030-01-02T00:00:00Z",
-        }
-        with patch.object(self.services.tickets, "list_tickets", return_value=[malicious_ticket]):
-            response = self.client.get("/admin/tickets/export.csv")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        # Each formula-triggering field must be prefixed with a single quote so
-        # spreadsheet apps render it as literal text rather than evaluating it.
-        self.assertIn("'=HYPERLINK", body)
-        self.assertIn("'+15551234567@example.com", body)
-        self.assertIn("'@SUM(1+1)", body)
-        # And the raw, unescaped formula must NOT appear at the start of a cell.
-        self.assertNotIn(",=HYPERLINK", body)
-
     def test_admin_contracts_export_csv_neutralizes_formula_injection(self):
+        # A malicious admin or hand-edited storage could record a property
+        # name beginning with `=` (or `+`, `-`, `@`). When the resulting CSV
+        # is opened in Excel / LibreOffice / Google Sheets the leading
+        # character is interpreted as the start of a formula. The export
+        # must defuse those cells by prefixing with a single quote.
         self.login_as("admin")
         with patch.object(
             self.services.storage,
             "get_renter_contracts",
             return_value={
-                "renter@example.com": [
+                "=cmd|'/c calc'!A1": [
                     {
-                        "property_name": "=cmd|'/c calc'!A1",
-                        "start_date": "2030-01-01",
-                        "end_date": "2030-12-31",
-                        "status": "-Active",
+                        "property_name": "=HYPERLINK(\"http://evil\")",
+                        "start_date": "+1",
+                        "end_date": "-1",
+                        "status": "@SUM(1+1)",
                         "created_at": "2030-01-01T00:00:00",
                     }
                 ]
@@ -1021,9 +1138,46 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("'=cmd|'/c calc'!A1", body)
-        self.assertIn("'-Active", body)
-        self.assertNotIn(",=cmd", body)
+        data_line = body.splitlines()[1]
+        # Each formula-triggering cell must be prefixed with a single quote.
+        # The renter_email cell contains a comma so csv.writer will quote it;
+        # check the escaped substring instead of the whole field.
+        self.assertIn("'=cmd|'/c calc'!A1", data_line)
+        self.assertIn("'=HYPERLINK", data_line)
+        self.assertIn("'+1", data_line)
+        self.assertIn("'-1", data_line)
+        self.assertIn("'@SUM(1+1)", data_line)
+        # Non-triggering cells stay untouched.
+        self.assertIn("2030-01-01T00:00:00", data_line)
+
+    def test_admin_tickets_export_csv_neutralizes_formula_injection(self):
+        # Any user who can file a ticket can choose its title, which lands
+        # verbatim in the admin CSV export. Without escaping, a title like
+        # ``=cmd|'/c calc'!A1`` becomes an executable formula on open.
+        self.login_as("admin")
+        sample_ticket = {
+            "id": "abc123",
+            "title": "=cmd|'/c calc'!A1",
+            "status": "open",
+            "priority": "normal",
+            "category": "plumbing",
+            "submitted_by": "+renter@example.com",
+            "property_name": "@SUM(1+1)",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-02T00:00:00Z",
+        }
+        with patch.object(self.services.tickets, "list_tickets", return_value=[sample_ticket]):
+            response = self.client.get("/admin/tickets/export.csv")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        data_line = body.splitlines()[1]
+        self.assertIn("'=cmd|'/c calc'!A1", data_line)
+        self.assertIn("'+renter@example.com", data_line)
+        self.assertIn("'@SUM(1+1)", data_line)
+        # Benign cells are unchanged.
+        self.assertIn("abc123", data_line)
+        self.assertIn("open", data_line)
 
 
     # --- §3.3 Lead capture tests ---
@@ -1033,8 +1187,21 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn(b"valid email", response.data)
 
+    def test_submit_lead_capture_rejects_malformed_emails(self):
+        # Catches the cases the previous "@ in value" check let through.
+        for garbage in ("@", "a@", "@b.com", "a@b", "user @example.com"):
+            with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as send_email_mock:
+                response = self.client.post("/lead-captures", data={"email": garbage})
+            self.assertEqual(response.status_code, 400, garbage)
+            add_mock.assert_not_called()
+            send_email_mock.assert_not_called()
+
     def test_submit_lead_capture_saves_and_emails(self):
-        with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
+        with patch.object(
+            self.services.storage, "add_pending_lead_capture", return_value=True
+        ) as add_mock, patch.object(
             self.services.notifications, "send_email"
         ) as send_email_mock:
             response = self.client.post(
@@ -1048,6 +1215,25 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(called_with["email"], "lead@example.com")
         self.assertIn("submitted_at", called_with)
         send_email_mock.assert_called_once()
+
+    def test_submit_lead_capture_duplicate_does_not_reemail_admins(self):
+        # A repeat POST for an already-pending email must not send a second
+        # "New Lead Capture" notification — otherwise an attacker can spam the
+        # admin inbox at the rate-limit ceiling just by replaying the form.
+        # The user-facing response is still success=True so the dedup state
+        # isn't leaked to unauthenticated callers.
+        with patch.object(
+            self.services.storage, "add_pending_lead_capture", return_value=False
+        ) as add_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock:
+            response = self.client.post(
+                "/lead-captures", data={"email": "dup@example.com"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json().get("success"))
+        add_mock.assert_called_once()
+        send_email_mock.assert_not_called()
 
     def test_admin_lead_captures_page_loads_for_admin(self):
         self.login_as("admin")
@@ -1304,6 +1490,43 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/does-not-exist/download")
         self.assertEqual(response.status_code, 404)
 
+    def test_contract_pdfs_stored_outside_static_tree(self):
+        """Regression: contract PDFs must not live under ``static/`` because
+        Flask's static handler would serve them at /static/uploads/contracts/...
+        with no authentication, bypassing the @renter_required check on
+        /contracts/<id>/download."""
+        config = self.services.config
+        contract_dir = config.contract_upload_dir.resolve()
+        static_dir = config.static_dir.resolve()
+        self.assertFalse(
+            str(contract_dir).startswith(str(static_dir) + os.sep)
+            or contract_dir == static_dir,
+            f"Contract upload directory {contract_dir} sits under the "
+            f"static folder {static_dir}; this exposes signed PDFs via "
+            f"Flask's static handler with no auth check.",
+        )
+
+    def test_static_url_does_not_serve_unauth_contract_pdf(self):
+        """An unauthenticated request to a /static URL that mirrors the old
+        contract path must NOT return a PDF that exists in the contract
+        store. Pairs with test_contract_pdfs_stored_outside_static_tree
+        and catches a regression if someone moves the dir back under static/."""
+        contract_id = "regression-leak-uuid"
+        pdf_name = f"{contract_id}.pdf"
+        pdf_path = self.services.config.contract_upload_dir / pdf_name
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4 regression-secret")
+        try:
+            # No login. The /static URL the old code used must not serve it.
+            response = self.client.get(f"/static/uploads/contracts/{pdf_name}")
+            self.assertNotEqual(response.status_code, 200)
+            self.assertNotIn(b"regression-secret", response.data)
+        finally:
+            try:
+                pdf_path.unlink()
+            except OSError:
+                pass
+
     def test_renter_profile_post_persists_rcs_status_updates(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(
@@ -1430,6 +1653,67 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
                     ticket["id"], _Upload(), "renter@example.com"
                 )
         finally:
+            tickets_file = self.services.config.tickets_file
+            if tickets_file.exists():
+                try:
+                    tickets_file.unlink()
+                except OSError:
+                    pass
+
+    def test_ticket_service_add_photo_cleans_orphan_on_save_failure(self):
+        """If persisting the ticket JSON fails after the photo is on disk,
+        the orphaned image file must be removed so static/uploads/tickets/
+        doesn't accumulate dead bytes on every save error."""
+        from somewheria_app.services.properties import UploadValidationError
+
+        services = self.services
+        with patch.object(services.notifications, "send_email", return_value=True):
+            ticket = services.tickets.create_ticket(
+                {
+                    "title": "Outlet",
+                    "description": "Sparks",
+                    "category": "electrical",
+                    "priority": "urgent",
+                },
+                "renter@example.com",
+            )
+        ticket_dir = self.services.config.ticket_upload_dir / ticket["id"]
+        try:
+
+            class _Upload:
+                def __init__(self, name, blob):
+                    self.filename = name
+                    self.stream = BytesIO(blob)
+
+            with patch.object(
+                services.tickets, "_save", side_effect=OSError("disk full")
+            ):
+                with self.assertRaises(UploadValidationError):
+                    services.tickets.add_photo(
+                        ticket["id"],
+                        _Upload("orphan.png", self._png_bytes()),
+                        "renter@example.com",
+                    )
+
+            # The photo must NOT remain on disk after a failed save.
+            if ticket_dir.exists():
+                remaining = list(ticket_dir.iterdir())
+                self.assertEqual(
+                    remaining,
+                    [],
+                    f"expected ticket upload dir to be empty, found {remaining}",
+                )
+        finally:
+            if ticket_dir.exists():
+                for child in ticket_dir.iterdir():
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+                try:
+                    ticket_dir.rmdir()
+                except OSError:
+                    pass
             tickets_file = self.services.config.tickets_file
             if tickets_file.exists():
                 try:

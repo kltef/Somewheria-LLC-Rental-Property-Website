@@ -16,6 +16,7 @@ from ..services.auth import (
 from ..services.properties import BLANK_PROPERTY, UploadValidationError
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 ALLOWED_ROLES = ("renter", "admin", "high_admin")
@@ -81,16 +82,8 @@ def save_edit(id):
     try:
         if id == "new":
             services.properties.create_property(request.form, actor_email)
-            try:
-                services.notifications.log_site_change(actor_email, "property_created", {"id_or_new": id})
-            except Exception:
-                pass
             return redirect(url_for("manage_listings"))
         services.properties.update_property(id, request.form, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_updated", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
     except KeyError:
         return "Property not found", 404
@@ -123,10 +116,6 @@ def upload_image(uuid):
             "Upload Error", f"Unexpected upload failure for {uuid}: {exc}"
         )
         return jsonify(success=False, message="Upload failed."), 500
-    try:
-        services.notifications.log_site_change(actor_email, "property_image_uploaded", {"id": uuid, "url": relative_url})
-    except Exception:
-        pass
     return jsonify(success=True, new_image_url=relative_url)
 
 
@@ -459,17 +448,20 @@ def register():
         name = request.form.get("name", "").strip()[:120]
         email = request.form.get("email", "").strip().lower()[:254]
         reason = request.form.get("reason", "").strip()[:2000]
-        if not name or not email or "@" not in email:
+        if not name or not is_valid_email(email):
             return render_template("register.html", error="Name and a valid email are required.")
-        existing = services.storage.get_pending_registrations()
-        if any(item.get("email", "").lower() == email for item in existing):
-            # Do not re-notify on duplicate to prevent SMTP abuse.
-            return render_template("register.html", success=True)
-        services.storage.add_pending_registration({"name": name, "email": email, "reason": reason})
-        services.notifications.send_email(
-            "New Registration Request",
-            f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+        # Storage de-duplicates by email and reports whether a new row was
+        # stored, so we only notify on a genuinely new request — a duplicate
+        # (even one racing past a separate pre-check) can't trigger a second
+        # admin email.
+        newly_added = services.storage.add_pending_registration(
+            {"name": name, "email": email, "reason": reason}
         )
+        if newly_added:
+            services.notifications.send_email(
+                "New Registration Request",
+                f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+            )
         return render_template("register.html", success=True)
     return render_template("register.html")
 
@@ -642,6 +634,26 @@ def _validate_contract_pdf(uploaded_file) -> bytes | None:
     return raw
 
 
+def _safe_contract_pdf_path(services, pdf_filename: str):
+    """Resolve a stored contract PDF filename to an absolute path inside the
+    upload directory, or return None if the name is missing or escapes the
+    upload root. Filenames are generated server-side as ``<uuid>.pdf`` and
+    should never contain separators, but ``renter_contracts.json`` can be
+    hand-edited, so this re-validates before any filesystem op (download or
+    delete) to prevent path traversal."""
+    if not pdf_filename:
+        return None
+    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
+        return None
+    upload_root = services.config.contract_upload_dir.resolve()
+    pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
+    try:
+        pdf_path.relative_to(upload_root)
+    except ValueError:
+        return None
+    return pdf_path
+
+
 @admin_required
 def admin_contracts():
     services = get_services()
@@ -699,13 +711,15 @@ def admin_contracts():
                     contract_idx = int(contract_index)
                     if renter_email in contracts_data and 0 <= contract_idx < len(contracts_data[renter_email]):
                         removed = contracts_data[renter_email][contract_idx]
-                        # Best-effort delete of the on-disk PDF.
+                        # Best-effort delete of the on-disk PDF. Validate the
+                        # filename the same way the download path does so a
+                        # tampered ``pdf_filename`` can't unlink an arbitrary
+                        # file outside the upload directory.
                         pdf_filename = removed.get("pdf_filename") or ""
-                        if pdf_filename:
+                        safe_pdf_path = _safe_contract_pdf_path(services, pdf_filename)
+                        if safe_pdf_path is not None:
                             try:
-                                services.storage.delete_file(
-                                    services.config.contract_upload_dir / pdf_filename
-                                )
+                                services.storage.delete_file(safe_pdf_path)
                             except Exception:
                                 pass
                         del contracts_data[renter_email][contract_idx]
@@ -795,20 +809,11 @@ def contract_download(contract_id: str):
     if not contract:
         abort(404)
     pdf_filename = contract.get("pdf_filename") or ""
-    if not pdf_filename:
-        abort(404)
-    # Defense-in-depth: only the bare filename component is honoured. The
-    # filename was generated server-side as ``<uuid>.pdf`` so it should never
-    # contain separators, but be paranoid in case of hand-edited storage.
-    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
-        abort(404)
-    pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
-    upload_root = services.config.contract_upload_dir.resolve()
-    try:
-        pdf_path.relative_to(upload_root)
-    except ValueError:
-        abort(404)
-    if not pdf_path.exists():
+    # Defense-in-depth: re-validate the stored filename against path traversal
+    # before touching the filesystem (filenames are server-generated UUIDs but
+    # storage can be hand-edited).
+    pdf_path = _safe_contract_pdf_path(services, pdf_filename)
+    if pdf_path is None or not pdf_path.exists():
         abort(404)
     try:
         return send_file(
@@ -827,11 +832,9 @@ def delete_listing(id):
     actor_email = (get_current_user() or {}).get("email", "anonymous") if is_logged_in() else "anonymous"
     try:
         services.properties.delete_property(id, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_deleted", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
+    except KeyError:
+        return "Property not found", 404
     except Exception as exc:
         services.notifications.log_and_notify_error(
             "Property Delete Error",
@@ -846,10 +849,6 @@ def toggle_sale(id):
     actor_email = (get_current_user() or {}).get("email", "anonymous") if is_logged_in() else "anonymous"
     try:
         services.properties.toggle_sale(id, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_for_sale_toggled", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
     except KeyError:
         return "Property not found", 404
@@ -866,17 +865,24 @@ def _csv_filename(prefix: str) -> str:
     return f"{prefix}-{today}.csv"
 
 
-# CSV formula-injection guard. Spreadsheet apps (Excel, Google Sheets,
-# LibreOffice) evaluate any cell whose first character is one of these as a
-# formula, so a user-controlled field — a ticket title, property name, or
-# submitter email — could smuggle in =HYPERLINK(...) / =cmd|... payloads that
-# fire when an admin opens the export. Prefix such values with a single quote
-# (the OWASP-recommended neutralizer) so they render as literal text.
+# Leading characters that Excel / LibreOffice / Google Sheets interpret as the
+# start of a formula. A renter who submits a ticket titled ``=cmd|'/c calc'!A1``
+# would otherwise execute that formula when an admin opens the exported file.
+# Defuse by prefixing the cell with a single quote — same mitigation OWASP
+# recommends. Tab and CR are included because some spreadsheet apps treat them
+# as cell-leading triggers via auto-detection.
 _CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
-def _csv_safe_cell(value) -> str:
-    text = "" if value is None else str(value)
+def _csv_safe(value) -> str:
+    """Return ``value`` as a CSV cell that cannot be interpreted as a formula.
+
+    Non-string values are coerced via ``str`` so admins still see the raw data
+    (e.g. integers from JIRA metadata). Empty strings pass through unchanged.
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
     if text and text[0] in _CSV_FORMULA_TRIGGERS:
         return "'" + text
     return text
@@ -906,12 +912,12 @@ def admin_contracts_export_csv():
         for renter_email, contracts in contracts_by_renter.items():
             for contract in contracts or []:
                 writer.writerow([
-                    _csv_safe_cell(renter_email),
-                    _csv_safe_cell(contract.get("property_name", "")),
-                    _csv_safe_cell(contract.get("start_date", "")),
-                    _csv_safe_cell(contract.get("end_date", "")),
-                    _csv_safe_cell(contract.get("status", "")),
-                    _csv_safe_cell(contract.get("created_at", "")),
+                    _csv_safe(renter_email),
+                    _csv_safe(contract.get("property_name", "")),
+                    _csv_safe(contract.get("start_date", "")),
+                    _csv_safe(contract.get("end_date", "")),
+                    _csv_safe(contract.get("status", "")),
+                    _csv_safe(contract.get("created_at", "")),
                 ])
                 yield buffer.getvalue()
                 buffer.seek(0)
@@ -953,15 +959,15 @@ def admin_tickets_export_csv():
         buffer.truncate(0)
         for ticket in tickets:
             writer.writerow([
-                _csv_safe_cell(ticket.get("id", "")),
-                _csv_safe_cell(ticket.get("title", "")),
-                _csv_safe_cell(ticket.get("status", "")),
-                _csv_safe_cell(ticket.get("priority", "")),
-                _csv_safe_cell(ticket.get("category", "")),
-                _csv_safe_cell(ticket.get("submitted_by", "")),
-                _csv_safe_cell(ticket.get("property_name", "")),
-                _csv_safe_cell(ticket.get("created_at", "")),
-                _csv_safe_cell(ticket.get("updated_at", "")),
+                _csv_safe(ticket.get("id", "")),
+                _csv_safe(ticket.get("title", "")),
+                _csv_safe(ticket.get("status", "")),
+                _csv_safe(ticket.get("priority", "")),
+                _csv_safe(ticket.get("category", "")),
+                _csv_safe(ticket.get("submitted_by", "")),
+                _csv_safe(ticket.get("property_name", "")),
+                _csv_safe(ticket.get("created_at", "")),
+                _csv_safe(ticket.get("updated_at", "")),
             ])
             yield buffer.getvalue()
             buffer.seek(0)
