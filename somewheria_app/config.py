@@ -56,7 +56,15 @@ class AppConfig:
         self.template_dir = self.base_dir / "templates"
         self.static_dir = self.base_dir / "static"
         self.upload_dir = self.static_dir / "uploads"
-        self.contract_upload_dir = self.upload_dir / "contracts"
+        # Contract PDFs are auth-gated (renter or admin only). They MUST NOT
+        # sit under ``static_dir`` — Flask serves anything in the static tree
+        # at ``/static/<path>`` with no auth check, which would let anyone
+        # who guesses (or has been linked to) a PDF's UUID download it,
+        # bypassing the ``/contracts/<id>/download`` access control. Storing
+        # them under ``base_dir / "private"`` keeps them out of the static
+        # route entirely; ``contract_download`` is the sole access path.
+        self.private_dir = self.base_dir / "private"
+        self.contract_upload_dir = self.private_dir / "contracts"
         self.ticket_upload_dir = self.upload_dir / "tickets"
         self.log_file = self.base_dir / "application.log"
         self.change_log_file = self.base_dir / "site_changes.log"
@@ -72,5 +80,42 @@ class AppConfig:
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.private_dir.mkdir(parents=True, exist_ok=True)
         self.contract_upload_dir.mkdir(parents=True, exist_ok=True)
         self.ticket_upload_dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_contract_pdfs()
+
+    def _migrate_legacy_contract_pdfs(self) -> None:
+        # Earlier versions stored contract PDFs under static/uploads/contracts/,
+        # where Flask's static handler served them unauthenticated. Move any
+        # leftover files out of that directory on startup so an in-place
+        # upgrade doesn't continue to expose them.
+        legacy_dir = self.upload_dir / "contracts"
+        try:
+            if not legacy_dir.exists() or legacy_dir.resolve() == self.contract_upload_dir.resolve():
+                return
+        except OSError:
+            return
+        try:
+            entries = list(legacy_dir.iterdir())
+        except OSError:
+            return
+        for source in entries:
+            if not source.is_file():
+                continue
+            destination = self.contract_upload_dir / source.name
+            try:
+                if destination.exists():
+                    source.unlink()
+                else:
+                    source.replace(destination)
+            except OSError:
+                # Best-effort: a permission error here is logged via the next
+                # admin operation's failure path. Don't crash startup.
+                continue
+        try:
+            # Remove the empty legacy directory so future startups skip the
+            # migration branch entirely.
+            legacy_dir.rmdir()
+        except OSError:
+            pass

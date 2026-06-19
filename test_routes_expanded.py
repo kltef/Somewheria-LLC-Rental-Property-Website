@@ -1380,6 +1380,43 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/does-not-exist/download")
         self.assertEqual(response.status_code, 404)
 
+    def test_contract_pdfs_stored_outside_static_tree(self):
+        """Regression: contract PDFs must not live under ``static/`` because
+        Flask's static handler would serve them at /static/uploads/contracts/...
+        with no authentication, bypassing the @renter_required check on
+        /contracts/<id>/download."""
+        config = self.services.config
+        contract_dir = config.contract_upload_dir.resolve()
+        static_dir = config.static_dir.resolve()
+        self.assertFalse(
+            str(contract_dir).startswith(str(static_dir) + os.sep)
+            or contract_dir == static_dir,
+            f"Contract upload directory {contract_dir} sits under the "
+            f"static folder {static_dir}; this exposes signed PDFs via "
+            f"Flask's static handler with no auth check.",
+        )
+
+    def test_static_url_does_not_serve_unauth_contract_pdf(self):
+        """An unauthenticated request to a /static URL that mirrors the old
+        contract path must NOT return a PDF that exists in the contract
+        store. Pairs with test_contract_pdfs_stored_outside_static_tree
+        and catches a regression if someone moves the dir back under static/."""
+        contract_id = "regression-leak-uuid"
+        pdf_name = f"{contract_id}.pdf"
+        pdf_path = self.services.config.contract_upload_dir / pdf_name
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4 regression-secret")
+        try:
+            # No login. The /static URL the old code used must not serve it.
+            response = self.client.get(f"/static/uploads/contracts/{pdf_name}")
+            self.assertNotEqual(response.status_code, 200)
+            self.assertNotIn(b"regression-secret", response.data)
+        finally:
+            try:
+                pdf_path.unlink()
+            except OSError:
+                pass
+
     def test_renter_profile_post_persists_rcs_status_updates(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(

@@ -26,6 +26,9 @@ user_roles.json
 # Local uploaded files
 static/uploads/
 
+# Private (non-static) uploads — contract PDFs etc.
+private/
+
 # Node
 node_modules/
 

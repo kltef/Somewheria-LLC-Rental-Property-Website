@@ -285,7 +285,7 @@ class SqlStorageService:
     # --------------------------------------------------------------- binaries
     #
     # Binary attachments (signed-contract PDFs at
-    # ``static/uploads/contracts/<uuid>.pdf`` and ticket photos at
+    # ``private/contracts/<uuid>.pdf`` and ticket photos at
     # ``static/uploads/tickets/<ticket_id>/``) are URL-addressed from inside
     # ticket / contract JSON payloads, so they continue to live on disk even
     # when ``USE_SQLITE_STORAGE=1``. These mirror the implementation in
