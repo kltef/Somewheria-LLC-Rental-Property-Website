@@ -16,6 +16,11 @@ MAX_CONTACT_LEN = 200
 MAX_DESCRIPTION_LEN = 4000
 MAX_DATE_LEN = 10
 
+# Cap appointment requests at a year out. Legitimate viewings happen within a
+# few weeks; nothing realistic needs more lead time, and an unbounded date
+# field invites year-9999 junk that wastes admin attention.
+MAX_APPOINTMENT_DAYS_AHEAD = 365
+
 ALLOWED_CONTACT_METHODS = {"email", "phone", "text", "sms", "call"}
 
 
@@ -116,6 +121,11 @@ def schedule_appointment(uuid):
         return jsonify(success=False, error="Invalid date."), 400
     if requested_date < datetime.date.today():
         return jsonify(success=False, error="Date cannot be in the past."), 400
+    if requested_date > datetime.date.today() + datetime.timedelta(days=MAX_APPOINTMENT_DAYS_AHEAD):
+        return jsonify(
+            success=False,
+            error=f"Date must be within {MAX_APPOINTMENT_DAYS_AHEAD} days.",
+        ), 400
 
     property_name = services.properties.fetch_live_property_name(uuid)
     if not property_name:
