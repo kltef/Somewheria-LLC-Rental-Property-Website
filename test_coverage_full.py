@@ -97,6 +97,57 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(self.service.cache, latest)
         info_mock.assert_called_once()
 
+    def test_refresh_cache_coalesces_within_window(self):
+        # Two refreshes back-to-back should only fan out once. The second
+        # caller sees the recent timestamp and skips its own fanout — that's
+        # the cost reduction /for-rent and /for-rent.json depend on when a
+        # burst of visitors land on the same page in parallel.
+        latest = [{"id": "prop-1"}]
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=latest
+        ) as fetch_mock:
+            self.service.refresh_cache()
+            self.service.refresh_cache()
+
+        self.assertEqual(fetch_mock.call_count, 1)
+        self.assertEqual(self.service.cache, latest)
+
+    def test_refresh_cache_refetches_after_window(self):
+        latest = [{"id": "prop-1"}]
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=latest
+        ) as fetch_mock:
+            self.service.refresh_cache()
+            # Force the coalesce window to lapse without sleeping.
+            self.service._last_refresh_monotonic -= (
+                self.service.REFRESH_COALESCE_SECONDS + 1.0
+            )
+            self.service.refresh_cache()
+
+        self.assertEqual(fetch_mock.call_count, 2)
+
+    def test_refresh_cache_failure_still_coalesces_followers(self):
+        # An upstream outage records the attempt time too, so a queued
+        # follower doesn't immediately re-hit a dead endpoint. The route
+        # handler's existing UpstreamUnavailable fallback serves the cache
+        # for both leader and follower.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            side_effect=UpstreamUnavailable("upstream down"),
+        ) as fetch_mock:
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.refresh_cache()
+            # Follower arriving within the coalesce window returns silently
+            # rather than re-attempting the failed fetch.
+            self.service.refresh_cache()
+
+        self.assertEqual(fetch_mock.call_count, 1)
+        self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
+
     def test_get_cached_properties_returns_copy(self):
         self.service.cache = [{"id": "prop-1", "nested": {"a": 1}}]
 
@@ -237,6 +288,56 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
         self.notifications.log_site_change.assert_not_called()
+
+    def test_fetch_all_properties_preserves_cache_when_every_record_fetch_fails(self):
+        # IDs listing succeeds, but every per-property details fetch fails
+        # (transient 5xx on the details endpoint). Without the guard,
+        # fetch_all_properties would return [] and refresh_cache would blank
+        # the listings; with the guard it raises UpstreamUnavailable so the
+        # existing cache survives the outage.
+        from somewheria_app.services.properties import UpstreamUnavailable
+
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "_fetch_property_ids",
+            return_value=["prop-1", "prop-2", "prop-3"],
+        ), patch.object(
+            self.service,
+            "fetch_property_record",
+            return_value=None,
+        ):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.fetch_all_properties()
+            with self.assertRaises(UpstreamUnavailable):
+                self.service.refresh_cache()
+
+        # Cache untouched -- /for-rent's try/except falls back to it.
+        self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
+
+    def test_fetch_all_properties_returns_partial_results_when_some_records_fetch(self):
+        # Mixed success/failure should NOT raise — return the successful
+        # records (matching pre-existing partial-failure behavior) and let
+        # refresh_cache overwrite. This keeps the new guard narrow: it only
+        # fires when *every* per-property fetch failed.
+        good = {"id": "prop-1", "name": "Maple"}
+        with patch.object(
+            self.service,
+            "_fetch_property_ids",
+            return_value=["prop-1", "prop-2"],
+        ), patch.object(
+            self.service,
+            "fetch_property_record",
+            side_effect=[good, None],
+        ):
+            self.assertEqual(self.service.fetch_all_properties(), [good])
+
+    def test_fetch_all_properties_empty_id_listing_does_not_raise(self):
+        # Upstream legitimately reporting zero properties is not an outage.
+        # An empty ID list must propagate as an empty result so refresh_cache
+        # can clear the cache when properties are actually all removed.
+        with patch.object(self.service, "_fetch_property_ids", return_value=[]):
+            self.assertEqual(self.service.fetch_all_properties(), [])
 
     def test_fetch_property_ids_rejects_non_dict_payload(self):
         # A misbehaving upstream that returns a top-level list/string must not

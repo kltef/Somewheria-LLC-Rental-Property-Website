@@ -1,5 +1,6 @@
 """Tests for Phase 3 §6 — JIRA scaffold + webhook + CSRF exemption."""
 
+import datetime
 import json
 import os
 import tempfile
@@ -14,7 +15,7 @@ os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
 
 from somewheria_app import create_app  # noqa: E402
 from somewheria_app.services.jira import JiraClient  # noqa: E402
-from somewheria_app.services.tickets import TicketService  # noqa: E402
+from somewheria_app.services.tickets import TicketService, _now_iso  # noqa: E402
 
 
 class JiraClientTestCase(unittest.TestCase):
@@ -64,6 +65,28 @@ class JiraClientTestCase(unittest.TestCase):
                 "title": "t", "description": "d", "priority": prio,
                 "category": "other",
             }), "STUB-1")
+
+
+class NowIsoFormatTestCase(unittest.TestCase):
+    """Lock the on-disk timestamp shape so the move off the deprecated
+    ``datetime.utcnow()`` cannot silently drift the format. Existing ticket
+    JSON files are parsed as ``YYYY-MM-DDTHH:MM:SSZ`` strings; any change
+    would break the admin dashboard's sort and the JIRA mirror payload."""
+
+    def test_now_iso_matches_expected_shape(self):
+        value = _now_iso()
+        self.assertRegex(value, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_now_iso_returns_utc(self):
+        before = datetime.datetime.now(datetime.timezone.utc)
+        value = _now_iso()
+        after = datetime.datetime.now(datetime.timezone.utc)
+        # Parse the stamp back as UTC and assert it falls within the window.
+        parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc
+        )
+        self.assertLessEqual(before.replace(microsecond=0), parsed)
+        self.assertLessEqual(parsed, after)
 
 
 class TicketServiceJiraWiringTestCase(unittest.TestCase):

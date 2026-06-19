@@ -27,6 +27,7 @@ from .properties import (
     UploadValidationError,
     _ensure_safe_image_dimensions,
 )
+from .validation import is_valid_email
 
 
 MAX_TICKET_PHOTOS = 5
@@ -64,10 +65,15 @@ MAX_NAME_LEN = 120
 
 
 def _now_iso() -> str:
-    # ``datetime.utcnow()`` is deprecated in Python 3.12 and slated for removal;
-    # use a timezone-aware UTC clock and emit the same ``YYYY-MM-DDTHH:MM:SSZ``
-    # shape so persisted timestamps and existing tests stay byte-identical.
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # ``datetime.utcnow()`` is deprecated in Python 3.12+; use an aware UTC
+    # now and strip the tzinfo so the wire format stays a bare
+    # ``YYYY-MM-DDTHH:MM:SSZ`` string identical to what older tickets carry.
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0, tzinfo=None)
+        .isoformat()
+        + "Z"
+    )
 
 
 class TicketService:
@@ -346,7 +352,7 @@ class TicketService:
         if not ticket.get("email_updates"):
             return
         recipient = (ticket.get("submitted_by") or "").strip()
-        if not recipient or "@" not in recipient:
+        if not is_valid_email(recipient):
             return
         try:
             self.notifications.send_email(subject, body, to=recipient)
@@ -503,6 +509,16 @@ class TicketService:
         try:
             self._save(tickets)
         except Exception as exc:
+            # The photo is on disk but the ticket record never picked it up.
+            # Leaving it would orphan the file under static/uploads/tickets/
+            # forever — best-effort delete so the upload dir doesn't grow
+            # unboundedly on repeated save failures.
+            try:
+                self.storage.delete_file(save_path)
+            except Exception:
+                self.logger.warning(
+                    "Failed to clean up orphaned ticket photo %s", save_path
+                )
             self.logger.error("Failed to persist ticket photos: %s", exc)
             raise UploadValidationError("Failed to record photo on ticket.") from exc
 

@@ -11,6 +11,7 @@ from somewheria_app.services.auth import AuthService
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService
 from somewheria_app.services.storage import FileStorageService
+from somewheria_app.services.validation import is_valid_email
 
 
 class DummyForm:
@@ -140,6 +141,24 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}, {"email": "new@example.com", "name": "New User"}],
         )
 
+    def test_add_pending_registration_returns_true_when_new(self):
+        with patch.object(self.service, "get_pending_registrations", return_value=[]), patch.object(
+            self.service, "save_json_file"
+        ):
+            self.assertTrue(
+                self.service.add_pending_registration({"email": "new@example.com"})
+            )
+
+    def test_add_pending_registration_dedupes_existing_email(self):
+        # A repeated submission (case-insensitive) must not re-save or report
+        # a new row, so the route won't fire a second admin notification.
+        with patch.object(
+            self.service, "get_pending_registrations", return_value=[{"email": "dup@example.com"}]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            result = self.service.add_pending_registration({"email": "DUP@example.com"})
+        self.assertFalse(result)
+        save_json_mock.assert_not_called()
+
     def test_remove_pending_registration_deletes_matching_entry(self):
         with patch.object(
             self.service,
@@ -157,9 +176,10 @@ class FileStorageServiceTestCase(unittest.TestCase):
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
         ), patch.object(self.service, "save_json_file") as save_json_mock:
-            self.service.add_pending_lead_capture(
+            result = self.service.add_pending_lead_capture(
                 {"email": "new@example.com", "submitted_at": "2026-01-01"}
             )
+        self.assertTrue(result)
         save_json_mock.assert_called_once_with(
             self.config.lead_capture_file,
             [
@@ -169,11 +189,14 @@ class FileStorageServiceTestCase(unittest.TestCase):
         )
 
     def test_add_pending_lead_capture_dedupes_existing_email(self):
-        # Repeated submissions with the same email should not bloat the file.
+        # Repeated submissions with the same email should not bloat the file,
+        # and must report False so the route layer can skip the admin email
+        # instead of replaying it on every duplicate POST.
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "dup@example.com"}]
         ), patch.object(self.service, "save_json_file") as save_json_mock:
-            self.service.add_pending_lead_capture({"email": "dup@example.com"})
+            result = self.service.add_pending_lead_capture({"email": "dup@example.com"})
+        self.assertFalse(result)
         save_json_mock.assert_not_called()
 
     def test_remove_pending_lead_capture_filters_matching_email(self):
@@ -284,6 +307,25 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-01-10", "2030-01-11"})
         self.assertEqual(loaded["prop-2"], {"2030-02-01"})
 
+    def test_book_persists_new_appointment(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01"})
+
+    def test_book_rejects_double_booking(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        self.assertFalse(self.service.book("prop-1", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01"})
+
+    def test_book_accumulates_distinct_dates(self):
+        self.assertTrue(self.service.book("prop-1", "2030-05-01"))
+        self.assertTrue(self.service.book("prop-1", "2030-05-02"))
+        self.assertTrue(self.service.book("prop-2", "2030-05-01"))
+        loaded = self.service.load()
+        self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
+        self.assertEqual(loaded["prop-2"], {"2030-05-01"})
+
 
 class PropertyServiceTestCase(unittest.TestCase):
     def setUp(self):
@@ -333,6 +375,65 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(normalized["thumbnail"], "photo-1.jpg")
 
+    def test_normalize_property_coerces_null_description_to_empty_string(self):
+        # Upstream sometimes returns ``"description": null`` for partially
+        # filled listings. Previously this crashed in the pets-inference branch
+        # (``description.lower()`` on None) — fetch_property_record swallowed the
+        # exception and the property silently dropped out of the listing.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "description": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["description"], "")
+        self.assertEqual(normalized["blurb"], "")
+        self.assertEqual(normalized["pets_allowed"], "Unknown")
+
+    def test_normalize_property_coerces_non_string_description_to_empty_string(self):
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "description": 42}, "prop-1"
+        )
+
+        self.assertEqual(normalized["description"], "")
+        self.assertEqual(normalized["blurb"], "")
+
+    def test_normalize_property_coerces_null_included_amenities_to_empty_list(self):
+        # Same upstream-shape bug as the description coercion above: a
+        # ``"included_amenities": null`` payload made the pets-inference branch
+        # iterate over None and raise TypeError, which fetch_property_record
+        # swallowed as a generic failure so the property dropped silently from
+        # the listing.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": None}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+        self.assertEqual(normalized["pets_allowed"], "Unknown")
+
+    def test_normalize_property_infers_pets_from_description_when_amenities_null(self):
+        # The null-amenities guard must not block the description fallback
+        # for pet inference.
+        normalized = self.service.normalize_property(
+            {
+                "name": "Maple",
+                "included_amenities": None,
+                "description": "Dog-friendly home; pet deposit required.",
+            },
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+        self.assertEqual(normalized["pets_allowed"], "Yes")
+
+    def test_normalize_property_coerces_non_list_included_amenities_to_empty_list(self):
+        # A malformed upstream payload that returns a string (or any other
+        # non-list) for included_amenities must not crash; the string would
+        # iterate per-character and silently misclassify the pets flag.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "included_amenities": "Parking, Laundry"}, "prop-1"
+        )
+
+        self.assertEqual(normalized["included_amenities"], [])
+
     def test_property_payload_from_form_merges_custom_amenities(self):
         form = DummyForm(
             values={
@@ -368,6 +469,21 @@ class PropertyServiceTestCase(unittest.TestCase):
         with patch("somewheria_app.services.properties.requests.delete", return_value=response):
             with self.assertRaises(RuntimeError):
                 self.service.delete_property("prop-1", "admin@example.com")
+
+    def test_delete_property_rejects_invalid_id_before_outbound_call(self):
+        # A traversal-style id must be rejected at the boundary so a
+        # malformed value can't be smuggled into the outbound DELETE URL.
+        # KeyError matches the "not found" semantics the route handler maps
+        # to a 404 response.
+        self.service.cache = [{"id": "prop-1"}]
+        with patch("somewheria_app.services.properties.requests.delete") as delete_mock:
+            with self.assertRaises(KeyError):
+                self.service.delete_property("../../etc/passwd", "admin@example.com")
+
+        delete_mock.assert_not_called()
+        # Cache must be untouched when validation fails.
+        self.assertEqual(self.service.cache, [{"id": "prop-1"}])
+        self.notifications.log_site_change.assert_not_called()
 
     def test_toggle_sale_updates_cache_and_status(self):
         self.service.cache = [{"id": "prop-1", "for_sale": False, "status": "Active"}]
@@ -526,10 +642,19 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
             "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
-        ):
+        ) as smtp_ctor:
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertTrue(result)
+        # The SMTP constructor MUST be called with a timeout so a slow / hung
+        # Gmail relay cannot block the calling thread forever — crash-handler
+        # emails run in daemon threads and would otherwise pile up.
+        ctor_kwargs = smtp_ctor.call_args.kwargs
+        ctor_args = smtp_ctor.call_args.args
+        self.assertEqual(ctor_args[0], "smtp.gmail.com")
+        self.assertEqual(ctor_args[1], 587)
+        self.assertIn("timeout", ctor_kwargs)
+        self.assertGreater(ctor_kwargs["timeout"], 0)
         smtp_instance.starttls.assert_called_once()
         smtp_instance.login.assert_called_once_with("sender@example.com", "app-pass")
         smtp_instance.send_message.assert_called_once()
@@ -820,6 +945,58 @@ class AnalyticsPruningTestCase(unittest.TestCase):
 
         self.assertEqual(tracker.site_visits["2030-01-08"], 4)
         self.assertEqual(tracker.site_visits["2030-01-10"], 1)
+
+    def test_concurrent_prune_does_not_race(self):
+        """Many threads pruning simultaneously must not raise.
+
+        Without the lock guarding ``_prune_old_buckets``, two threads can race
+        such that one's list-comprehension snapshot of ``bucket.keys()`` is
+        invalidated by another's ``del``, raising RuntimeError ("dictionary
+        changed size during iteration") or KeyError. The fix wraps the
+        read-modify-write under ``_lock``.
+        """
+        import sys
+        import threading
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        tracker = AnalyticsTracker(analytics_days=3)
+        for i in range(500):
+            day = f"2024-01-{(i % 28) + 1:02d}"
+            tracker.site_visits[day] = i
+            tracker.unique_users[day].add(f"user-{i}@example.com")
+            tracker.logins[day] = i
+            tracker.errors[day] = i
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(16)
+        # Tighten the GC switch interval so threads actually contend.
+        original_interval = sys.getswitchinterval()
+        sys.setswitchinterval(0.00001)
+
+        def worker():
+            try:
+                barrier.wait()
+                with tracker._lock:
+                    tracker._prune_old_buckets("2030-01-10")
+            except BaseException as exc:  # noqa: BLE001 - test must surface any
+                errors.append(exc)
+
+        try:
+            threads = [threading.Thread(target=worker) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(original_interval)
+
+        self.assertEqual(errors, [])
+        # All historical buckets should be gone; the dict-level dispatch must
+        # have completed cleanly across every thread.
+        self.assertEqual(len(tracker.site_visits), 0)
+        self.assertEqual(len(tracker.unique_users), 0)
+        self.assertEqual(len(tracker.logins), 0)
+        self.assertEqual(len(tracker.errors), 0)
 
 
 class RateLimiterTestCase(unittest.TestCase):
@@ -1156,6 +1333,49 @@ class TicketsNowIsoTestCase(unittest.TestCase):
         # ticks between the two reads.
         delta = abs((parsed - now_utc).total_seconds())
         self.assertLessEqual(delta, 2)
+
+
+class EmailValidationTestCase(unittest.TestCase):
+    def test_accepts_typical_addresses(self):
+        for value in (
+            "user@example.com",
+            "first.last@example.co.uk",
+            "user+tag@sub.example.com",
+            "a@b.co",
+            "USER@EXAMPLE.COM",
+            "hyphen-name@domain-with-hyphen.io",
+            "name_1@example.museum",
+        ):
+            self.assertTrue(is_valid_email(value), value)
+
+    def test_rejects_obvious_junk(self):
+        for value in (
+            "",
+            "@",
+            "a@",
+            "@b.com",
+            "a@b",                # no TLD
+            "a@b.",               # trailing dot
+            "a@.b",               # leading dot in domain
+            "a@b..c",             # consecutive dots
+            "user @example.com",  # space in local
+            "user@exa mple.com",  # space in domain
+            "user@@example.com",  # multiple @
+            "not-an-email",
+            "user@-example.com",  # label starts with hyphen
+            "user@example-.com",  # label ends with hyphen
+        ):
+            self.assertFalse(is_valid_email(value), value)
+
+    def test_rejects_non_strings(self):
+        self.assertFalse(is_valid_email(None))
+        self.assertFalse(is_valid_email(12345))
+        self.assertFalse(is_valid_email(["a@b.com"]))
+        self.assertFalse(is_valid_email({"email": "a@b.com"}))
+
+    def test_rejects_oversized_strings(self):
+        long_local = "a" * 255
+        self.assertFalse(is_valid_email(f"{long_local}@example.com"))
 
 
 if __name__ == "__main__":
