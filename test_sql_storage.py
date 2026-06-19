@@ -76,6 +76,18 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         rows = self.storage.get_pending_registrations()
         self.assertEqual({r["email"] for r in rows}, {"b@example.com"})
 
+    def test_add_pending_registration_dedupes_and_reports_new(self):
+        self.assertTrue(
+            self.storage.add_pending_registration({"email": "Dup@Example.com", "name": "First"})
+        )
+        self.assertFalse(
+            self.storage.add_pending_registration({"email": "dup@example.com", "name": "Second"})
+        )
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual(len(rows), 1)
+        # The original payload is preserved; the duplicate does not overwrite it.
+        self.assertEqual(rows[0]["name"], "First")
+
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):
@@ -120,22 +132,27 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
     """Regression coverage for the lead-capture flow under SQLite."""
 
     def test_add_pending_lead_capture(self):
-        self.storage.add_pending_lead_capture(
+        added = self.storage.add_pending_lead_capture(
             {"email": "lead@example.com", "submitted_at": "2026-01-01"}
         )
+        self.assertTrue(added)
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual(len(leads), 1)
         self.assertEqual(leads[0]["email"], "lead@example.com")
         self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
 
     def test_add_pending_lead_capture_dedupes_existing_email(self):
-        # Mirror FileStorageService: repeated submissions don't bloat storage.
-        self.storage.add_pending_lead_capture(
+        # Mirror FileStorageService: repeated submissions don't bloat storage,
+        # and the second insert must report False so the public route can
+        # suppress the admin notification email on duplicates.
+        first = self.storage.add_pending_lead_capture(
             {"email": "dup@example.com", "submitted_at": "2026-01-01"}
         )
-        self.storage.add_pending_lead_capture(
+        second = self.storage.add_pending_lead_capture(
             {"email": "dup@example.com", "submitted_at": "2026-02-02"}
         )
+        self.assertTrue(first)
+        self.assertFalse(second)
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual(len(leads), 1)
         self.assertEqual(leads[0]["submitted_at"], "2026-01-01")

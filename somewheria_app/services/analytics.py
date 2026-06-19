@@ -1,6 +1,7 @@
 import collections
 import datetime
 import json
+import threading
 import time
 
 from flask import current_app, g, request, session
@@ -17,10 +18,18 @@ class AnalyticsTracker:
         self.unique_users = collections.defaultdict(set)
         self.logins = collections.defaultdict(int)
         self.errors = collections.defaultdict(int)
+        # Serializes bucket mutations across concurrent requests. Without it,
+        # two threads crossing a day boundary can race inside
+        # ``_prune_old_buckets`` -- one snapshot iterates ``bucket.keys()``
+        # while the other deletes from the same dict, raising RuntimeError
+        # ("dictionary changed size during iteration") or KeyError.
+        self._lock = threading.Lock()
 
     def _prune_old_buckets(self, today: str) -> None:
         # Keep only the rolling window of ``analytics_days`` so the counters
-        # don't grow unbounded over the lifetime of the process.
+        # don't grow unbounded over the lifetime of the process. Caller must
+        # already hold ``self._lock`` -- this is invariant inside the class
+        # so we don't reacquire (avoiding a needless re-entrant pattern).
         try:
             cutoff = (
                 datetime.date.fromisoformat(today)
@@ -29,19 +38,20 @@ class AnalyticsTracker:
         except ValueError:
             return
         for bucket in (self.site_visits, self.unique_users, self.logins, self.errors):
-            for day in [d for d in bucket.keys() if d < cutoff]:
-                del bucket[day]
+            for day in [d for d in list(bucket) if d < cutoff]:
+                bucket.pop(day, None)
 
     def before_request(self) -> None:
         g.start_time = time.time()
         if request.endpoint == "static":
             return
         today = datetime.date.today().isoformat()
-        self._prune_old_buckets(today)
-        self.site_visits[today] += 1
         user = session.get("user") or {}
         visitor = user.get("email") or request.remote_addr or "anonymous"
-        self.unique_users[today].add(visitor)
+        with self._lock:
+            self._prune_old_buckets(today)
+            self.site_visits[today] += 1
+            self.unique_users[today].add(visitor)
 
     def after_request(self, response):
         try:
@@ -61,35 +71,40 @@ class AnalyticsTracker:
 
     def record_login(self, user_identifier: str) -> None:
         today = datetime.date.today().isoformat()
-        self._prune_old_buckets(today)
-        self.logins[today] += 1
-        self.unique_users[today].add(user_identifier)
+        with self._lock:
+            self._prune_old_buckets(today)
+            self.logins[today] += 1
+            self.unique_users[today].add(user_identifier)
 
     def record_error(self) -> None:
         today = datetime.date.today().isoformat()
-        self._prune_old_buckets(today)
-        self.errors[today] += 1
+        with self._lock:
+            self._prune_old_buckets(today)
+            self.errors[today] += 1
 
     def dashboard_data(self, property_count: int) -> tuple[dict, dict]:
         today = datetime.date.today().isoformat()
-        metrics = {
-            "site_visits": self.site_visits[today],
-            "unique_users": len(self.unique_users[today]),
-            "properties_listed": property_count,
-            "logins_today": self.logins[today],
-            "errors_last_24h": self.errors[today],
-        }
         days = [
             (datetime.date.today() - datetime.timedelta(days=offset)).isoformat()
             for offset in range(self.analytics_days - 1, -1, -1)
         ]
-        chart_data = {
-            "days": days,
-            "visits": [self.site_visits.get(day, 0) for day in days],
-            "logins": [self.logins.get(day, 0) for day in days],
-            "errors": [self.errors.get(day, 0) for day in days],
-            "unique_users": [len(self.unique_users.get(day, set())) for day in days],
-        }
+        # Snapshot under the lock so the dashboard sees a consistent view even
+        # if a request handler is mutating buckets concurrently.
+        with self._lock:
+            metrics = {
+                "site_visits": self.site_visits[today],
+                "unique_users": len(self.unique_users[today]),
+                "properties_listed": property_count,
+                "logins_today": self.logins[today],
+                "errors_last_24h": self.errors[today],
+            }
+            chart_data = {
+                "days": days,
+                "visits": [self.site_visits.get(day, 0) for day in days],
+                "logins": [self.logins.get(day, 0) for day in days],
+                "errors": [self.errors.get(day, 0) for day in days],
+                "unique_users": [len(self.unique_users.get(day, set())) for day in days],
+            }
         return metrics, chart_data
 
     def recent_listing_activity(self, months: int = 12) -> dict:
