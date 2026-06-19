@@ -114,6 +114,16 @@ def sanitize_tour_url(raw: str) -> str:
 
 
 class PropertyService:
+    # Concurrent /for-rent and /for-rent.json hits each used to fire their
+    # own upstream fanout (one ID listing + per-property detail/photos), so
+    # a small burst multiplied AWS API Gateway / Lambda cost N-fold. The
+    # synchronous refresh now serializes on a single lock, and any caller
+    # arriving within REFRESH_COALESCE_SECONDS of the previous attempt
+    # piggybacks on the already-fresh cache without making upstream calls.
+    # The window is small enough that the cache stays effectively
+    # request-fresh and large enough to absorb a realistic burst.
+    REFRESH_COALESCE_SECONDS = 2.0
+
     def __init__(self, config, notifications, zillow=None) -> None:
         self.config = config
         self.notifications = notifications
@@ -125,6 +135,8 @@ class PropertyService:
         self.logger = get_console_logger("properties")
         self.cache = []
         self.cache_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
+        self._last_refresh_monotonic = 0.0
         self.refresh_thread = None
 
     def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
@@ -153,16 +165,34 @@ class PropertyService:
             time.sleep(self.config.cache_refresh_interval)
 
     def refresh_cache(self) -> None:
-        # ``fetch_all_properties`` propagates ``UpstreamUnavailable`` from
-        # ``_fetch_property_ids`` on a network / HTTP failure; we let it
-        # bubble up so the caller (route handler, periodic worker) can
+        # Serialize concurrent refreshes so at most one upstream fanout is
+        # in flight per process. Followers that arrive while the leader is
+        # still fetching queue on the lock; once the leader returns, each
+        # follower sees the just-updated timestamp and skips its own
+        # fanout. ``fetch_all_properties`` propagates ``UpstreamUnavailable``
+        # from ``_fetch_property_ids`` on a network / HTTP failure; we let
+        # it bubble up so the caller (route handler, periodic worker) can
         # decide what to do. The local ``self.cache`` is only reassigned
         # *after* a successful fetch, so a raise here preserves the
         # previous cache rather than blanking the listings.
-        latest = self.fetch_all_properties()
-        with self.cache_lock:
-            self.cache = latest
-        self.logger.info("Cache refreshed with %s properties", len(self.cache))
+        with self._refresh_lock:
+            if (
+                time.monotonic() - self._last_refresh_monotonic
+                < self.REFRESH_COALESCE_SECONDS
+            ):
+                return
+            try:
+                latest = self.fetch_all_properties()
+                with self.cache_lock:
+                    self.cache = latest
+                self.logger.info("Cache refreshed with %s properties", len(self.cache))
+            finally:
+                # Record the attempt time on both success AND failure: an
+                # upstream outage means queued followers should serve the
+                # existing cache via the route's UpstreamUnavailable
+                # fallback rather than each retry the dead endpoint in
+                # series.
+                self._last_refresh_monotonic = time.monotonic()
 
     def get_cached_properties(self) -> list[dict]:
         with self.cache_lock:
@@ -238,7 +268,19 @@ class PropertyService:
         property_ids = self._fetch_property_ids()
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             results = list(executor.map(self.fetch_property_record, property_ids))
-        return [property_info for property_info in results if property_info]
+        successful = [property_info for property_info in results if property_info]
+        # If the ID listing came back with properties but EVERY per-property
+        # fetch returned None, that is a systemic outage of the details / photos
+        # endpoint (5xx, timeout, DNS), not "every property was deleted." Raise
+        # so refresh_cache leaves the existing cache in place — mirroring the
+        # behavior already in place for _fetch_property_ids network failures.
+        # Without this guard a brief details-endpoint outage blanks /for-rent
+        # until the next successful refresh.
+        if property_ids and not successful:
+            raise UpstreamUnavailable(
+                f"all {len(property_ids)} per-property fetches failed"
+            )
+        return successful
 
     def _fetch_property_ids(self) -> list[str]:
         # Network / HTTP failure raises ``UpstreamUnavailable`` so callers
@@ -326,13 +368,12 @@ class PropertyService:
         if property_id:
             normalized["id"] = property_id
         normalized.setdefault("included_amenities", normalized.get("included_utilities", []))
-        # Coerce a null / non-list amenities value to []. Upstream sometimes
-        # returns ``"included_amenities": null`` (or ``"included_utilities": null``
-        # with no ``included_amenities``), in which case ``setdefault`` leaves the
-        # None in place. Without this guard the pets-inference branch below
-        # raises TypeError on ``for item in None``; fetch_property_record swallows
-        # it and the property drops out of the listing entirely — the same
-        # silent data-loss mode previously seen with ``description: null``.
+        # Mirror the description/photos coercion: upstream occasionally returns
+        # ``"included_amenities": null`` (or a misshaped non-list) for partially
+        # filled listings. Without this guard the ``any()`` iteration in the
+        # pets-inference branch below raises TypeError, fetch_property_record
+        # swallows it as a generic "failed to fetch", and the property drops
+        # out of the listing entirely.
         if not isinstance(normalized["included_amenities"], list):
             normalized["included_amenities"] = []
         normalized.setdefault("bedrooms", "N/A")
@@ -356,15 +397,30 @@ class PropertyService:
         normalized.setdefault("photos", [])
         if not isinstance(normalized["photos"], list):
             normalized["photos"] = []
-        pets_allowed = normalized.get("pets_allowed", "Unknown")
-        if isinstance(pets_allowed, bool):
-            pets_allowed = "Yes" if pets_allowed else "No"
-        elif "included_amenities" in normalized and any(
-            "pet" in str(item).lower() for item in normalized["included_amenities"]
-        ):
-            pets_allowed = "Yes"
-        elif "description" in normalized and "pet" in normalized["description"].lower():
-            pets_allowed = "Yes"
+        pets_allowed_raw = normalized.get("pets_allowed", "Unknown")
+        if isinstance(pets_allowed_raw, bool):
+            pets_allowed = "Yes" if pets_allowed_raw else "No"
+        elif isinstance(pets_allowed_raw, str):
+            lowered = pets_allowed_raw.strip().lower()
+            if lowered in {"yes", "true", "1"}:
+                pets_allowed = "Yes"
+            elif lowered in {"no", "false", "0"}:
+                pets_allowed = "No"
+            else:
+                # Only infer from amenities / description when the upstream
+                # value is missing or unrecognized — otherwise a property
+                # whose description reads "No pets allowed" would have its
+                # explicit "No" flipped to "Yes" by the substring match.
+                pets_allowed = "Unknown"
+                if any(
+                    "pet" in str(item).lower()
+                    for item in normalized.get("included_amenities", [])
+                ):
+                    pets_allowed = "Yes"
+                elif "pet" in normalized["description"].lower():
+                    pets_allowed = "Yes"
+        else:
+            pets_allowed = "Unknown"
         normalized["pets_allowed"] = pets_allowed
         ada_accessible = None
         for key in (
@@ -549,6 +605,14 @@ class PropertyService:
         self._safe_zillow_publish("publish_update", {**update_payload, "id": property_id})
 
     def delete_property(self, property_id: str, actor_email: str) -> None:
+        # Validate the id at the boundary so a malformed value (e.g. "../foo"
+        # routed through Flask's default <string> converter) can't smuggle
+        # path segments into the outbound DELETE URL. ``update_property`` and
+        # ``toggle_sale`` are implicitly protected because they look the id
+        # up in the cache first; ``delete_property`` skips that lookup so the
+        # check has to live here.
+        if not PROPERTY_ID_PATTERN.match(property_id or ""):
+            raise KeyError("Invalid property id.")
         response = requests.delete(f"{self.config.api_base_url}/properties/{property_id}", timeout=20)
         if response.status_code not in (200, 204):
             raise RuntimeError(f"Remote API responded {response.status_code}: {response.text}")

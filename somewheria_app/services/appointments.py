@@ -11,7 +11,9 @@ class AppointmentService:
         self.logger = get_console_logger("appointments")
         # Serialize reads/writes against the appointments file so concurrent
         # save() calls cannot interleave and corrupt the line-oriented data.
-        self._lock = threading.Lock()
+        # Reentrant so book() can hold the lock across a load+save round-trip
+        # without deadlocking on its own nested load()/save() calls.
+        self._lock = threading.RLock()
 
     def print_check_file(self, path, purpose: str) -> None:
         abs_path = path.resolve()
@@ -63,3 +65,17 @@ class AppointmentService:
                     pass
                 raise
         self.print_check_file(self.config.property_appointments_file, "Appointments saved")
+
+    def book(self, property_id: str, iso_date: str) -> bool:
+        # Returns True when the booking was newly recorded, False when the
+        # date was already taken for that property. Load+save run under the
+        # same lock so a second caller cannot squeeze in between and produce
+        # a double-booking on the same property/date.
+        with self._lock:
+            appointments = self.load()
+            booked = appointments.setdefault(property_id, set())
+            if iso_date in booked:
+                return False
+            booked.add(iso_date)
+            self.save(appointments)
+            return True
