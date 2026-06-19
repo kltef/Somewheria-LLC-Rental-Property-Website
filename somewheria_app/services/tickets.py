@@ -508,6 +508,16 @@ class TicketService:
         try:
             self._save(tickets)
         except Exception as exc:
+            # The photo is on disk but the ticket record never picked it up.
+            # Leaving it would orphan the file under static/uploads/tickets/
+            # forever — best-effort delete so the upload dir doesn't grow
+            # unboundedly on repeated save failures.
+            try:
+                self.storage.delete_file(save_path)
+            except Exception:
+                self.logger.warning(
+                    "Failed to clean up orphaned ticket photo %s", save_path
+                )
             self.logger.error("Failed to persist ticket photos: %s", exc)
             raise UploadValidationError("Failed to record photo on ticket.") from exc
 
