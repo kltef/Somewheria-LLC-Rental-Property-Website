@@ -849,6 +849,8 @@ def delete_listing(id):
         except Exception:
             pass
         return redirect(url_for("manage_listings"))
+    except KeyError:
+        return "Property not found", 404
     except Exception as exc:
         services.notifications.log_and_notify_error(
             "Property Delete Error",

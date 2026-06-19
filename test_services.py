@@ -451,6 +451,21 @@ class PropertyServiceTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.service.delete_property("prop-1", "admin@example.com")
 
+    def test_delete_property_rejects_invalid_id_before_outbound_call(self):
+        # A traversal-style id must be rejected at the boundary so a
+        # malformed value can't be smuggled into the outbound DELETE URL.
+        # KeyError matches the "not found" semantics the route handler maps
+        # to a 404 response.
+        self.service.cache = [{"id": "prop-1"}]
+        with patch("somewheria_app.services.properties.requests.delete") as delete_mock:
+            with self.assertRaises(KeyError):
+                self.service.delete_property("../../etc/passwd", "admin@example.com")
+
+        delete_mock.assert_not_called()
+        # Cache must be untouched when validation fails.
+        self.assertEqual(self.service.cache, [{"id": "prop-1"}])
+        self.notifications.log_site_change.assert_not_called()
+
     def test_toggle_sale_updates_cache_and_status(self):
         self.service.cache = [{"id": "prop-1", "for_sale": False, "status": "Active"}]
         with patch("somewheria_app.services.properties.requests.put") as put_mock:
