@@ -99,15 +99,21 @@ class SqlStorageService:
             rows = conn.execute("SELECT payload FROM pending_registrations").fetchall()
         return [loads(row["payload"]) for row in rows]
 
-    def add_pending_registration(self, registration: dict) -> None:
+    def add_pending_registration(self, registration: dict) -> bool:
         email = (registration.get("email") or "").strip().lower()
         if not email:
-            return
+            return False
         with self.db.transaction() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM pending_registrations WHERE email = ?", (email,)
+            ).fetchone()
+            if existing:
+                return False
             conn.execute(
-                "INSERT OR REPLACE INTO pending_registrations(email, payload) VALUES (?, ?)",
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
                 (email, dumps(registration)),
             )
+        return True
 
     def remove_pending_registration(self, email: str) -> None:
         email = (email or "").strip().lower()
@@ -237,10 +243,11 @@ class SqlStorageService:
         return [loads(row["payload"]) for row in rows]
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
-        """Persist ``lead``. Returns True if this was a new email, False on
-        duplicate (or missing email) so callers can suppress repeated admin
-        notifications. Mirrors FileStorageService.
-        """
+        # Mirror FileStorageService: de-duplicate by email so a repeated
+        # submission doesn't bloat the table or flood the admin UI. Returns
+        # True when newly inserted, False on duplicate or missing email — the
+        # caller relies on the bool to skip the "new lead" admin email when
+        # the address is already pending.
         target_email = (lead.get("email") or "").strip().lower()
         if not target_email:
             return False
@@ -278,7 +285,7 @@ class SqlStorageService:
     # --------------------------------------------------------------- binaries
     #
     # Binary attachments (signed-contract PDFs at
-    # ``static/uploads/contracts/<uuid>.pdf`` and ticket photos at
+    # ``private/contracts/<uuid>.pdf`` and ticket photos at
     # ``static/uploads/tickets/<ticket_id>/``) are URL-addressed from inside
     # ticket / contract JSON payloads, so they continue to live on disk even
     # when ``USE_SQLITE_STORAGE=1``. These mirror the implementation in
