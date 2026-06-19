@@ -10,13 +10,13 @@ from ..services.auth import (
     get_current_user,
     high_admin_required,
     is_logged_in,
-    is_valid_email,
     renter_required,
     role_rank,
 )
 from ..services.properties import BLANK_PROPERTY, UploadValidationError
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 ALLOWED_ROLES = ("renter", "admin", "high_admin")
@@ -82,16 +82,8 @@ def save_edit(id):
     try:
         if id == "new":
             services.properties.create_property(request.form, actor_email)
-            try:
-                services.notifications.log_site_change(actor_email, "property_created", {"id_or_new": id})
-            except Exception:
-                pass
             return redirect(url_for("manage_listings"))
         services.properties.update_property(id, request.form, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_updated", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
     except KeyError:
         return "Property not found", 404
@@ -124,10 +116,6 @@ def upload_image(uuid):
             "Upload Error", f"Unexpected upload failure for {uuid}: {exc}"
         )
         return jsonify(success=False, message="Upload failed."), 500
-    try:
-        services.notifications.log_site_change(actor_email, "property_image_uploaded", {"id": uuid, "url": relative_url})
-    except Exception:
-        pass
     return jsonify(success=True, new_image_url=relative_url)
 
 
@@ -462,15 +450,18 @@ def register():
         reason = request.form.get("reason", "").strip()[:2000]
         if not name or not is_valid_email(email):
             return render_template("register.html", error="Name and a valid email are required.")
-        existing = services.storage.get_pending_registrations()
-        if any(item.get("email", "").lower() == email for item in existing):
-            # Do not re-notify on duplicate to prevent SMTP abuse.
-            return render_template("register.html", success=True)
-        services.storage.add_pending_registration({"name": name, "email": email, "reason": reason})
-        services.notifications.send_email(
-            "New Registration Request",
-            f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+        # Storage de-duplicates by email and reports whether a new row was
+        # stored, so we only notify on a genuinely new request — a duplicate
+        # (even one racing past a separate pre-check) can't trigger a second
+        # admin email.
+        newly_added = services.storage.add_pending_registration(
+            {"name": name, "email": email, "reason": reason}
         )
+        if newly_added:
+            services.notifications.send_email(
+                "New Registration Request",
+                f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
+            )
         return render_template("register.html", success=True)
     return render_template("register.html")
 
@@ -841,11 +832,9 @@ def delete_listing(id):
     actor_email = (get_current_user() or {}).get("email", "anonymous") if is_logged_in() else "anonymous"
     try:
         services.properties.delete_property(id, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_deleted", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
+    except KeyError:
+        return "Property not found", 404
     except Exception as exc:
         services.notifications.log_and_notify_error(
             "Property Delete Error",
@@ -860,10 +849,6 @@ def toggle_sale(id):
     actor_email = (get_current_user() or {}).get("email", "anonymous") if is_logged_in() else "anonymous"
     try:
         services.properties.toggle_sale(id, actor_email)
-        try:
-            services.notifications.log_site_change(actor_email, "property_for_sale_toggled", {"id": id})
-        except Exception:
-            pass
         return redirect(url_for("manage_listings"))
     except KeyError:
         return "Property not found", 404

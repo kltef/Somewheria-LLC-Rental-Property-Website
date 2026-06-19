@@ -5,17 +5,22 @@ from flask import jsonify, render_template, request
 from ..services.auth import (
     get_current_user,
     high_admin_required,
-    is_valid_email,
     login_required,
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 MAX_NAME_LEN = 120
 MAX_CONTACT_LEN = 200
 MAX_DESCRIPTION_LEN = 4000
 MAX_DATE_LEN = 10
+
+# Cap appointment requests at a year out. Legitimate viewings happen within a
+# few weeks; nothing realistic needs more lead time, and an unbounded date
+# field invites year-9999 junk that wastes admin attention.
+MAX_APPOINTMENT_DAYS_AHEAD = 365
 
 ALLOWED_CONTACT_METHODS = {"email", "phone", "text", "sms", "call"}
 
@@ -117,16 +122,25 @@ def schedule_appointment(uuid):
         return jsonify(success=False, error="Invalid date."), 400
     if requested_date < datetime.date.today():
         return jsonify(success=False, error="Date cannot be in the past."), 400
+    if requested_date > datetime.date.today() + datetime.timedelta(days=MAX_APPOINTMENT_DAYS_AHEAD):
+        return jsonify(
+            success=False,
+            error=f"Date must be within {MAX_APPOINTMENT_DAYS_AHEAD} days.",
+        ), 400
 
     property_name = services.properties.fetch_live_property_name(uuid)
     if not property_name:
         return jsonify(success=False, error="Property not found."), 404
 
+    iso_date = requested_date.isoformat()
+    if not services.appointments.book(uuid, iso_date):
+        return jsonify(success=False, error="That date is already booked."), 409
+
     message = (
         "Appointment requested!\n\n"
         f"Property: {property_name}\n"
         f"Requested by: {name}\n"
-        f"For date: {date}\n"
+        f"For date: {iso_date}\n"
         f"Contact method: {contact_method}\n"
         f"Contact info: {contact_info}\n"
         f"Requested at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"

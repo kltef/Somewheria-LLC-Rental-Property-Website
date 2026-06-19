@@ -76,6 +76,18 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         rows = self.storage.get_pending_registrations()
         self.assertEqual({r["email"] for r in rows}, {"b@example.com"})
 
+    def test_add_pending_registration_dedupes_and_reports_new(self):
+        self.assertTrue(
+            self.storage.add_pending_registration({"email": "Dup@Example.com", "name": "First"})
+        )
+        self.assertFalse(
+            self.storage.add_pending_registration({"email": "dup@example.com", "name": "Second"})
+        )
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual(len(rows), 1)
+        # The original payload is preserved; the duplicate does not overwrite it.
+        self.assertEqual(rows[0]["name"], "First")
+
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):

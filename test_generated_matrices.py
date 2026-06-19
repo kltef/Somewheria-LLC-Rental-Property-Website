@@ -43,6 +43,14 @@ class GeneratedRouteMatrixTestCase(unittest.TestCase):
         with self.services.properties.cache_lock:
             self.original_cache = copy.deepcopy(self.services.properties.cache)
             self.services.properties.cache = []
+        # The PropertyService is shared across this whole test class.
+        # refresh_cache coalesces back-to-back calls inside a small window
+        # to suppress upstream fanout storms; in this test suite that means
+        # the Nth test would see the (N-1)th test's timestamp and skip its
+        # own refresh, leaving the seeded property in cache and changing
+        # which template branch renders. Reset the coalesce timestamp so
+        # each test starts from a clean "no recent refresh" state.
+        self.services.properties._last_refresh_monotonic = 0.0
         self.original_google_client_id = self.services.config.google_client_id
         self.original_google_client_secret = self.services.config.google_client_secret
         self.seed_property()
@@ -112,6 +120,7 @@ class GeneratedRouteMatrixTestCase(unittest.TestCase):
                 stack.enter_context(patch.object(self.services.properties, "toggle_sale"))
             if path == "/property/prop-1/schedule":
                 stack.enter_context(patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"))
+                stack.enter_context(patch.object(self.services.appointments, "book", return_value=True))
                 stack.enter_context(patch.object(self.services.notifications, "send_email"))
             if path == "/google/login":
                 self.services.config.google_client_id = "client-id"
@@ -299,6 +308,20 @@ PETS_CASES = [
     ({"pets_allowed": False, "included_amenities": ["Pet Friendly"]}, "No"),
     ({"pets_allowed": "Unknown", "included_amenities": ["Pet Friendly"]}, "Yes"),
     ({"pets_allowed": "Unknown", "description": "pets ok"}, "Yes"),
+    # An explicit "No" from upstream must win over a substring like "no pets"
+    # in the description or amenities — otherwise a property whose own listing
+    # says "No pets allowed" would render as pets-allowed=Yes.
+    ({"pets_allowed": "No", "description": "No pets allowed"}, "No"),
+    ({"pets_allowed": "No", "included_amenities": ["No pets"]}, "No"),
+    # Explicit "Yes"/"No" (case-insensitive, including true/false/1/0 forms)
+    # should be respected without falling through to the substring inference.
+    ({"pets_allowed": "Yes"}, "Yes"),
+    ({"pets_allowed": "yes"}, "Yes"),
+    ({"pets_allowed": "no"}, "No"),
+    ({"pets_allowed": "true"}, "Yes"),
+    ({"pets_allowed": "false"}, "No"),
+    ({"pets_allowed": "1"}, "Yes"),
+    ({"pets_allowed": "0"}, "No"),
     ({}, "Unknown"),
 ]
 
