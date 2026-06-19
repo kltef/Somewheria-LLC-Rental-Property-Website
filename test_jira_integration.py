@@ -48,6 +48,25 @@ class JiraClientTestCase(unittest.TestCase):
         })
         self.assertEqual(key, "STUB-1")
 
+    def test_create_site_report_no_op_when_unconfigured(self):
+        client = JiraClient(self._make_config(jira_api_token=""), notifications=MagicMock())
+        self.assertIsNone(client.create_site_report("Pat", "The map is broken"))
+
+    def test_create_site_report_returns_stub_key_when_configured(self):
+        client = JiraClient(self._make_config(), notifications=MagicMock())
+        key = client.create_site_report(
+            "Pat",
+            "Photos won't load on the for-rent page",
+            page_url="https://site/for-rent",
+            user_agent="Safari/17",
+        )
+        self.assertEqual(key, "STUB-1")
+
+    def test_create_site_report_tolerates_blank_description(self):
+        # A blank description shouldn't raise on the summary first-line lookup.
+        client = JiraClient(self._make_config(), notifications=MagicMock())
+        self.assertEqual(client.create_site_report("Pat", "   "), "STUB-1")
+
     def test_status_reverse_mapping(self):
         self.assertEqual(JiraClient.map_jira_status("Open"), "open")
         self.assertEqual(JiraClient.map_jira_status("In Progress"), "in_progress")

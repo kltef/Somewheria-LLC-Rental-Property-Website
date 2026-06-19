@@ -385,6 +385,36 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         send_email_mock.assert_called_once()
         self.assertIn("User Reported Issue", send_email_mock.call_args[0][0])
 
+    def test_report_issue_files_to_jira(self):
+        with patch.object(self.services.notifications, "send_email"), \
+                patch.object(self.services.jira, "create_site_report") as jira_mock:
+            jira_mock.return_value = "WEB-1"
+            response = self.client.post(
+                "/report-issue",
+                data={"name": "Jamie", "description": "Broken contact form"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        jira_mock.assert_called_once()
+        # Description is passed through to the JIRA intake.
+        self.assertIn("Broken contact form", jira_mock.call_args[0])
+
+    def test_report_issue_survives_jira_failure(self):
+        # A JIRA outage must not break the public form or the email fallback.
+        with patch.object(self.services.notifications, "send_email") as send_email_mock, \
+                patch.object(self.services.jira, "create_site_report",
+                             side_effect=RuntimeError("JIRA down")):
+            response = self.client.post(
+                "/report-issue",
+                data={"name": "Jamie", "description": "Broken contact form"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        # The user-report email fallback still fires even when JIRA blew up
+        # (log_and_notify_error also emails, so >1 call is expected).
+        subjects = [call.args[0] for call in send_email_mock.call_args_list]
+        self.assertIn("User Reported Issue", subjects)
+
     def test_register_page_loads(self):
         response = self.client.get("/register")
 

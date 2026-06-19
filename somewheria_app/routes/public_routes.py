@@ -174,9 +174,37 @@ def report_issue():
     issue_description = (request.form.get("description") or "").strip()[:MAX_DESCRIPTION_LEN]
     if not user_name or not issue_description:
         return "Name and description are required fields.", 400
+
+    # Auto-capture cheap, high-value diagnostics — no extra form fields. The
+    # page the reporter came from and their browser string are the two facts
+    # that turn "it's broken" into something actionable.
+    page_url = (request.referrer or "").strip()[:500]
+    user_agent = (request.headers.get("User-Agent") or "").strip()[:500]
+
+    # File the report into the website's JIRA project (the system of record).
+    # JiraClient no-ops when credentials are absent, so this is safe today and
+    # goes live once the JIRA_* env vars are populated. A JIRA failure must
+    # never break the public form — it's wrapped, and the admin email below is
+    # the always-on fallback regardless of JIRA state.
+    jira_key = None
+    try:
+        jira_key = services.jira.create_site_report(
+            user_name, issue_description, page_url=page_url, user_agent=user_agent
+        )
+    except Exception as exc:
+        services.notifications.log_and_notify_error(
+            "Site Issue JIRA Error",
+            f"Failed to create JIRA issue for a site report from {user_name}: {exc}",
+        )
+
     services.notifications.send_email(
         "User Reported Issue",
-        f"Issue reported by {user_name}:\n\n{issue_description}",
+        (
+            f"Issue reported by {user_name}:\n\n{issue_description}\n\n"
+            f"Page: {page_url or '(unknown)'}\n"
+            f"User-Agent: {user_agent or '(unknown)'}\n"
+            f"JIRA: {jira_key or '(not created — JIRA not configured)'}"
+        ),
     )
     return render_template(
         "report_issue.html",

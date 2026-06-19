@@ -103,6 +103,66 @@ class JiraClient:
         )
         return "STUB-1"
 
+    def create_site_report(
+        self,
+        name: str,
+        description: str,
+        *,
+        page_url: str = "",
+        user_agent: str = "",
+    ) -> Optional[str]:
+        """Map a public *site-bug* report -> a JIRA Bug issue; return the key.
+
+        This is the website's own bug-report intake (``/report-issue``), as
+        opposed to ``create_issue`` which mirrors property *maintenance*
+        tickets. Reports come from an unauthenticated public form, so they're
+        labelled ``public-reported`` — by convention these should land in a
+        triage/backlog status in JIRA for a human to confirm before they mix
+        in with planned work, not straight into an active sprint.
+
+        Returns ``None`` when not configured. Returns a stub key when
+        configured (no real HTTP call yet — same scaffold state as
+        ``create_issue``; see the module docstring).
+        """
+        if not self.is_configured():
+            return None
+
+        name = (name or "anonymous").strip()
+        description = (description or "").strip()
+        # First non-empty line becomes the summary so the board is scannable.
+        first_line = next(
+            (line for line in description.splitlines() if line.strip()),
+            "Site issue report",
+        )
+        summary = f"[Site Bug] {first_line[:80]}"
+
+        meta = [
+            f"Reported by: {name}",
+            "Source: public site /report-issue form (unverified reporter)",
+        ]
+        if page_url:
+            meta.append(f"Page: {page_url}")
+        if user_agent:
+            meta.append(f"User-Agent: {user_agent}")
+
+        payload = {
+            "fields": {
+                "project": {"key": self.project_key},
+                "summary": summary,
+                "description": "\n".join(meta) + "\n\n" + (description or "(no description)"),
+                "labels": ["public-reported", "site-bug"],
+                "issuetype": {"name": "Bug"},
+            }
+        }
+
+        # No real HTTP — credentials still pending. Log what WOULD be sent so
+        # the flow is observable end-to-end (mirrors create_issue).
+        self.logger.info(
+            "would create JIRA Bug in project=%s labels=%s summary=%r",
+            self.project_key, payload["fields"]["labels"], summary,
+        )
+        return "STUB-1"
+
     # --------------------------------------------------------------- webhook
 
     @staticmethod
