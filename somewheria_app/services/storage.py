@@ -60,10 +60,24 @@ class FileStorageService:
     def get_pending_registrations(self) -> list[dict]:
         return self.load_json_file(self.config.registration_file, [], expected_type=list)
 
-    def add_pending_registration(self, registration: dict) -> None:
+    def add_pending_registration(self, registration: dict) -> bool:
+        """Append a pending registration, skipping duplicate emails.
+
+        Returns True when a new row was stored, False when an entry for the
+        same email already existed. De-duplicating here (rather than only in
+        the route) keeps a repeated submission from bloating the file or
+        triggering a second admin notification, mirroring
+        ``add_pending_lead_capture`` and the SQL backend's idempotency.
+        """
         registrations = self.get_pending_registrations()
+        target_email = (registration.get("email") or "").strip().lower()
+        if target_email and any(
+            (item.get("email") or "").lower() == target_email for item in registrations
+        ):
+            return False
         registrations.append(registration)
         self.save_json_file(self.config.registration_file, registrations)
+        return True
 
     def remove_pending_registration(self, email: str) -> None:
         registrations = [
@@ -100,13 +114,13 @@ class FileStorageService:
         return self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
-        """Append a new lead. Returns True on insert, False when the email is
-        already pending. The caller relies on this to suppress the admin
-        notification email on duplicates — without it, a renter hitting the
-        submit button repeatedly would generate one admin email per click
-        even though the storage layer keeps only one entry.
-        """
+        # Returns True when the lead was newly persisted, False when it was
+        # rejected as a duplicate. The caller uses the return value to decide
+        # whether to fire the "new lead" admin email — without that gate a
+        # repeated submission of an already-pending address spams the inbox.
         leads = self.get_pending_lead_captures()
+        # De-duplicate by email so a repeated submission doesn't bloat the file
+        # or give the requester a way to flood the admin UI.
         target_email = (lead.get("email") or "").lower()
         if target_email and any(item.get("email", "").lower() == target_email for item in leads):
             return False

@@ -9,12 +9,18 @@ from ..services.auth import (
 )
 from ..services.registry import get_services
 from ..services.security import rate_limit
+from ..services.validation import is_valid_email
 
 
 MAX_NAME_LEN = 120
 MAX_CONTACT_LEN = 200
 MAX_DESCRIPTION_LEN = 4000
 MAX_DATE_LEN = 10
+
+# Cap appointment requests at a year out. Legitimate viewings happen within a
+# few weeks; nothing realistic needs more lead time, and an unbounded date
+# field invites year-9999 junk that wastes admin attention.
+MAX_APPOINTMENT_DAYS_AHEAD = 365
 
 ALLOWED_CONTACT_METHODS = {"email", "phone", "text", "sms", "call"}
 
@@ -116,16 +122,25 @@ def schedule_appointment(uuid):
         return jsonify(success=False, error="Invalid date."), 400
     if requested_date < datetime.date.today():
         return jsonify(success=False, error="Date cannot be in the past."), 400
+    if requested_date > datetime.date.today() + datetime.timedelta(days=MAX_APPOINTMENT_DAYS_AHEAD):
+        return jsonify(
+            success=False,
+            error=f"Date must be within {MAX_APPOINTMENT_DAYS_AHEAD} days.",
+        ), 400
 
     property_name = services.properties.fetch_live_property_name(uuid)
     if not property_name:
         return jsonify(success=False, error="Property not found."), 404
 
+    iso_date = requested_date.isoformat()
+    if not services.appointments.book(uuid, iso_date):
+        return jsonify(success=False, error="That date is already booked."), 409
+
     message = (
         "Appointment requested!\n\n"
         f"Property: {property_name}\n"
         f"Requested by: {name}\n"
-        f"For date: {date}\n"
+        f"For date: {iso_date}\n"
         f"Contact method: {contact_method}\n"
         f"Contact info: {contact_info}\n"
         f"Requested at: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -176,7 +191,7 @@ def report_issue():
 def submit_lead_capture():
     services = get_services()
     email = (request.form.get("email") or "").strip().lower()[:254]
-    if not email or "@" not in email:
+    if not is_valid_email(email):
         return jsonify(success=False, error="A valid email is required."), 400
     added = services.storage.add_pending_lead_capture(
         {
@@ -184,9 +199,10 @@ def submit_lead_capture():
             "submitted_at": datetime.datetime.now().isoformat(),
         }
     )
-    # Only notify on first submission. Storage de-dupes silently by email,
-    # so without this guard a repeat submitter (rate-limited at 3/10min)
-    # would still generate one admin email per click for the same address.
+    # Only notify admins on a genuinely new lead. Repeated submissions of an
+    # already-pending address are accepted silently so a hostile client can't
+    # spam the admin inbox by replaying the same email — mirrors the dedup
+    # guard /register has had since the registration flow was introduced.
     if added:
         services.notifications.send_email(
             "New Lead Capture",

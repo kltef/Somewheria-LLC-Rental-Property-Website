@@ -76,6 +76,18 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         rows = self.storage.get_pending_registrations()
         self.assertEqual({r["email"] for r in rows}, {"b@example.com"})
 
+    def test_add_pending_registration_dedupes_and_reports_new(self):
+        self.assertTrue(
+            self.storage.add_pending_registration({"email": "Dup@Example.com", "name": "First"})
+        )
+        self.assertFalse(
+            self.storage.add_pending_registration({"email": "dup@example.com", "name": "Second"})
+        )
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual(len(rows), 1)
+        # The original payload is preserved; the duplicate does not overwrite it.
+        self.assertEqual(rows[0]["name"], "First")
+
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):
@@ -131,7 +143,8 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
 
     def test_add_pending_lead_capture_dedupes_existing_email(self):
         # Mirror FileStorageService: repeated submissions don't bloat storage,
-        # and the second call must report False so the route skips the email.
+        # and the second insert must report False so the public route can
+        # suppress the admin notification email on duplicates.
         first = self.storage.add_pending_lead_capture(
             {"email": "dup@example.com", "submitted_at": "2026-01-01"}
         )
@@ -145,17 +158,12 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
         self.assertEqual(leads[0]["submitted_at"], "2026-01-01")
 
     def test_add_pending_lead_capture_dedupe_is_case_insensitive(self):
-        self.assertTrue(
-            self.storage.add_pending_lead_capture({"email": "Mixed@Example.com"})
-        )
-        self.assertFalse(
-            self.storage.add_pending_lead_capture({"email": "mixed@example.com"})
-        )
+        self.storage.add_pending_lead_capture({"email": "Mixed@Example.com"})
+        self.storage.add_pending_lead_capture({"email": "mixed@example.com"})
         self.assertEqual(len(self.storage.get_pending_lead_captures()), 1)
 
     def test_add_pending_lead_capture_ignores_missing_email(self):
-        added = self.storage.add_pending_lead_capture({"submitted_at": "2026-01-01"})
-        self.assertFalse(added)
+        self.storage.add_pending_lead_capture({"submitted_at": "2026-01-01"})
         self.assertEqual(self.storage.get_pending_lead_captures(), [])
 
     def test_remove_pending_lead_capture(self):
