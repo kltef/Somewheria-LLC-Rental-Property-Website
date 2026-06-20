@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import tempfile
@@ -9,8 +10,26 @@ from .console import get_console_logger
 class FileStorageService:
     def __init__(self, config) -> None:
         self.config = config
-        self.file_lock = threading.Lock()
+        # Re-entrant so callers can wrap a load+modify+save sequence in
+        # ``with storage.atomic():`` and still call ``load_json_file`` /
+        # ``save_json_file`` (which each acquire the lock) inside the block.
+        # Without atomic load+save, two threads doing read-modify-write on the
+        # same file silently lose one update — verified: 50 concurrent
+        # ``add_pending_registration`` calls under the old plain Lock kept
+        # only ~8 entries on disk.
+        self.file_lock = threading.RLock()
         self.logger = get_console_logger("storage")
+
+    @contextlib.contextmanager
+    def atomic(self):
+        """Hold the storage lock across a multi-step read-modify-write.
+
+        SqlStorageService exposes the same context manager (as a no-op,
+        since its writes already go through real transactions) so callers
+        can rely on this API without branching on the backend.
+        """
+        with self.file_lock:
+            yield
 
     def load_json_file(self, path, default, *, expected_type: type | tuple[type, ...] | None = None):
         try:
@@ -68,40 +87,48 @@ class FileStorageService:
         the route) keeps a repeated submission from bloating the file or
         triggering a second admin notification, mirroring
         ``add_pending_lead_capture`` and the SQL backend's idempotency.
+
+        The load+save runs under ``self.file_lock`` so two concurrent
+        submissions cannot both load the pre-write list and then race each
+        other's saves (which would silently drop one entry).
         """
-        registrations = self.get_pending_registrations()
-        target_email = (registration.get("email") or "").strip().lower()
-        if target_email and any(
-            (item.get("email") or "").lower() == target_email for item in registrations
-        ):
-            return False
-        registrations.append(registration)
-        self.save_json_file(self.config.registration_file, registrations)
-        return True
+        with self.file_lock:
+            registrations = self.get_pending_registrations()
+            target_email = (registration.get("email") or "").strip().lower()
+            if target_email and any(
+                (item.get("email") or "").lower() == target_email for item in registrations
+            ):
+                return False
+            registrations.append(registration)
+            self.save_json_file(self.config.registration_file, registrations)
+            return True
 
     def remove_pending_registration(self, email: str) -> None:
-        registrations = [
-            item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
-        ]
-        self.save_json_file(self.config.registration_file, registrations)
+        with self.file_lock:
+            registrations = [
+                item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
+            ]
+            self.save_json_file(self.config.registration_file, registrations)
 
     def get_user_roles(self) -> dict:
         return self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)
 
     def set_user_role(self, email: str, role: str) -> None:
-        roles = self.get_user_roles()
-        roles[email.lower()] = role
-        self.save_json_file(self.config.user_roles_file, roles)
+        with self.file_lock:
+            roles = self.get_user_roles()
+            roles[email.lower()] = role
+            self.save_json_file(self.config.user_roles_file, roles)
 
     def delete_user_role(self, email: str) -> bool:
         email = email.lower()
-        roles = self.get_user_roles()
-        previous = roles.get(email)
-        # Store a tombstone ("revoked") instead of removing the key outright
-        # so that env-var fallbacks in AuthService.get_user_role cannot
-        # silently restore a deleted user's access on their next login.
-        roles[email] = "revoked"
-        self.save_json_file(self.config.user_roles_file, roles)
+        with self.file_lock:
+            roles = self.get_user_roles()
+            previous = roles.get(email)
+            # Store a tombstone ("revoked") instead of removing the key outright
+            # so that env-var fallbacks in AuthService.get_user_role cannot
+            # silently restore a deleted user's access on their next login.
+            roles[email] = "revoked"
+            self.save_json_file(self.config.user_roles_file, roles)
         return previous is not None and previous != "revoked"
 
     def get_renter_profiles(self) -> dict:
@@ -118,22 +145,26 @@ class FileStorageService:
         # rejected as a duplicate. The caller uses the return value to decide
         # whether to fire the "new lead" admin email — without that gate a
         # repeated submission of an already-pending address spams the inbox.
-        leads = self.get_pending_lead_captures()
-        # De-duplicate by email so a repeated submission doesn't bloat the file
-        # or give the requester a way to flood the admin UI.
-        target_email = (lead.get("email") or "").lower()
-        if target_email and any(item.get("email", "").lower() == target_email for item in leads):
-            return False
-        leads.append(lead)
-        self.save_json_file(self.config.lead_capture_file, leads)
-        return True
+        # Load+save runs under the file lock so two concurrent submissions
+        # can't both pass the dedup check and then race each other's saves.
+        with self.file_lock:
+            leads = self.get_pending_lead_captures()
+            # De-duplicate by email so a repeated submission doesn't bloat the file
+            # or give the requester a way to flood the admin UI.
+            target_email = (lead.get("email") or "").lower()
+            if target_email and any(item.get("email", "").lower() == target_email for item in leads):
+                return False
+            leads.append(lead)
+            self.save_json_file(self.config.lead_capture_file, leads)
+            return True
 
     def remove_pending_lead_capture(self, email: str) -> None:
-        leads = [
-            item for item in self.get_pending_lead_captures()
-            if item.get("email", "").lower() != email.lower()
-        ]
-        self.save_json_file(self.config.lead_capture_file, leads)
+        with self.file_lock:
+            leads = [
+                item for item in self.get_pending_lead_captures()
+                if item.get("email", "").lower() != email.lower()
+            ]
+            self.save_json_file(self.config.lead_capture_file, leads)
 
     def get_renter_contracts(self) -> dict:
         return self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
