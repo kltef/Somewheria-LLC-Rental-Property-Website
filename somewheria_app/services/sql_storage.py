@@ -14,6 +14,7 @@ as a routing key — ``config.tickets_file`` routes to the ``tickets`` table.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -28,6 +29,18 @@ class SqlStorageService:
         self.config = config
         self.logger = get_console_logger("storage-sql")
         self.db = Database(config.sqlite_file)
+
+    @contextlib.contextmanager
+    def atomic(self):
+        """No-op context manager mirroring FileStorageService.atomic().
+
+        SQL writes already go through ``db.transaction()`` so a load+save
+        wrapper isn't required for correctness. Callers (TicketService et
+        al.) use ``with storage.atomic():`` without branching on backend;
+        that boils down to a real RLock under the file backend and to this
+        pass-through here.
+        """
+        yield
 
     # ---------------------------------------------------------------- helpers
 

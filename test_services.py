@@ -257,6 +257,58 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
         save_json_mock.assert_called_once_with(self.config.contracts_file, contracts)
 
+    def test_concurrent_add_pending_registration_preserves_all_writes(self):
+        """Lost-update race fix: load+save runs under the file lock.
+
+        Without holding ``file_lock`` across get_pending_registrations() and
+        save_json_file(), N concurrent submissions all load the pre-write
+        list, then race each other's writes — empirically ~80% of entries
+        get silently dropped (one run with N=50 kept only 8 on disk). The
+        in-process Flask dev server threads each request, so this race is
+        reachable on the live site, not a theoretical concern.
+        """
+        import threading
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        config = SimpleNamespace(
+            registration_file=Path(tmpdir.name) / "registrations.json",
+            user_roles_file=Path(tmpdir.name) / "roles.json",
+            renter_profile_file=Path(tmpdir.name) / "profiles.json",
+            contracts_file=Path(tmpdir.name) / "contracts.json",
+            lead_capture_file=Path(tmpdir.name) / "lead_captures.json",
+        )
+        service = FileStorageService(config)
+
+        N = 32
+        barrier = threading.Barrier(N)
+        successes: list[bool] = []
+        successes_lock = threading.Lock()
+
+        def worker(i: int) -> None:
+            barrier.wait()
+            ok = service.add_pending_registration({
+                "email": f"user{i}@example.com",
+                "name": f"User {i}",
+                "reason": "race",
+            })
+            with successes_lock:
+                successes.append(ok)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        stored = service.get_pending_registrations()
+        self.assertEqual(sum(successes), N)
+        self.assertEqual(len(stored), N)
+        stored_emails = {item.get("email") for item in stored}
+        self.assertEqual(
+            stored_emails,
+            {f"user{i}@example.com" for i in range(N)},
+        )
+
 
 class AppointmentServiceTestCase(unittest.TestCase):
     def setUp(self):

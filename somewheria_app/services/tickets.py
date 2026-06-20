@@ -191,9 +191,14 @@ class TicketService:
             "notes": [],
         }
 
-        tickets = self._load()
-        tickets.append(ticket)
-        self._save(tickets)
+        # Hold the storage lock across load+append+save so a second
+        # ``create_ticket`` racing this one cannot load the same pre-append
+        # list, then save back over our just-saved row — a plain load/save
+        # pair on the file backend silently loses one ticket per collision.
+        with self.storage.atomic():
+            tickets = self._load()
+            tickets.append(ticket)
+            self._save(tickets)
 
         try:
             # Notify the internal admin inbox.
@@ -304,13 +309,14 @@ class TicketService:
             return None
         # Persist the JIRA key onto the ticket so the admin UI can deep-link
         # and the webhook can map JIRA events back to the local ticket.
-        tickets = self._load()
-        for stored in tickets:
-            if stored.get("id") == ticket_id:
-                stored["jira_key"] = key
-                stored["updated_at"] = _now_iso()
-                self._save(tickets)
-                break
+        with self.storage.atomic():
+            tickets = self._load()
+            for stored in tickets:
+                if stored.get("id") == ticket_id:
+                    stored["jira_key"] = key
+                    stored["updated_at"] = _now_iso()
+                    self._save(tickets)
+                    break
         return key
 
     def find_by_jira_key(self, jira_key: str) -> dict | None:
@@ -322,23 +328,24 @@ class TicketService:
         return None
 
     def set_email_updates(self, ticket_id: str, enabled: bool, actor_email: str) -> dict | None:
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
-            ticket["email_updates"] = bool(enabled)
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
-            try:
-                self.notifications.log_site_change(
-                    actor_email or "unknown",
-                    "ticket_email_updates_toggled",
-                    {"ticket_id": ticket_id, "enabled": bool(enabled)},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        with self.storage.atomic():
+            tickets = self._load()
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
+                ticket["email_updates"] = bool(enabled)
+                ticket["updated_at"] = _now_iso()
+                self._save(tickets)
+                try:
+                    self.notifications.log_site_change(
+                        actor_email or "unknown",
+                        "ticket_email_updates_toggled",
+                        {"ticket_id": ticket_id, "enabled": bool(enabled)},
+                    )
+                except Exception:
+                    pass
+                return ticket
+            return None
 
     # Send the email when ``email_updates`` is on AND we actually have a
     # reachable submitter address. The NotificationService itself will no-op
@@ -360,67 +367,77 @@ class TicketService:
         updates: dict,
         actor_email: str,
     ) -> dict | None:
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
-            changed: dict = {}
+        # Hold the storage lock only across load+modify+save. Side-effect
+        # notifications (email + change log) run outside the lock so a slow
+        # SMTP send can't stall other ticket operations.
+        target: dict | None = None
+        changed: dict = {}
+        with self.storage.atomic():
+            tickets = self._load()
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
+                target = ticket
 
-            if "status" in updates:
-                status = (updates.get("status") or "").strip().lower()
-                if status in ALLOWED_STATUSES and status != ticket.get("status"):
-                    ticket["status"] = status
-                    changed["status"] = status
+                if "status" in updates:
+                    status = (updates.get("status") or "").strip().lower()
+                    if status in ALLOWED_STATUSES and status != ticket.get("status"):
+                        ticket["status"] = status
+                        changed["status"] = status
 
-            if "priority" in updates:
-                priority = (updates.get("priority") or "").strip().lower()
-                if priority in ALLOWED_PRIORITIES and priority != ticket.get("priority"):
-                    ticket["priority"] = priority
-                    changed["priority"] = priority
+                if "priority" in updates:
+                    priority = (updates.get("priority") or "").strip().lower()
+                    if priority in ALLOWED_PRIORITIES and priority != ticket.get("priority"):
+                        ticket["priority"] = priority
+                        changed["priority"] = priority
 
-            if "assigned_to" in updates:
-                assignee = (updates.get("assigned_to") or "").strip().lower()[:254]
-                if assignee != ticket.get("assigned_to"):
-                    ticket["assigned_to"] = assignee
-                    changed["assigned_to"] = assignee
+                if "assigned_to" in updates:
+                    assignee = (updates.get("assigned_to") or "").strip().lower()[:254]
+                    if assignee != ticket.get("assigned_to"):
+                        ticket["assigned_to"] = assignee
+                        changed["assigned_to"] = assignee
 
-            if not changed:
-                return ticket
+                if changed:
+                    ticket["updated_at"] = _now_iso()
+                    self._save(tickets)
+                break
 
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
+        if target is None:
+            return None
+        if not changed:
+            return target
 
-            # Email the submitter a summary of what changed.
-            friendly_bits = []
-            if "status" in changed:
-                friendly_bits.append(f"Status: {changed['status'].replace('_', ' ')}")
-            if "priority" in changed:
-                friendly_bits.append(f"Severity: {changed['priority']}")
-            if "assigned_to" in changed:
-                friendly_bits.append(
-                    f"Assigned to: {changed['assigned_to'] or '(unassigned)'}"
-                )
-            self._maybe_email_submitter(
-                ticket,
-                subject=f"Repair ticket update: {ticket.get('title', '')}",
-                body=(
-                    f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
-                    f"There's an update on your repair ticket (reference {ticket_id[:8]}):\n\n"
-                    + "\n".join(friendly_bits)
-                    + "\n\nYou can view the full ticket in the Somewheria portal."
-                ),
+        # Email the submitter a summary of what changed.
+        ticket = target
+        friendly_bits = []
+        if "status" in changed:
+            friendly_bits.append(f"Status: {changed['status'].replace('_', ' ')}")
+        if "priority" in changed:
+            friendly_bits.append(f"Severity: {changed['priority']}")
+        if "assigned_to" in changed:
+            friendly_bits.append(
+                f"Assigned to: {changed['assigned_to'] or '(unassigned)'}"
             )
+        self._maybe_email_submitter(
+            ticket,
+            subject=f"Repair ticket update: {ticket.get('title', '')}",
+            body=(
+                f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
+                f"There's an update on your repair ticket (reference {ticket_id[:8]}):\n\n"
+                + "\n".join(friendly_bits)
+                + "\n\nYou can view the full ticket in the Somewheria portal."
+            ),
+        )
 
-            try:
-                self.notifications.log_site_change(
-                    actor_email or "unknown",
-                    "ticket_updated",
-                    {"ticket_id": ticket_id, **changed},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        try:
+            self.notifications.log_site_change(
+                actor_email or "unknown",
+                "ticket_updated",
+                {"ticket_id": ticket_id, **changed},
+            )
+        except Exception:
+            pass
+        return ticket
 
     def add_photo(self, ticket_id: str, uploaded_file, actor_email: str) -> dict | None:
         """Validate ``uploaded_file`` (same checks as listing-photo uploads:
@@ -455,67 +472,76 @@ class TicketService:
         except Exception as exc:
             raise UploadValidationError("File is not a valid image.") from exc
 
-        tickets = self._load()
-        target = None
-        for ticket in tickets:
-            if ticket.get("id") == ticket_id:
-                target = ticket
-                break
-        if target is None:
-            return None
+        # Hold the storage lock across the load → limit check → binary
+        # save → tickets save sequence so two concurrent uploads to the
+        # same ticket cannot both pass the MAX_TICKET_PHOTOS check on a
+        # stale count, nor race each other's tickets.json save (which on
+        # the file backend silently drops one upload's metadata).
+        relative_url: str | None = None
+        target_snapshot: dict | None = None
+        with self.storage.atomic():
+            tickets = self._load()
+            target = None
+            for ticket in tickets:
+                if ticket.get("id") == ticket_id:
+                    target = ticket
+                    break
+            if target is None:
+                return None
 
-        existing_photos = target.get("photos") or []
-        if not isinstance(existing_photos, list):
-            existing_photos = []
-        if len(existing_photos) >= MAX_TICKET_PHOTOS:
-            raise UploadValidationError(
-                f"Each ticket is limited to {MAX_TICKET_PHOTOS} photos."
-            )
-
-        # ticket_id is a uuid4 hex string from create_ticket(); guard anyway
-        # so a hand-edited tickets.json can't smuggle path separators.
-        safe_ticket_id = "".join(c for c in ticket_id if c.isalnum())[:64]
-        if not safe_ticket_id:
-            raise UploadValidationError("Invalid ticket id.")
-
-        ticket_dir = (self.config.ticket_upload_dir / safe_ticket_id).resolve()
-        upload_root = self.config.ticket_upload_dir.resolve()
-        try:
-            ticket_dir.relative_to(upload_root)
-        except ValueError as exc:
-            raise UploadValidationError("Invalid destination path.") from exc
-
-        new_filename = f"{secrets.token_hex(8)}.{ext}"
-        save_path = (ticket_dir / new_filename).resolve()
-        try:
-            save_path.relative_to(upload_root)
-        except ValueError as exc:
-            raise UploadValidationError("Invalid destination path.") from exc
-
-        ok = self.storage.save_binary_file(save_path, raw)
-        if not ok:
-            raise UploadValidationError("Failed to save photo.")
-
-        # Persist a relative URL so templates can render it as <img src=...>.
-        relative_url = f"/static/uploads/tickets/{safe_ticket_id}/{new_filename}"
-        existing_photos.append({"url": relative_url, "uploaded_at": _now_iso()})
-        target["photos"] = existing_photos
-        target["updated_at"] = _now_iso()
-        try:
-            self._save(tickets)
-        except Exception as exc:
-            # The photo is on disk but the ticket record never picked it up.
-            # Leaving it would orphan the file under static/uploads/tickets/
-            # forever — best-effort delete so the upload dir doesn't grow
-            # unboundedly on repeated save failures.
-            try:
-                self.storage.delete_file(save_path)
-            except Exception:
-                self.logger.warning(
-                    "Failed to clean up orphaned ticket photo %s", save_path
+            existing_photos = target.get("photos") or []
+            if not isinstance(existing_photos, list):
+                existing_photos = []
+            if len(existing_photos) >= MAX_TICKET_PHOTOS:
+                raise UploadValidationError(
+                    f"Each ticket is limited to {MAX_TICKET_PHOTOS} photos."
                 )
-            self.logger.error("Failed to persist ticket photos: %s", exc)
-            raise UploadValidationError("Failed to record photo on ticket.") from exc
+
+            # ticket_id is a uuid4 hex string from create_ticket(); guard anyway
+            # so a hand-edited tickets.json can't smuggle path separators.
+            safe_ticket_id = "".join(c for c in ticket_id if c.isalnum())[:64]
+            if not safe_ticket_id:
+                raise UploadValidationError("Invalid ticket id.")
+
+            ticket_dir = (self.config.ticket_upload_dir / safe_ticket_id).resolve()
+            upload_root = self.config.ticket_upload_dir.resolve()
+            try:
+                ticket_dir.relative_to(upload_root)
+            except ValueError as exc:
+                raise UploadValidationError("Invalid destination path.") from exc
+
+            new_filename = f"{secrets.token_hex(8)}.{ext}"
+            save_path = (ticket_dir / new_filename).resolve()
+            try:
+                save_path.relative_to(upload_root)
+            except ValueError as exc:
+                raise UploadValidationError("Invalid destination path.") from exc
+
+            ok = self.storage.save_binary_file(save_path, raw)
+            if not ok:
+                raise UploadValidationError("Failed to save photo.")
+
+            # Persist a relative URL so templates can render it as <img src=...>.
+            relative_url = f"/static/uploads/tickets/{safe_ticket_id}/{new_filename}"
+            existing_photos.append({"url": relative_url, "uploaded_at": _now_iso()})
+            target["photos"] = existing_photos
+            target["updated_at"] = _now_iso()
+            try:
+                self._save(tickets)
+            except Exception as exc:
+                # The photo is on disk but the ticket record never picked it up.
+                # Leaving it would orphan the file under static/uploads/tickets/
+                # forever — best-effort delete so the upload dir doesn't grow
+                # unboundedly on repeated save failures.
+                try:
+                    self.storage.delete_file(save_path)
+                except Exception:
+                    self.logger.warning(
+                        "Failed to clean up orphaned ticket photo %s", save_path
+                    )
+                self.logger.error("Failed to persist ticket photos: %s", exc)
+                raise UploadValidationError("Failed to record photo on ticket.") from exc
+            target_snapshot = target
 
         try:
             self.notifications.log_site_change(
@@ -525,61 +551,70 @@ class TicketService:
             )
         except Exception:
             pass
-        return target
+        return target_snapshot
 
     def add_note(self, ticket_id: str, text: str, actor_email: str) -> dict | None:
         text = (text or "").strip()[:MAX_NOTE_LEN]
         if not text:
             raise ValueError("Note cannot be empty.")
-        tickets = self._load()
-        for ticket in tickets:
-            if ticket.get("id") != ticket_id:
-                continue
-            actor = (actor_email or "unknown").lower()
-            ticket.setdefault("notes", []).append({
-                "at": _now_iso(),
-                "by": actor,
-                "text": text,
-            })
-            ticket["updated_at"] = _now_iso()
-            self._save(tickets)
+        # Hold the lock across load+append+save so two concurrent notes on
+        # the same ticket can't both load the pre-append note list and
+        # then race each other's saves, dropping one of the notes.
+        target: dict | None = None
+        actor = (actor_email or "unknown").lower()
+        with self.storage.atomic():
+            tickets = self._load()
+            for ticket in tickets:
+                if ticket.get("id") != ticket_id:
+                    continue
+                ticket.setdefault("notes", []).append({
+                    "at": _now_iso(),
+                    "by": actor,
+                    "text": text,
+                })
+                ticket["updated_at"] = _now_iso()
+                self._save(tickets)
+                target = ticket
+                break
+        if target is None:
+            return None
 
-            submitter = (ticket.get("submitted_by") or "").lower()
-            if actor != submitter:
-                # Note from someone other than the submitter (typically admin);
-                # send a heads-up email if the submitter opted in.
-                self._maybe_email_submitter(
-                    ticket,
-                    subject=f"New note on your repair ticket: {ticket.get('title', '')}",
-                    body=(
-                        f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
-                        f"{actor} added a note to your repair ticket (reference {ticket_id[:8]}):\n\n"
-                        f"{text}\n\n"
-                        f"Reply from the ticket page in the Somewheria portal."
+        ticket = target
+        submitter = (ticket.get("submitted_by") or "").lower()
+        if actor != submitter:
+            # Note from someone other than the submitter (typically admin);
+            # send a heads-up email if the submitter opted in.
+            self._maybe_email_submitter(
+                ticket,
+                subject=f"New note on your repair ticket: {ticket.get('title', '')}",
+                body=(
+                    f"Hi {ticket.get('submitter_name') or 'there'},\n\n"
+                    f"{actor} added a note to your repair ticket (reference {ticket_id[:8]}):\n\n"
+                    f"{text}\n\n"
+                    f"Reply from the ticket page in the Somewheria portal."
+                ),
+            )
+        else:
+            # Note from the submitter — notify the internal inbox so staff
+            # see a renter reply even if they're not watching the dashboard.
+            try:
+                self.notifications.send_email(
+                    f"Renter note on ticket: {ticket.get('title', '')}",
+                    (
+                        f"Ticket: {ticket_id[:8]}\n"
+                        f"From: {ticket.get('submitter_name') or submitter or 'renter'}\n\n"
+                        f"{text}"
                     ),
                 )
-            else:
-                # Note from the submitter — notify the internal inbox so staff
-                # see a renter reply even if they're not watching the dashboard.
-                try:
-                    self.notifications.send_email(
-                        f"Renter note on ticket: {ticket.get('title', '')}",
-                        (
-                            f"Ticket: {ticket_id[:8]}\n"
-                            f"From: {ticket.get('submitter_name') or submitter or 'renter'}\n\n"
-                            f"{text}"
-                        ),
-                    )
-                except Exception as exc:
-                    self.logger.warning("Failed to forward renter note: %s", exc)
+            except Exception as exc:
+                self.logger.warning("Failed to forward renter note: %s", exc)
 
-            try:
-                self.notifications.log_site_change(
-                    actor,
-                    "ticket_note_added",
-                    {"ticket_id": ticket_id},
-                )
-            except Exception:
-                pass
-            return ticket
-        return None
+        try:
+            self.notifications.log_site_change(
+                actor,
+                "ticket_note_added",
+                {"ticket_id": ticket_id},
+            )
+        except Exception:
+            pass
+        return ticket
