@@ -237,5 +237,56 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
 
 
+class AtomicTestCase(SqlStorageBaseTestCase):
+    """``atomic()`` must serialize route-level read-modify-write sequences.
+
+    Individual SQL writes already run inside ``db.transaction()``, but a
+    load+save in a route handler spans two transactions and races
+    concurrent writers — exactly the lost-update class commit e062313
+    fixed for the JSON backend. The SQL backend's ``atomic()`` used to
+    be a no-op; it now acquires a process-wide RLock so the same
+    ``with storage.atomic():`` wrap fixes both backends.
+    """
+
+    def test_atomic_serializes_renter_contracts_updates(self):
+        import threading
+
+        N = 16
+        barrier = threading.Barrier(N)
+
+        def worker(i: int) -> None:
+            barrier.wait()
+            with self.storage.atomic():
+                contracts = self.storage.get_renter_contracts()
+                contracts.setdefault(f"renter{i}@example.com", []).append(
+                    {"id": f"c{i}", "property_name": f"P{i}"}
+                )
+                self.storage.save_renter_contracts(contracts)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        stored = self.storage.get_renter_contracts()
+        self.assertEqual(len(stored), N)
+        self.assertEqual(
+            set(stored),
+            {f"renter{i}@example.com" for i in range(N)},
+        )
+
+    def test_atomic_is_reentrant(self):
+        # FileStorageService.atomic() is re-entrant because file_lock is an
+        # RLock; the SQL backend must match so a nested ``with atomic():``
+        # block (e.g. a helper that itself calls atomic()) doesn't deadlock.
+        with self.storage.atomic():
+            with self.storage.atomic():
+                self.storage.set_user_role("nested@example.com", "renter")
+        self.assertEqual(
+            self.storage.get_user_roles(), {"nested@example.com": "renter"}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

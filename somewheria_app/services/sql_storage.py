@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from .console import get_console_logger
@@ -29,18 +30,31 @@ class SqlStorageService:
         self.config = config
         self.logger = get_console_logger("storage-sql")
         self.db = Database(config.sqlite_file)
+        # Re-entrant lock backing :meth:`atomic`. Individual writes already
+        # go through ``db.transaction()``, but a route-level
+        # read-modify-write sequence spans multiple transactions — two
+        # concurrent admins both load the pre-write snapshot and race each
+        # other's saves, silently dropping one of the updates. Holding this
+        # lock around the route block (via ``with storage.atomic():``)
+        # serializes those sequences in this process, mirroring the
+        # guarantee :class:`FileStorageService` gets from ``file_lock``.
+        # Per-process is sufficient for the single-worker deployment model
+        # documented in ``services/storage.py``.
+        self._atomic_lock = threading.RLock()
 
     @contextlib.contextmanager
     def atomic(self):
-        """No-op context manager mirroring FileStorageService.atomic().
+        """Serialize a multi-step read-modify-write across writers.
 
-        SQL writes already go through ``db.transaction()`` so a load+save
-        wrapper isn't required for correctness. Callers (TicketService et
-        al.) use ``with storage.atomic():`` without branching on backend;
-        that boils down to a real RLock under the file backend and to this
-        pass-through here.
+        SQL writes already go through ``db.transaction()``, but a load+save
+        sequence in a route handler still races concurrent callers because
+        each call opens its own transaction. Holding ``self._atomic_lock``
+        across the block makes the whole sequence a single critical
+        section, exactly like ``FileStorageService.atomic()`` does on the
+        file backend.
         """
-        yield
+        with self._atomic_lock:
+            yield
 
     # ---------------------------------------------------------------- helpers
 
