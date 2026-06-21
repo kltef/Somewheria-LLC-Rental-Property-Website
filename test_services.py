@@ -309,6 +309,100 @@ class FileStorageServiceTestCase(unittest.TestCase):
             {f"user{i}@example.com" for i in range(N)},
         )
 
+    def test_atomic_serializes_concurrent_renter_contracts_updates(self):
+        """Route-level read-modify-write under ``atomic()`` preserves all writes.
+
+        ``admin_contracts`` (add/delete) and ``_backfill_contract_ids`` each
+        do ``get_renter_contracts() -> mutate -> save_renter_contracts()``
+        without holding the storage lock, so two concurrent admins racing
+        on the contracts file silently dropped one side's update — same
+        lost-update class commit e062313 fixed for tickets and pending
+        registrations. The route handlers now wrap that sequence in
+        ``with services.storage.atomic():``; this regression test verifies
+        the lock is actually held end-to-end on the file backend.
+        """
+        import threading
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        config = SimpleNamespace(
+            registration_file=Path(tmpdir.name) / "registrations.json",
+            user_roles_file=Path(tmpdir.name) / "roles.json",
+            renter_profile_file=Path(tmpdir.name) / "profiles.json",
+            contracts_file=Path(tmpdir.name) / "contracts.json",
+            lead_capture_file=Path(tmpdir.name) / "lead_captures.json",
+        )
+        service = FileStorageService(config)
+
+        N = 32
+        barrier = threading.Barrier(N)
+
+        def worker(i: int) -> None:
+            barrier.wait()
+            # Mirror what admin_contracts add now does after the fix.
+            with service.atomic():
+                contracts = service.get_renter_contracts()
+                contracts.setdefault(f"renter{i}@example.com", []).append(
+                    {"id": f"c{i}", "property_name": f"P{i}"}
+                )
+                service.save_renter_contracts(contracts)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        stored = service.get_renter_contracts()
+        self.assertEqual(len(stored), N)
+        self.assertEqual(
+            {email for email in stored},
+            {f"renter{i}@example.com" for i in range(N)},
+        )
+
+    def test_atomic_serializes_concurrent_renter_profile_updates(self):
+        """``renter_profile`` POST now wraps load+modify+save in ``atomic()``.
+
+        Without the wrap, two renters POSTing to /renter/profile at the
+        same time both load the global profiles dict, each modifies their
+        own row, and the second save clobbers the first — even though
+        they're editing different rows — because the file IS the dict.
+        """
+        import threading
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        config = SimpleNamespace(
+            registration_file=Path(tmpdir.name) / "registrations.json",
+            user_roles_file=Path(tmpdir.name) / "roles.json",
+            renter_profile_file=Path(tmpdir.name) / "profiles.json",
+            contracts_file=Path(tmpdir.name) / "contracts.json",
+            lead_capture_file=Path(tmpdir.name) / "lead_captures.json",
+        )
+        service = FileStorageService(config)
+
+        N = 32
+        barrier = threading.Barrier(N)
+
+        def worker(i: int) -> None:
+            barrier.wait()
+            # Mirror what renter_profile POST now does after the fix.
+            with service.atomic():
+                profiles = service.get_renter_profiles()
+                profiles[f"renter{i}@example.com"] = {"name": f"Renter {i}"}
+                service.save_renter_profiles(profiles)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        stored = service.get_renter_profiles()
+        self.assertEqual(len(stored), N)
+        self.assertEqual(
+            set(stored),
+            {f"renter{i}@example.com" for i in range(N)},
+        )
+
 
 class AppointmentServiceTestCase(unittest.TestCase):
     def setUp(self):

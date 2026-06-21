@@ -187,10 +187,15 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
         # canonical free-form ``status`` field admins set in the form.
         contract["status_class"] = _classify_contract_status(contract)
     if needs_save:
+        # Hold the storage lock across load+modify+save so a concurrent
+        # admin add/delete on the same renter can't race the backfill and
+        # silently lose one side's write. Mirrors the lost-update fix in
+        # commit e062313 for tickets and pending registrations.
         try:
-            all_contracts = services.storage.get_renter_contracts()
-            all_contracts[email] = contracts_for_email
-            services.storage.save_renter_contracts(all_contracts)
+            with services.storage.atomic():
+                all_contracts = services.storage.get_renter_contracts()
+                all_contracts[email] = contracts_for_email
+                services.storage.save_renter_contracts(all_contracts)
         except Exception:
             pass
     return contracts_for_email
@@ -591,28 +596,40 @@ def renter_profile():
     services = get_services()
     user = get_current_user()
     email = user["email"].lower()
-    profiles = services.storage.get_renter_profiles()
-    profile = profiles.get(
-        email,
-        {
+    success = None
+    if request.method == "POST":
+        # Hold the storage lock across load+modify+save so two renters
+        # editing their profiles concurrently can't race each other's
+        # saves (the read-modify-write reads ALL profiles into memory and
+        # writes them all back, so the second save would otherwise clobber
+        # the first). Mirrors the lost-update fix in commit e062313 for
+        # tickets and pending registrations.
+        with services.storage.atomic():
+            profiles = services.storage.get_renter_profiles()
+            profile = profiles.get(email) or {
+                "name": user.get("name", ""),
+                "contact": "",
+                "email_status_updates": True,
+                "rcs_status_updates": True,
+            }
+            profile["name"] = request.form.get("name", "").strip()[:120]
+            profile["contact"] = request.form.get("contact", "").strip()[:200]
+            profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
+            profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
+            profiles[email] = profile
+            services.storage.save_renter_profiles(profiles)
+        success = "Profile updated."
+    else:
+        profiles = services.storage.get_renter_profiles()
+        profile = profiles.get(email) or {
             "name": user.get("name", ""),
             "contact": "",
             "email_status_updates": True,
             "rcs_status_updates": True,
-        },
-    )
-    # Backfill fields for profiles created before the preference existed.
-    profile.setdefault("email_status_updates", True)
-    profile.setdefault("rcs_status_updates", True)
-    success = None
-    if request.method == "POST":
-        profile["name"] = request.form.get("name", "").strip()[:120]
-        profile["contact"] = request.form.get("contact", "").strip()[:200]
-        profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
-        profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
-        profiles[email] = profile
-        services.storage.save_renter_profiles(profiles)
-        success = "Profile updated."
+        }
+        # Backfill fields for profiles created before the preference existed.
+        profile.setdefault("email_status_updates", True)
+        profile.setdefault("rcs_status_updates", True)
     return render_template("renter_profile.html", profile=profile, user=user, success=success, title="Edit Profile")
 
 
@@ -691,18 +708,25 @@ def admin_contracts():
                             pdf_filename = ""
                             error = "Failed to save PDF; contract not added."
                 if error is None:
-                    contracts_data.setdefault(renter_email, []).append(
-                        {
-                            "id": contract_id,
-                            "property_name": property_name,
-                            "start_date": start_date,
-                            "end_date": end_date,
-                            "status": status,
-                            "pdf_filename": pdf_filename,
-                            "created_at": utcnow_iso(),
-                        }
-                    )
-                    services.storage.save_renter_contracts(contracts_data)
+                    new_contract = {
+                        "id": contract_id,
+                        "property_name": property_name,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "status": status,
+                        "pdf_filename": pdf_filename,
+                        "created_at": utcnow_iso(),
+                    }
+                    # Hold the storage lock across load+modify+save so two
+                    # admins adding contracts concurrently can't both read
+                    # the pre-add snapshot and then race each other's saves
+                    # (which silently drops one of the new contracts on the
+                    # file backend). Same class of fix as commit e062313
+                    # made for tickets and pending registrations.
+                    with services.storage.atomic():
+                        contracts_data = services.storage.get_renter_contracts()
+                        contracts_data.setdefault(renter_email, []).append(new_contract)
+                        services.storage.save_renter_contracts(contracts_data)
                     success = f"Contract added for {renter_email}."
         elif action == "delete":
             renter_email = request.form.get("renter_email", "").strip().lower()
@@ -710,26 +734,34 @@ def admin_contracts():
             if renter_email and contract_index is not None:
                 try:
                     contract_idx = int(contract_index)
-                    if renter_email in contracts_data and 0 <= contract_idx < len(contracts_data[renter_email]):
-                        removed = contracts_data[renter_email][contract_idx]
-                        # Best-effort delete of the on-disk PDF. Validate the
-                        # filename the same way the download path does so a
-                        # tampered ``pdf_filename`` can't unlink an arbitrary
-                        # file outside the upload directory.
-                        pdf_filename = removed.get("pdf_filename") or ""
-                        safe_pdf_path = _safe_contract_pdf_path(services, pdf_filename)
-                        if safe_pdf_path is not None:
-                            try:
-                                services.storage.delete_file(safe_pdf_path)
-                            except Exception:
-                                pass
-                        del contracts_data[renter_email][contract_idx]
-                        if not contracts_data[renter_email]:
-                            del contracts_data[renter_email]
-                        services.storage.save_renter_contracts(contracts_data)
-                        success = f"Contract removed for {renter_email}."
-                    else:
-                        error = "Contract not found."
+                    # Hold the storage lock across load+modify+save so a
+                    # delete racing another admin's add (or delete) on the
+                    # same renter can't drop one side's write. The PDF
+                    # unlink and the JSON save run together so the file and
+                    # the metadata stay in sync.
+                    with services.storage.atomic():
+                        contracts_data = services.storage.get_renter_contracts()
+                        if renter_email in contracts_data and 0 <= contract_idx < len(contracts_data[renter_email]):
+                            removed = contracts_data[renter_email][contract_idx]
+                            # Best-effort delete of the on-disk PDF. Validate
+                            # the filename the same way the download path
+                            # does so a tampered ``pdf_filename`` can't
+                            # unlink an arbitrary file outside the upload
+                            # directory.
+                            pdf_filename = removed.get("pdf_filename") or ""
+                            safe_pdf_path = _safe_contract_pdf_path(services, pdf_filename)
+                            if safe_pdf_path is not None:
+                                try:
+                                    services.storage.delete_file(safe_pdf_path)
+                                except Exception:
+                                    pass
+                            del contracts_data[renter_email][contract_idx]
+                            if not contracts_data[renter_email]:
+                                del contracts_data[renter_email]
+                            services.storage.save_renter_contracts(contracts_data)
+                            success = f"Contract removed for {renter_email}."
+                        else:
+                            error = "Contract not found."
                 except ValueError:
                     error = "Invalid contract index."
             else:
