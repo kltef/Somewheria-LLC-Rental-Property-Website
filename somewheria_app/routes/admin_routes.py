@@ -414,7 +414,14 @@ def admin_dashboard_combined():
         elif action == "add":
             new_role = request.form.get("role", "renter").strip()
             user_roles = services.storage.get_user_roles()
-            if email in user_roles and user_roles.get(email) != "revoked":
+            # Reject malformed emails at the admin boundary too. The public
+            # /register path already validates with is_valid_email; without
+            # the same gate here, an admin paste-error puts a garbage entry
+            # like "foo" into user_roles.json that can never match a real
+            # OAuth login and just pollutes the table.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif email in user_roles and user_roles.get(email) != "revoked":
                 error = "User already exists."
             elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
@@ -580,7 +587,12 @@ def admin_users():
             else:
                 error = "User not found."
         elif new_role in ALLOWED_ROLES:
-            if not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
+            # Defense in depth: reject malformed emails before they touch
+            # user_roles storage. Delete is intentionally exempt so an admin
+            # can still clean up legacy entries that predate this check.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
             else:
                 services.storage.set_user_role(email, new_role)
@@ -688,6 +700,12 @@ def admin_contracts():
             status = request.form.get("status", "Active").strip()[:32]
             if not all([renter_email, property_name, start_date, end_date]):
                 error = "All fields are required."
+            elif not is_valid_email(renter_email):
+                # Reject malformed renter emails before they touch
+                # renter_contracts storage. A typo like "renter@" otherwise
+                # creates an orphan contract that no real OAuth login can
+                # ever surface for the renter.
+                error = "A valid renter email is required."
             else:
                 contract_id = uuid_lib.uuid4().hex
                 pdf_filename = ""
