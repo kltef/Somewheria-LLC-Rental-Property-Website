@@ -590,6 +590,61 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(normalized["included_amenities"], [])
 
+    def test_normalize_property_coerces_null_scalars_to_defaults(self):
+        # Same upstream-shape bug as the description / included_amenities
+        # null fixes: a partially-filled listing can return ``{"name": null,
+        # "address": null, "rent": null, ...}``. ``setdefault`` leaves None
+        # in place, so templates / page titles render the literal "None".
+        # The coercion path here must replace each scalar with its safe
+        # default so the listing is presentable rather than ugly.
+        normalized = self.service.normalize_property(
+            {
+                "name": None,
+                "address": None,
+                "rent": None,
+                "deposit": None,
+                "sqft": None,
+                "bedrooms": None,
+                "bathrooms": None,
+                "lease_length": None,
+                "thumbnail": None,
+            },
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["name"], "Property")
+        self.assertEqual(normalized["address"], "N/A")
+        self.assertEqual(normalized["rent"], "N/A")
+        self.assertEqual(normalized["deposit"], "N/A")
+        self.assertEqual(normalized["sqft"], "N/A")
+        self.assertEqual(normalized["bedrooms"], "N/A")
+        self.assertEqual(normalized["bathrooms"], "N/A")
+        self.assertEqual(normalized["lease_length"], "12 months")
+        # Thumbnail falls back to the first photo, or "" when no photos exist.
+        self.assertEqual(normalized["thumbnail"], "")
+
+    def test_normalize_property_null_thumbnail_falls_back_to_first_photo(self):
+        # If the upstream payload explicitly nulls ``thumbnail`` but does
+        # ship a photo list, prefer the first photo over leaving None on the
+        # record (which would render as <img src="None">).
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "thumbnail": None, "photos": ["photo-1.jpg"]},
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["thumbnail"], "photo-1.jpg")
+
+    def test_normalize_property_coerces_null_blurb_to_description(self):
+        # blurb mirrors description on the listing card; a null upstream
+        # value previously slipped through to the template and rendered as
+        # the string "None".
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "description": "Cozy duplex.", "blurb": None},
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["blurb"], "Cozy duplex.")
+
     def test_property_payload_from_form_merges_custom_amenities(self):
         form = DummyForm(
             values={

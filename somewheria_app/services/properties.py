@@ -376,12 +376,25 @@ class PropertyService:
         # out of the listing entirely.
         if not isinstance(normalized["included_amenities"], list):
             normalized["included_amenities"] = []
-        normalized.setdefault("bedrooms", "N/A")
-        normalized.setdefault("bathrooms", "N/A")
-        normalized.setdefault("rent", "N/A")
-        normalized.setdefault("sqft", "N/A")
-        normalized.setdefault("deposit", "N/A")
-        normalized.setdefault("address", "N/A")
+        # Replace any missing OR explicit-null scalar with the safe default.
+        # ``setdefault`` alone leaves ``None`` in place, so a partially-filled
+        # upstream listing (``{"name": null, "address": null, ...}``) would
+        # render as the literal string "None" in templates and page titles.
+        # Same class of bug as the description / included_amenities null fixes
+        # above — here it doesn't crash, it just produces ugly UI.
+        _scalar_defaults = (
+            ("name", "Property"),
+            ("address", "N/A"),
+            ("rent", "N/A"),
+            ("deposit", "N/A"),
+            ("sqft", "N/A"),
+            ("bedrooms", "N/A"),
+            ("bathrooms", "N/A"),
+            ("lease_length", "12 months"),
+        )
+        for key, default in _scalar_defaults:
+            if normalized.get(key) is None:
+                normalized[key] = default
         # Coerce a null / non-string description to "". Upstream occasionally
         # returns ``"description": null`` for partially-filled listings; without
         # this the ``.lower()`` call below raises AttributeError, fetch_property_record
@@ -391,9 +404,12 @@ class PropertyService:
         if not isinstance(description, str):
             description = ""
         normalized["description"] = description
-        normalized.setdefault("blurb", description)
-        normalized.setdefault("lease_length", "12 months")
-        normalized.setdefault("name", "Property")
+        # blurb mirrors description as its fallback; coerce a null/non-string
+        # blurb the same way so templates never render the literal "None".
+        blurb = normalized.get("blurb", description)
+        if not isinstance(blurb, str):
+            blurb = description
+        normalized["blurb"] = blurb
         normalized.setdefault("photos", [])
         if not isinstance(normalized["photos"], list):
             normalized["photos"] = []
@@ -447,7 +463,11 @@ class PropertyService:
         else:
             ada_accessible = "Unknown"
         normalized["ada_accessible"] = ada_accessible
-        normalized.setdefault("thumbnail", normalized["photos"][0] if normalized["photos"] else "")
+        # ``thumbnail`` may legitimately be missing OR null. Treat both as
+        # "use the first photo if we have one, otherwise empty" so the
+        # template's <img src="{{ property.thumbnail }}"> never gets None.
+        if not normalized.get("thumbnail"):
+            normalized["thumbnail"] = normalized["photos"][0] if normalized["photos"] else ""
         normalized["tour_url"] = sanitize_tour_url(normalized.get("tour_url", ""))
         return normalized
 
