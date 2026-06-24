@@ -554,7 +554,17 @@ class PropertyService:
         payload = self.property_payload_from_form(form)
         response = requests.post(f"{self.config.api_base_url}/properties", json=payload, timeout=20)
         response.raise_for_status()
-        new_id = response.json().get("id") or response.json().get("property_id") or ""
+        # Parse once and tolerate a non-dict / invalid-JSON body rather than
+        # crashing the admin POST with AttributeError or JSONDecodeError.
+        # The upstream creates the property either way; a missing id just
+        # means the change-log entry won't carry it.
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            body = {}
+        new_id = body.get("id") or body.get("property_id") or ""
         self.notifications.log_site_change(
             actor_email,
             "property_created",
@@ -724,11 +734,19 @@ class PropertyService:
         # forward the stable relative URL to the upstream API.
         absolute_url = relative_url
         try:
-            requests.post(
+            assoc_response = requests.post(
                 f"{self.config.api_base_url}/properties/{property_id}/photos",
                 json={"image_url": absolute_url},
                 timeout=20,
             )
+            # Without raise_for_status() a 4xx/5xx response is silently
+            # swallowed: the local file is saved and the change-log records
+            # a successful "image_added", but the upstream never associates
+            # the URL, so the next cache refresh blanks it from the listing
+            # and the local file becomes orphaned in static/uploads. Treat
+            # the HTTP error the same way as a connection failure and at
+            # least surface a warning so the operator can investigate.
+            assoc_response.raise_for_status()
         except Exception as exc:
             self.logger.warning("Failed to associate uploaded image with property %s: %s", property_id, exc)
         self.trigger_background_refresh(actor_email)
