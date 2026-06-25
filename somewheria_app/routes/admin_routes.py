@@ -577,6 +577,14 @@ def admin_users():
                 error = "You cannot modify a user at or above your own role."
             elif services.storage.delete_user_role(email):
                 success = f"User {email} removed."
+                # Mirror the audit trail emitted by the user-management form on
+                # /admin/dashboard so role mutations made through THIS page
+                # don't silently disappear from site_changes.log — without it
+                # an admin who only uses /admin/users leaves no record of the
+                # delete for compliance / incident review.
+                services.notifications.log_site_change(
+                    actor_email, "user_deleted", {"email": email}
+                )
             else:
                 error = "User not found."
         elif new_role in ALLOWED_ROLES:
@@ -585,6 +593,11 @@ def admin_users():
             else:
                 services.storage.set_user_role(email, new_role)
                 success = f"Role for {email} updated to {new_role}."
+                services.notifications.log_site_change(
+                    actor_email,
+                    "user_role_updated",
+                    {"email": email, "role": new_role},
+                )
         else:
             error = "Invalid role."
         users = list(services.storage.get_user_roles().items())
