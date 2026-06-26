@@ -13,6 +13,17 @@ def _csv_env(name: str) -> list[str]:
     return [item.strip().lower() for item in os.getenv(name, "").split(",") if item.strip()]
 
 
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
 @dataclass
 class AppConfig:
     base_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
@@ -38,6 +49,18 @@ class AppConfig:
     )
     use_sqlite_storage: bool = field(
         default_factory=lambda: os.getenv("USE_SQLITE_STORAGE", "0") == "1"
+    )
+    # Number of trusted reverse-proxy hops in front of the app. When 0
+    # (default) the rate limiter and crash log use ``request.remote_addr``
+    # directly and ignore client-supplied ``X-Forwarded-For``, which
+    # otherwise lets an attacker rotate that header to bypass per-IP
+    # throttles. Set to the number of proxies you control (e.g. 1 for a
+    # single nginx in front) so Werkzeug's ProxyFix can strip exactly
+    # that many entries from the right of ``X-Forwarded-For`` and expose
+    # the real client IP as ``remote_addr``. A non-numeric value falls
+    # back to 0 — fail closed rather than fail open.
+    trusted_proxy_count: int = field(
+        default_factory=lambda: _int_env("TRUSTED_PROXY_COUNT", 0)
     )
     authorized_users: list[str] = field(default_factory=lambda: _csv_env("AUTHORIZED_USERS"))
     admin_users: list[str] = field(default_factory=lambda: _csv_env("ADMIN_USERS"))
