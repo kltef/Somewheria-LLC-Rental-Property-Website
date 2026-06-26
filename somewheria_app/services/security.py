@@ -168,9 +168,14 @@ _limiter = _RateLimiter()
 
 
 def _client_ip() -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # ``remote_addr`` is the only client identifier we'll trust here.
+    # When the app sits behind a proxy chain the operator declared via
+    # ``TRUSTED_PROXY_COUNT`` (see ``somewheria_app/__init__.py``),
+    # Werkzeug's ProxyFix has already rewritten ``remote_addr`` to the
+    # actual client. When no proxy is declared we MUST NOT read
+    # ``X-Forwarded-For`` directly: anyone making an unauthenticated POST
+    # to a rate-limited route can rotate that header per request and
+    # gain a fresh bucket each time, defeating the throttle entirely.
     return request.remote_addr or "0.0.0.0"
 
 

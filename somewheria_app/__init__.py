@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Flask, render_template, request
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig
 from .routes.admin_routes import register_admin_routes
@@ -49,6 +50,22 @@ def create_app() -> Flask:
         static_folder=str(config.static_dir),
         static_url_path="/static",
     )
+    # When the operator declares a trusted proxy chain in front of the
+    # app, hand X-Forwarded-* parsing to Werkzeug's ProxyFix so it can
+    # strip exactly the configured number of hops and expose the original
+    # client IP as ``request.remote_addr``. Anything downstream
+    # (rate limiter, crash log) keys off ``remote_addr`` and therefore
+    # gains a real client IP. When count is 0, leave the WSGI stack
+    # untouched so a client-supplied X-Forwarded-For can NOT spoof the
+    # rate-limiter identity (the prior implementation honored the header
+    # unconditionally and was bypassable from any unauthenticated POST).
+    if config.trusted_proxy_count > 0:
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=config.trusted_proxy_count,
+            x_proto=config.trusted_proxy_count,
+            x_host=config.trusted_proxy_count,
+        )
     app.secret_key = config.secret_key
     app.config["DISABLE_BACKGROUND_THREADS"] = config.disable_background_threads
     app.config["SHOW_REQUEST_LOGS"] = True
@@ -180,7 +197,11 @@ def create_app() -> Flask:
             method = request.method
             endpoint = request.endpoint or ""
             ua = request.headers.get("User-Agent", "")
-            remote = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+            # ``remote_addr`` is the source of truth: it's either the direct
+            # TCP peer or — when TRUSTED_PROXY_COUNT is set — the ProxyFix
+            # normalized client IP. Reading X-Forwarded-For directly would
+            # log a header an unauthenticated visitor controls.
+            remote = request.remote_addr or ""
         except Exception:
             path, method, endpoint = "(unknown)", "(unknown)", ""
             ua, remote = "(unknown)", "(unknown)"
