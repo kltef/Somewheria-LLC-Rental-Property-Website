@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
+import requests
 from flask import Flask, Response, abort
 from PIL import Image
 
@@ -39,7 +40,7 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.service = PropertyService(self.config, self.notifications)
 
     def tearDown(self):
-        for filename in ("prop-1_abc123.png", "prop-1_bad.png", "prop-1_assoc.png"):
+        for filename in ("prop-1_abc123.png", "prop-1_bad.png", "prop-1_assoc.png", "prop-1_httperr.png"):
             file_path = self.upload_dir / filename
             if file_path.exists():
                 file_path.unlink()
@@ -543,6 +544,61 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_called_once()
         trigger_mock.assert_called_once_with("admin@example.com")
 
+    def test_create_property_returns_empty_id_when_response_is_not_a_dict(self):
+        # Upstream sometimes returns a JSON list, scalar, or null body; the old
+        # ``response.json().get(...)`` chain would raise AttributeError and 500
+        # the admin POST. The route should still succeed with an empty new_id.
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.return_value = []  # list, not dict
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "")
+        self.notifications.log_site_change.assert_called_once()
+
+    def test_create_property_returns_empty_id_when_response_body_is_invalid_json(self):
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.side_effect = ValueError("no json body")
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "")
+
+    def test_create_property_parses_response_json_only_once(self):
+        # Guard against regressing into the double-parse pattern that wasted
+        # CPU and made the code fragile to non-cached response shapes.
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.return_value = {"id": "prop-99"}
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "prop-99")
+        self.assertEqual(response.json.call_count, 1)
+
     def test_update_property_updates_remote_api_and_triggers_refresh(self):
         current = {
             "id": "prop-1",
@@ -702,6 +758,38 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
             self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
 
         warning_mock.assert_called_once()
+
+    def test_upload_image_logs_association_http_error(self):
+        # A 4xx/5xx upstream response used to be silently ignored because the
+        # POST didn't call ``raise_for_status``. The local file is saved but
+        # upstream never learns about the URL, so the next refresh blanks it
+        # and the file becomes orphaned — make sure the failure surfaces.
+        file_bytes = io.BytesIO()
+        Image.new("RGB", (16, 9), color="yellow").save(file_bytes, format="PNG")
+        file_payload = file_bytes.getvalue()
+
+        class UploadedFile:
+            filename = "photo.png"
+            stream = io.BytesIO(file_payload)
+
+        error_response = Mock()
+        error_response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
+
+        with patch("somewheria_app.services.properties.secrets.token_hex", return_value="httperr"), patch(
+            "somewheria_app.services.properties.url_for",
+            return_value="/static/uploads/prop-1_httperr.png",
+        ), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=error_response,
+        ), patch.object(self.service.logger, "warning") as warning_mock, patch.object(
+            self.service,
+            "trigger_background_refresh",
+        ):
+            self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
+
+        warning_mock.assert_called_once()
+        message = warning_mock.call_args.args[0]
+        self.assertIn("Failed to associate uploaded image", message)
 
 
 class CoverageInfrastructureTestCase(unittest.TestCase):

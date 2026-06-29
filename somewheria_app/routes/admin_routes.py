@@ -257,6 +257,51 @@ def admin_status():
         "cache_refresh_interval": f"{config.cache_refresh_interval}s",
     }
 
+    cache_health = services.properties.get_cache_health()
+
+    def _format_age(seconds):
+        if seconds is None:
+            return "never refreshed yet"
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s ago"
+        if seconds < 3600:
+            return f"{seconds // 60}m {seconds % 60}s ago"
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m ago"
+
+    upstream_status = [
+        {
+            "label": "Last Refresh Result",
+            "detail": (
+                "Not yet attempted in this process"
+                if cache_health["last_attempt_ok"] is None
+                else "Succeeded against the property API"
+                if cache_health["last_attempt_ok"]
+                else f"Failed: {cache_health['last_error']}"
+            ),
+            "ok": cache_health["last_attempt_ok"] is not False,
+        },
+        {
+            "label": "Cache Age",
+            "detail": f"Listings last refreshed {_format_age(cache_health['age_seconds'])}",
+            "ok": cache_health["age_seconds"] is not None,
+        },
+        {
+            "label": "Last Refresh Duration",
+            "detail": (
+                f"{cache_health['last_refresh_seconds']:.1f}s upstream fan-out"
+                if cache_health["last_refresh_seconds"] is not None
+                else "Not measured yet"
+            ),
+            # API Gateway caps each call at 29s; flag an aggregate fan-out
+            # that is creeping toward that ceiling.
+            "ok": (
+                cache_health["last_refresh_seconds"] is None
+                or cache_health["last_refresh_seconds"] < 25
+            ),
+        },
+    ]
+
     service_status = [
         {
             "label": "Property API Base",
@@ -369,6 +414,7 @@ def admin_status():
         service_status=service_status,
         file_status=file_status,
         website_status=website_status,
+        upstream_status=upstream_status,
         user=get_current_user(),
     )
 
@@ -414,7 +460,14 @@ def admin_dashboard_combined():
         elif action == "add":
             new_role = request.form.get("role", "renter").strip()
             user_roles = services.storage.get_user_roles()
-            if email in user_roles and user_roles.get(email) != "revoked":
+            # Reject malformed emails at the admin boundary too. The public
+            # /register path already validates with is_valid_email; without
+            # the same gate here, an admin paste-error puts a garbage entry
+            # like "foo" into user_roles.json that can never match a real
+            # OAuth login and just pollutes the table.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif email in user_roles and user_roles.get(email) != "revoked":
                 error = "User already exists."
             elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
@@ -577,14 +630,32 @@ def admin_users():
                 error = "You cannot modify a user at or above your own role."
             elif services.storage.delete_user_role(email):
                 success = f"User {email} removed."
+                # Mirror the audit trail emitted by the user-management form on
+                # /admin/dashboard so role mutations made through THIS page
+                # don't silently disappear from site_changes.log — without it
+                # an admin who only uses /admin/users leaves no record of the
+                # delete for compliance / incident review.
+                services.notifications.log_site_change(
+                    actor_email, "user_deleted", {"email": email}
+                )
             else:
                 error = "User not found."
         elif new_role in ALLOWED_ROLES:
-            if not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
+            # Defense in depth: reject malformed emails before they touch
+            # user_roles storage. Delete is intentionally exempt so an admin
+            # can still clean up legacy entries that predate this check.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
             else:
                 services.storage.set_user_role(email, new_role)
                 success = f"Role for {email} updated to {new_role}."
+                services.notifications.log_site_change(
+                    actor_email,
+                    "user_role_updated",
+                    {"email": email, "role": new_role},
+                )
         else:
             error = "Invalid role."
         users = list(services.storage.get_user_roles().items())
@@ -688,6 +759,12 @@ def admin_contracts():
             status = request.form.get("status", "Active").strip()[:32]
             if not all([renter_email, property_name, start_date, end_date]):
                 error = "All fields are required."
+            elif not is_valid_email(renter_email):
+                # Reject malformed renter emails before they touch
+                # renter_contracts storage. A typo like "renter@" otherwise
+                # creates an orphan contract that no real OAuth login can
+                # ever surface for the renter.
+                error = "A valid renter email is required."
             else:
                 contract_id = uuid_lib.uuid4().hex
                 pdf_filename = ""

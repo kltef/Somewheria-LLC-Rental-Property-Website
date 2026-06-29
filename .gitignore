@@ -16,6 +16,10 @@ venv/
 # App runtime artifacts
 application.log
 site_changes.log
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Local data files
 pending_registrations.json
