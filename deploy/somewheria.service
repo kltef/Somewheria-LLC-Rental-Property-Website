@@ -1,0 +1,49 @@
+# systemd unit for the Somewheria web app (gunicorn).
+#
+# Install:
+#   sudo cp deploy/somewheria.service /etc/systemd/system/somewheria.service
+#   # edit User/paths below to match your server, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now somewheria
+#   sudo systemctl status somewheria
+#   journalctl -u somewheria -f          # follow logs
+#
+[Unit]
+Description=Somewheria rental property website (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as an unprivileged service account, never root.
+User=somewheria
+Group=somewheria
+
+# Absolute path to the repo checkout.
+WorkingDirectory=/opt/somewheria/Somewheria-LLC-Rental-Property-Website
+
+# Config (secrets, AUTHORIZED_USERS, Google OAuth, etc.) lives in .env.
+EnvironmentFile=/opt/somewheria/Somewheria-LLC-Rental-Property-Website/.env
+# Trust exactly one proxy hop (nginx) so ProxyFix reads X-Forwarded-* and the
+# secure-cookie / OAuth https logic works. Leave FLASK_ENV UNSET for prod.
+Environment=TRUSTED_PROXY_COUNT=1
+Environment=BIND=127.0.0.1:8000
+
+# Use the venv's gunicorn with the repo's gunicorn.conf.py.
+ExecStart=/opt/somewheria/Somewheria-LLC-Rental-Property-Website/venv/bin/gunicorn \
+    --config gunicorn.conf.py website_app:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# The app writes JSON state, uploads, and contract PDFs under the repo dir,
+# so it must remain writable. Grant only that path.
+ReadWritePaths=/opt/somewheria/Somewheria-LLC-Rental-Property-Website
+
+[Install]
+WantedBy=multi-user.target

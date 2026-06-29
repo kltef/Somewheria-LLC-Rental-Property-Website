@@ -14,9 +14,11 @@
 #   sudo chown "$USER" /etc/authbind/byport/80
 #
 # Usage:
-#   ./start.sh                  # venv + deps, then run on $PORT (default 5000)
-#   PORT=80 ./start.sh          # bind port 80 (needs authbind)
-#   HOST=127.0.0.1 ./start.sh   # localhost only
+#   ./start.sh                  # dev: venv + deps, Flask dev server on $PORT (5000)
+#   MODE=prod ./start.sh        # prod: serve via gunicorn (see gunicorn.conf.py)
+#   PORT=80 ./start.sh          # dev: bind port 80 (needs authbind)
+#   HOST=127.0.0.1 ./start.sh   # dev: localhost only
+#   BIND=127.0.0.1:8000 MODE=prod ./start.sh   # prod: gunicorn listen address
 #   SKIP_INSTALL=1 ./start.sh   # reuse existing venv, skip pip install
 #   PYTHON=python3.12 ./start.sh
 
@@ -55,9 +57,19 @@ if [ ! -f .env ]; then
 fi
 
 # 4. Launch ----------------------------------------------------------------
-echo "==> Starting server on $HOST:$PORT"
-if [ "$PORT" -lt 1024 ] && command -v authbind >/dev/null 2>&1; then
-    exec authbind --deep python website_app.py --no-interactive
+MODE=${MODE:-dev}
+if [ "$MODE" = "prod" ]; then
+    # Production: gunicorn behind a reverse proxy (nginx). Binds locally by
+    # default; nginx terminates TLS and forwards. See gunicorn.conf.py and
+    # docs/DEPLOYMENT.md.
+    echo "==> Starting gunicorn (prod) bound to ${BIND:-127.0.0.1:8000}"
+    exec gunicorn --config gunicorn.conf.py website_app:app
 else
-    exec python website_app.py --no-interactive
+    # Development: Flask's built-in server. NOT for production traffic.
+    echo "==> Starting Flask dev server on $HOST:$PORT"
+    if [ "$PORT" -lt 1024 ] && command -v authbind >/dev/null 2>&1; then
+        exec authbind --deep python website_app.py --no-interactive
+    else
+        exec python website_app.py --no-interactive
+    fi
 fi
