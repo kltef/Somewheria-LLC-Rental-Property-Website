@@ -121,13 +121,49 @@
             class="text-xl font-semibold text-[#111518] dark:text-white">Reporting</h2>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {# Tickets by Status — pure CSS bars, no JS or external chart library #}
         <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
-          <p class="text-sm font-semibold mb-2 text-[#111518] dark:text-white">Tickets by Status</p>
-          <div id="tickets-status-chart" style="height:280px;"></div>
+          <p class="text-sm font-semibold mb-4 text-[#111518] dark:text-white">Tickets by Status</p>
+          {% set status_max = (ticket_status_counts.values() | list | max) if ticket_status_counts else 0 %}
+          {% if ticket_status_counts %}
+            <div class="space-y-3">
+              {% for status, count in ticket_status_counts.items() %}
+                {% set bar = 'bg-neutral-400 dark:bg-neutral-600' %}
+                {% if status == 'open' %}{% set bar = 'bg-blue-500' %}{% endif %}
+                {% if status == 'in_progress' %}{% set bar = 'bg-amber-500' %}{% endif %}
+                {% if status == 'awaiting_parts' %}{% set bar = 'bg-purple-500' %}{% endif %}
+                {% if status == 'resolved' %}{% set bar = 'bg-emerald-500' %}{% endif %}
+                {% if status == 'closed' %}{% set bar = 'bg-neutral-400 dark:bg-neutral-600' %}{% endif %}
+                <div>
+                  <div class="flex justify-between text-xs mb-1">
+                    <span class="capitalize text-gray-600 dark:text-gray-300">{{ status.replace('_', ' ') }}</span>
+                    <span class="text-gray-500 dark:text-gray-400">{{ count }}</span>
+                  </div>
+                  <div class="w-full h-2.5 rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
+                    <div class="h-full {{ bar }} rounded-full" style="width: {{ (count / status_max * 100) if status_max else 0 }}%"></div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="text-sm text-gray-500 dark:text-gray-400">No ticket data yet.</p>
+          {% endif %}
         </div>
+        {# Listings by Month — inline SVG line chart, drawn by the script below #}
         <div class="p-4 bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800">
           <p class="text-sm font-semibold mb-2 text-[#111518] dark:text-white">Listings by Month (last 12)</p>
-          <div id="listings-activity-chart" style="height:280px;"></div>
+          <svg id="listings-chart" viewBox="0 0 600 200" preserveAspectRatio="none"
+               class="w-full text-neutral-200 dark:text-neutral-700" style="height:220px;" role="img"
+               aria-label="Listings created and deleted over the last 12 months">
+            <line x1="0" y1="199" x2="600" y2="199" stroke="currentColor" stroke-width="1" vector-effect="non-scaling-stroke"></line>
+            <polyline id="listings-created" fill="none" stroke="#059669" stroke-width="2" vector-effect="non-scaling-stroke" points=""></polyline>
+            <polyline id="listings-deleted" fill="none" stroke="#dc2626" stroke-width="2" vector-effect="non-scaling-stroke" points=""></polyline>
+          </svg>
+          <div class="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
+            <span class="inline-flex items-center gap-1.5"><span class="w-3 h-0.5 inline-block" style="background:#059669"></span>Created</span>
+            <span class="inline-flex items-center gap-1.5"><span class="w-3 h-0.5 inline-block" style="background:#dc2626"></span>Deleted</span>
+            <span id="listings-range" class="ml-auto"></span>
+          </div>
         </div>
       </div>
     </section>
@@ -164,50 +200,32 @@
   </section>
 </div>
 
-{% if ticket_status_counts is defined or listing_activity is defined %}
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+{% if listing_activity is defined %}
 <script>
 (function() {
-  try {
-    var statusCounts = {{ (ticket_status_counts or {})|tojson }};
-    var statusLabels = Object.keys(statusCounts);
-    var statusValues = statusLabels.map(function(k) { return statusCounts[k]; });
-    if (window.Plotly && document.getElementById('tickets-status-chart')) {
-      Plotly.newPlot('tickets-status-chart', [{
-        type: 'pie',
-        labels: statusLabels.map(function(s) { return s.replace('_', ' '); }),
-        values: statusValues,
-        textinfo: 'label+value'
-      }], {margin: {t: 10, b: 10, l: 10, r: 10}}, {displayModeBar: false, responsive: true});
-    }
-  } catch (e) { /* ignore */ }
-
+  // Listings-by-month line chart, rendered as an inline SVG (no external lib).
   try {
     var activity = {{ (listing_activity or {})|tojson }};
-    if (window.Plotly && activity.months && document.getElementById('listings-activity-chart')) {
-      Plotly.newPlot('listings-activity-chart', [
-        {
-          x: activity.months,
-          y: activity.created,
-          type: 'scatter',
-          mode: 'lines+markers',
-          name: 'Created',
-          line: {color: '#059669'}
-        },
-        {
-          x: activity.months,
-          y: activity.deleted,
-          type: 'scatter',
-          mode: 'lines+markers',
-          name: 'Deleted',
-          line: {color: '#dc2626'}
-        }
-      ], {
-        margin: {t: 10, b: 40, l: 40, r: 10},
-        xaxis: {title: 'Month'},
-        yaxis: {title: 'Count', rangemode: 'tozero'},
-        legend: {orientation: 'h'}
-      }, {displayModeBar: false, responsive: true});
+    var months = activity.months || [];
+    if (months.length >= 2) {
+      var created = activity.created || [];
+      var deleted = activity.deleted || [];
+      var w = 600, h = 200, pad = 6;
+      var maxVal = Math.max(1, Math.max.apply(null, created.concat(deleted)));
+      var step = (w - pad * 2) / (months.length - 1);
+      function pointsFor(series) {
+        return series.map(function(v, i) {
+          var x = pad + step * i;
+          var y = h - pad - (v / maxVal) * (h - pad * 2);
+          return x.toFixed(1) + ',' + y.toFixed(1);
+        }).join(' ');
+      }
+      var c = document.getElementById('listings-created');
+      var d = document.getElementById('listings-deleted');
+      if (c) c.setAttribute('points', pointsFor(created));
+      if (d) d.setAttribute('points', pointsFor(deleted));
+      var range = document.getElementById('listings-range');
+      if (range) range.textContent = months[0] + ' – ' + months[months.length - 1];
     }
   } catch (e) { /* ignore */ }
 })();
