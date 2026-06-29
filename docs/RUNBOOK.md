@@ -123,7 +123,7 @@ CSRF: required on all unsafe methods except `/google/callback` and static. Token
 
 These are enforced by `_RateLimiter` in `services/security.py`, in-memory per process. Behind multiple workers / instances each has its own bucket — the limits effectively multiply.
 
-`X-Forwarded-For` is trusted for the client IP if present. If you front with a proxy that doesn't sanitize this header, attackers can spoof IPs to evade the per-IP limits. Configure your proxy to overwrite `X-Forwarded-For`.
+Client IP is taken from `request.remote_addr`. By default `X-Forwarded-For` is **ignored** so an unauthenticated attacker can't rotate the header per request to skip the throttle. If you sit behind reverse proxies you control, set `TRUSTED_PROXY_COUNT=<N>` (number of hops) — `create_app()` wires Werkzeug's `ProxyFix` to strip exactly that many entries from the right of `X-Forwarded-For` and expose the original client IP as `remote_addr`. Leave it unset (or set to `0`) if the app accepts traffic directly.
 
 ## Zillow integration — pending credentials
 

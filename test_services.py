@@ -1273,6 +1273,151 @@ class RateLimiterTestCase(unittest.TestCase):
         self.assertIn("active", limiter._hits)
 
 
+class ClientIpResolutionTestCase(unittest.TestCase):
+    """`_client_ip` keys the rate limiter. If it honors a client-supplied
+    ``X-Forwarded-For`` without a trusted-proxy guard, an attacker can rotate
+    the header per request to gain a fresh bucket and bypass throttles."""
+
+    def _build_app(self, trusted_proxy_count=0):
+        from flask import Flask
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app = Flask(__name__)
+        app.secret_key = "test"
+        if trusted_proxy_count > 0:
+            app.wsgi_app = ProxyFix(
+                app.wsgi_app,
+                x_for=trusted_proxy_count,
+                x_proto=trusted_proxy_count,
+                x_host=trusted_proxy_count,
+            )
+        return app
+
+    def _resolve(self, app, environ_overrides=None, headers=None):
+        from somewheria_app.services.security import _client_ip
+
+        overrides = {"REMOTE_ADDR": "10.0.0.1"}
+        if environ_overrides:
+            overrides.update(environ_overrides)
+        with app.test_request_context(
+            "/", environ_overrides=overrides, headers=headers or {}
+        ):
+            return _client_ip()
+
+    def test_default_ignores_x_forwarded_for(self):
+        app = self._build_app(trusted_proxy_count=0)
+        ip = self._resolve(
+            app,
+            headers={"X-Forwarded-For": "1.2.3.4, 5.6.7.8"},
+        )
+        # Header is attacker-controlled when no proxy is declared; we
+        # MUST fall back to the actual TCP peer.
+        self.assertEqual(ip, "10.0.0.1")
+
+    def test_default_uses_remote_addr_when_no_header(self):
+        app = self._build_app(trusted_proxy_count=0)
+        ip = self._resolve(app)
+        self.assertEqual(ip, "10.0.0.1")
+
+    def test_default_handles_missing_remote_addr(self):
+        app = self._build_app(trusted_proxy_count=0)
+        ip = self._resolve(app, environ_overrides={"REMOTE_ADDR": None})
+        # Werkzeug stores None as missing; _client_ip falls back to the
+        # explicit sentinel so the bucket key is never empty.
+        self.assertEqual(ip, "0.0.0.0")
+
+    def test_default_does_not_let_spoofed_header_split_buckets(self):
+        app = self._build_app(trusted_proxy_count=0)
+        first = self._resolve(app, headers={"X-Forwarded-For": "1.1.1.1"})
+        second = self._resolve(app, headers={"X-Forwarded-For": "2.2.2.2"})
+        # An attacker rotating XFF from a single TCP peer must hit the
+        # same limiter bucket — otherwise the rate limit is bypassable.
+        self.assertEqual(first, second)
+        self.assertEqual(first, "10.0.0.1")
+
+    def _resolve_via_wsgi(self, app, headers=None, remote_addr="10.0.0.99"):
+        # ProxyFix runs at WSGI middleware layer, so test_request_context
+        # bypasses it. Drive the test client instead — it executes the
+        # full middleware chain before the view runs.
+        from somewheria_app.services.security import _client_ip
+
+        captured = {}
+
+        @app.route("/__client_ip__")
+        def _capture():
+            captured["ip"] = _client_ip()
+            return "ok"
+
+        client = app.test_client()
+        client.get(
+            "/__client_ip__",
+            headers=headers or {},
+            environ_overrides={"REMOTE_ADDR": remote_addr},
+        )
+        return captured["ip"]
+
+    def test_with_trusted_proxy_extracts_real_client_from_xff(self):
+        # Operator declared ONE trusted proxy in front of the app.
+        # ProxyFix strips the rightmost hop and exposes the original
+        # client IP as remote_addr; _client_ip should surface that.
+        app = self._build_app(trusted_proxy_count=1)
+        ip = self._resolve_via_wsgi(
+            app,
+            headers={"X-Forwarded-For": "203.0.113.5"},
+        )
+        self.assertEqual(ip, "203.0.113.5")
+
+    def test_with_trusted_proxy_falls_back_when_header_missing(self):
+        app = self._build_app(trusted_proxy_count=1)
+        ip = self._resolve_via_wsgi(app)
+        # No header means we still see the proxy IP — not great, but the
+        # expected behavior; the operator's job is to ensure the proxy
+        # always sets X-Forwarded-For.
+        self.assertEqual(ip, "10.0.0.99")
+
+
+class TrustedProxyConfigTestCase(unittest.TestCase):
+    """``TRUSTED_PROXY_COUNT`` parsing must fail closed: any non-numeric or
+    negative value reverts to 0 (ignore X-Forwarded-For) rather than
+    enabling proxy trust with an undefined hop count."""
+
+    def _load_count(self, raw):
+        import os
+        from importlib import reload
+
+        import somewheria_app.config as cfg
+
+        previous = os.environ.get("TRUSTED_PROXY_COUNT")
+        if raw is None:
+            os.environ.pop("TRUSTED_PROXY_COUNT", None)
+        else:
+            os.environ["TRUSTED_PROXY_COUNT"] = raw
+        try:
+            reload(cfg)
+            return cfg.AppConfig().trusted_proxy_count
+        finally:
+            if previous is None:
+                os.environ.pop("TRUSTED_PROXY_COUNT", None)
+            else:
+                os.environ["TRUSTED_PROXY_COUNT"] = previous
+            reload(cfg)
+
+    def test_unset_defaults_to_zero(self):
+        self.assertEqual(self._load_count(None), 0)
+
+    def test_blank_defaults_to_zero(self):
+        self.assertEqual(self._load_count("   "), 0)
+
+    def test_non_numeric_defaults_to_zero(self):
+        self.assertEqual(self._load_count("nginx"), 0)
+
+    def test_negative_defaults_to_zero(self):
+        self.assertEqual(self._load_count("-1"), 0)
+
+    def test_valid_integer_parses(self):
+        self.assertEqual(self._load_count("2"), 2)
+
+
 class CsrfTokenExtractionTestCase(unittest.TestCase):
     """``_extract_submitted_token`` must always return a string so the
     ``secrets.compare_digest`` check in ``_csrf_before_request`` can never
