@@ -277,33 +277,53 @@ class PropertyService:
         thread.start()
 
     def _refresh_with_change_log(self, actor_email: str) -> None:
+        # Serialize with refresh_cache so an admin-triggered refresh and a
+        # ``/for-rent`` synchronous refresh can't both fan out upstream
+        # in parallel — and so a ``/for-rent`` arriving within the coalesce
+        # window after this trigger completes reuses the freshly-populated
+        # cache instead of re-firing the upstream fanout. Without this
+        # serialization a burst of admin mutations (or hits on the
+        # public ``/for-rent-refresh.json`` endpoint) could each spawn
+        # their own concurrent fetch, multiplying API Gateway / Lambda
+        # cost N-fold.
         try:
-            try:
-                latest_properties = self.fetch_all_properties()
-            finally:
-                # Share the refresh-coalesce timestamp with ``refresh_cache``
-                # so a synchronous /for-rent hit landing within
-                # REFRESH_COALESCE_SECONDS of this background fanout skips
-                # its own fetch and serves the just-updated cache. Record
-                # on both success AND failure for the same reason
-                # refresh_cache does: a follower hitting a dead upstream in
-                # series gains nothing over serving whatever's already
-                # cached.
-                self._last_refresh_monotonic = time.monotonic()
-            with self.cache_lock:
-                current_snapshot = copy.deepcopy(self.cache)
-                if json.dumps(current_snapshot, sort_keys=True) == json.dumps(latest_properties, sort_keys=True):
-                    self.logger.info("Refresh completed with no property changes")
+            with self._refresh_lock:
+                if (
+                    time.monotonic() - self._last_refresh_monotonic
+                    < self.REFRESH_COALESCE_SECONDS
+                ):
+                    # Cache was just freshened by another caller; the admin
+                    # operation that triggered us already wrote its own
+                    # ``log_site_change`` entry, so there's no diff worth
+                    # recording here. Skip the upstream fanout.
+                    self.logger.info(
+                        "On-demand refresh coalesced: cache freshened within %.1fs",
+                        self.REFRESH_COALESCE_SECONDS,
+                    )
                     return
-                log_details = self._build_change_log(current_snapshot, latest_properties)
-                self.cache = latest_properties
-            self.notifications.log_site_change(actor_email, "properties_cache_updated", log_details)
-            self.logger.info(
-                "Refresh applied: +%s / -%s / changed %s properties",
-                len(log_details["added_ids"]),
-                len(log_details["removed_ids"]),
-                len(log_details["changed"]),
-            )
+                try:
+                    latest_properties = self.fetch_all_properties()
+                    with self.cache_lock:
+                        current_snapshot = copy.deepcopy(self.cache)
+                        if json.dumps(current_snapshot, sort_keys=True) == json.dumps(latest_properties, sort_keys=True):
+                            self.logger.info("Refresh completed with no property changes")
+                            return
+                        log_details = self._build_change_log(current_snapshot, latest_properties)
+                        self.cache = latest_properties
+                    self.notifications.log_site_change(actor_email, "properties_cache_updated", log_details)
+                    self.logger.info(
+                        "Refresh applied: +%s / -%s / changed %s properties",
+                        len(log_details["added_ids"]),
+                        len(log_details["removed_ids"]),
+                        len(log_details["changed"]),
+                    )
+                finally:
+                    # Record the attempt on both success AND failure so
+                    # followers (a ``/for-rent`` hit or another trigger)
+                    # arriving within the coalesce window don't immediately
+                    # re-hit the same dead endpoint — mirrors the refresh_cache
+                    # contract.
+                    self._last_refresh_monotonic = time.monotonic()
         except Exception as exc:
             self.logger.error("On-demand refresh failed: %s", exc)
         finally:

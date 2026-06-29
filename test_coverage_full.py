@@ -269,6 +269,72 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         error_mock.assert_called_once()
 
+    def test_refresh_with_change_log_coalesces_when_cache_recently_refreshed(self):
+        # A ``/for-rent`` synchronous refresh just populated the cache; an
+        # admin-triggered ``_refresh_with_change_log`` arriving within the
+        # coalesce window should skip its upstream fanout rather than
+        # double-fetching (and silently dropping a redundant change-log
+        # diff). Without this, every admin mutation could spawn a duplicate
+        # fanout on top of a still-fresh cache.
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=[{"id": "prop-1", "name": "Maple"}]
+        ) as fetch_mock:
+            self.service.refresh_cache()
+            fetch_mock.reset_mock()
+            self.service._refresh_with_change_log("admin@example.com")
+
+        fetch_mock.assert_not_called()
+
+    def test_refresh_with_change_log_updates_last_refresh_monotonic(self):
+        # After a successful admin-triggered refresh, the very next ``/for-rent``
+        # hit must reuse the cache instead of immediately re-firing the
+        # upstream fanout. Before this fix, ``_refresh_with_change_log``
+        # forgot to stamp ``_last_refresh_monotonic`` and the coalesce
+        # window never engaged for that path.
+        self.service.cache = [{"id": "prop-1", "name": "Old"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            return_value=[{"id": "prop-1", "name": "New"}],
+        ) as fetch_mock:
+            self.service._refresh_with_change_log("admin@example.com")
+            # Immediately afterward, a ``/for-rent`` hit calls refresh_cache()
+            # — it should coalesce against the timestamp we just set.
+            self.service.refresh_cache()
+
+        self.assertEqual(fetch_mock.call_count, 1)
+
+    def test_refresh_with_change_log_serializes_concurrent_triggers(self):
+        # Multiple ``trigger_background_refresh`` calls firing in parallel
+        # (e.g. several anonymous hits on ``/for-rent-refresh.json`` or a
+        # burst of admin mutations) must serialize on ``_refresh_lock`` and
+        # coalesce so they don't all fan out upstream simultaneously.
+        import threading
+
+        self.service.cache = [{"id": "prop-1", "name": "Old"}]
+        ready = threading.Event()
+        proceed = threading.Event()
+
+        def slow_fetch():
+            ready.set()
+            proceed.wait(timeout=2)
+            return [{"id": "prop-1", "name": "New"}]
+
+        with patch.object(self.service, "fetch_all_properties", side_effect=slow_fetch) as fetch_mock:
+            t1 = threading.Thread(target=self.service._refresh_with_change_log, args=("admin@example.com",))
+            t1.start()
+            self.assertTrue(ready.wait(timeout=2))
+            t2 = threading.Thread(target=self.service._refresh_with_change_log, args=("admin2@example.com",))
+            t2.start()
+            proceed.set()
+            t1.join(timeout=2)
+            t2.join(timeout=2)
+
+        # Only one fanout: the second trigger arrived after the first had
+        # already stamped ``_last_refresh_monotonic`` and so coalesced.
+        self.assertEqual(fetch_mock.call_count, 1)
+
     def test_build_change_log_reports_added_removed_and_changed_items(self):
         change_log = self.service._build_change_log(
             [{"id": "prop-1", "name": "Old"}, {"id": "prop-2", "rent": "1000"}],
