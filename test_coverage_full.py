@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
+import requests
 from flask import Flask, Response, abort
 from PIL import Image
 
@@ -39,7 +40,7 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.service = PropertyService(self.config, self.notifications)
 
     def tearDown(self):
-        for filename in ("prop-1_abc123.png", "prop-1_bad.png", "prop-1_assoc.png"):
+        for filename in ("prop-1_abc123.png", "prop-1_bad.png", "prop-1_assoc.png", "prop-1_httperr.png"):
             file_path = self.upload_dir / filename
             if file_path.exists():
                 file_path.unlink()
@@ -176,6 +177,67 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.assertEqual(thread_ctor.call_args.kwargs["args"], ("admin@example.com",))
         thread_mock.start.assert_called_once()
+
+    def test_trigger_background_refresh_coalesces_concurrent_callers(self):
+        # /for-rent-refresh.json accepts up to 6 GETs per minute per IP and
+        # admin mutations also call this path, so a burst of callers used
+        # to each spawn their own daemon thread doing a full 8-worker
+        # upstream fanout. Coalesce so at most one is in flight at a time —
+        # the running thread's cache update covers everyone arriving while
+        # it works.
+        thread_mock = Mock()
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ) as thread_ctor:
+            self.service.trigger_background_refresh("admin@example.com")
+            self.service.trigger_background_refresh("user@example.com")
+            self.service.trigger_background_refresh("anonymous")
+
+        thread_ctor.assert_called_once()
+        thread_mock.start.assert_called_once()
+
+    def test_refresh_with_change_log_updates_coalesce_timestamp(self):
+        # Sharing ``_last_refresh_monotonic`` with refresh_cache lets a
+        # synchronous /for-rent hit landing within the coalesce window
+        # skip its own fanout after a background refresh just populated
+        # the cache. Before the shared timestamp every admin mutation
+        # silently forced a second upstream fetch on the next page load.
+        latest = [{"id": "prop-1", "name": "New"}]
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=latest
+        ) as fetch_mock:
+            self.service._refresh_with_change_log("admin@example.com")
+            self.service.refresh_cache()
+
+        fetch_mock.assert_called_once()
+        self.assertEqual(self.service.cache, latest)
+
+    def test_trigger_background_refresh_re_arms_after_worker_completes(self):
+        # The in-flight guard must reset whether the worker succeeded or
+        # raised, otherwise a single upstream blip would wedge the
+        # background-refresh path forever (every subsequent caller would
+        # see the flag still set and silently skip).
+        thread_mock = Mock()
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ):
+            self.service.trigger_background_refresh("admin@example.com")
+        self.assertTrue(self.service._background_refresh_active)
+
+        with patch.object(
+            self.service, "fetch_all_properties", side_effect=RuntimeError("boom")
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+        self.assertFalse(self.service._background_refresh_active)
+
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ) as thread_ctor:
+            self.service.trigger_background_refresh("admin@example.com")
+        thread_ctor.assert_called_once()
 
     def test_refresh_with_change_log_returns_when_snapshot_is_unchanged(self):
         self.service.cache = [{"id": "prop-1", "name": "Old"}]
@@ -548,6 +610,61 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_called_once()
         trigger_mock.assert_called_once_with("admin@example.com")
 
+    def test_create_property_returns_empty_id_when_response_is_not_a_dict(self):
+        # Upstream sometimes returns a JSON list, scalar, or null body; the old
+        # ``response.json().get(...)`` chain would raise AttributeError and 500
+        # the admin POST. The route should still succeed with an empty new_id.
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.return_value = []  # list, not dict
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "")
+        self.notifications.log_site_change.assert_called_once()
+
+    def test_create_property_returns_empty_id_when_response_body_is_invalid_json(self):
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.side_effect = ValueError("no json body")
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "")
+
+    def test_create_property_parses_response_json_only_once(self):
+        # Guard against regressing into the double-parse pattern that wasted
+        # CPU and made the code fragile to non-cached response shapes.
+        form = SimpleNamespace(
+            get=lambda key, default="": default,
+            getlist=lambda key: [],
+        )
+        response = Mock()
+        response.json.return_value = {"id": "prop-99"}
+
+        with patch.object(self.service, "property_payload_from_form", return_value={"address": "123 Main"}), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=response,
+        ), patch.object(self.service, "trigger_background_refresh"):
+            new_id = self.service.create_property(form, "admin@example.com")
+
+        self.assertEqual(new_id, "prop-99")
+        self.assertEqual(response.json.call_count, 1)
+
     def test_update_property_updates_remote_api_and_triggers_refresh(self):
         current = {
             "id": "prop-1",
@@ -707,6 +824,38 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
             self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
 
         warning_mock.assert_called_once()
+
+    def test_upload_image_logs_association_http_error(self):
+        # A 4xx/5xx upstream response used to be silently ignored because the
+        # POST didn't call ``raise_for_status``. The local file is saved but
+        # upstream never learns about the URL, so the next refresh blanks it
+        # and the file becomes orphaned — make sure the failure surfaces.
+        file_bytes = io.BytesIO()
+        Image.new("RGB", (16, 9), color="yellow").save(file_bytes, format="PNG")
+        file_payload = file_bytes.getvalue()
+
+        class UploadedFile:
+            filename = "photo.png"
+            stream = io.BytesIO(file_payload)
+
+        error_response = Mock()
+        error_response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
+
+        with patch("somewheria_app.services.properties.secrets.token_hex", return_value="httperr"), patch(
+            "somewheria_app.services.properties.url_for",
+            return_value="/static/uploads/prop-1_httperr.png",
+        ), patch(
+            "somewheria_app.services.properties.requests.post",
+            return_value=error_response,
+        ), patch.object(self.service.logger, "warning") as warning_mock, patch.object(
+            self.service,
+            "trigger_background_refresh",
+        ):
+            self.service.upload_image("prop-1", UploadedFile(), "https://example.com", "admin@example.com")
+
+        warning_mock.assert_called_once()
+        message = warning_mock.call_args.args[0]
+        self.assertIn("Failed to associate uploaded image", message)
 
 
 class CoverageInfrastructureTestCase(unittest.TestCase):

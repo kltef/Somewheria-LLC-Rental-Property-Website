@@ -588,6 +588,113 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"updated to renter", response.data)
         set_user_role_mock.assert_called_once_with("user@example.com", "renter")
 
+    def test_admin_users_update_role_writes_audit_log(self):
+        # Mirrors the user_role_updated entry the /admin/dashboard form emits.
+        # Without this, role changes made through /admin/users leave no record
+        # in site_changes.log -- so the regression test pins the audit trail
+        # for both code paths.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "set_user_role"), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"user@example.com": "renter"},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "user@example.com", "role": "renter", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        log_mock.assert_called_once_with(
+            "admin@example.com",
+            "user_role_updated",
+            {"email": "user@example.com", "role": "renter"},
+        )
+
+    def test_admin_users_delete_writes_audit_log(self):
+        # Same gap as the update path: /admin/users delete used to mutate
+        # user_roles without emitting a user_deleted audit entry. Pin both
+        # the user-facing message and the structured log call.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "renter@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"removed", response.data)
+        log_mock.assert_called_once_with(
+            "admin@example.com",
+            "user_deleted",
+            {"email": "renter@example.com"},
+        )
+
+    def test_admin_users_delete_missing_user_does_not_log(self):
+        # A delete that hits a non-existent email leaves storage untouched, so
+        # the audit trail must NOT pretend a delete happened -- otherwise
+        # site_changes.log would record phantom removals every time a typo
+        # missed an account.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "delete_user_role", return_value=False), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "ghost@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        log_mock.assert_not_called()
+
+    def test_admin_users_role_change_rejected_for_peer_does_not_log(self):
+        # A standard admin attempting to assign another admin role must be
+        # rejected -- and the rejected attempt must NOT show up in the audit
+        # log as a successful role change.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "set_user_role") as set_user_role_mock, patch.object(
+            self.services.auth, "get_user_role", return_value="admin"
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"peer@example.com": "admin"},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "peer@example.com", "role": "admin", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"You cannot assign a role", response.data)
+        set_user_role_mock.assert_not_called()
+        log_mock.assert_not_called()
+
+    def test_admin_users_rejects_malformed_email_on_role_assignment(self):
+        # Defense-in-depth check: an admin pasting a typo'd value like "not-an-email"
+        # should be rejected at the route boundary before user_roles storage is
+        # touched. Without this gate, garbage entries accumulate in user_roles.json
+        # that no real OAuth login can ever match.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "set_user_role") as set_user_role_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ):
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "not-an-email", "role": "renter", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
+
     def test_admin_dashboard_forbids_standard_admin(self):
         self.login_as("admin")
 
@@ -627,6 +734,25 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"added as admin", response.data)
         set_user_role_mock.assert_called_once_with("new@example.com", "admin")
         log_site_change_mock.assert_called_once()
+
+    def test_admin_dashboard_rejects_malformed_email_on_add(self):
+        # Mirror of test_admin_users_rejects_malformed_email_on_role_assignment for
+        # the combined admin dashboard's "add user" path. A typo'd email must not
+        # reach user_roles storage.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.analytics, "dashboard_data", return_value=({"visits": 10}, {"labels": []})), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.storage, "set_user_role") as set_user_role_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "add", "email": "not-an-email", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
 
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
@@ -711,6 +837,30 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"All fields are required.", response.data)
+
+    def test_admin_contracts_add_rejects_malformed_renter_email(self):
+        # A typo like "renter@" must not be persisted: it would create an
+        # orphan contract that no real OAuth login can ever surface.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid renter email is required", response.data)
+        save_contracts_mock.assert_not_called()
 
     def test_admin_contracts_add_successfully_saves(self):
         self.login_as("admin")

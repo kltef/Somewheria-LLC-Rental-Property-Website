@@ -7,6 +7,7 @@ import re
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -137,6 +138,19 @@ class PropertyService:
         self.cache_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
         self._last_refresh_monotonic = 0.0
+        # Guards ``_background_refresh_active``. Held only for the brief
+        # check-and-set in ``trigger_background_refresh`` and the reset
+        # in ``_refresh_with_change_log``'s finally — never while doing
+        # actual work — so a long-running upstream fanout can't block
+        # other call sites from observing the flag.
+        self._background_refresh_flag_lock = threading.Lock()
+        self._background_refresh_active = False
+        # Lightweight upstream-API health, surfaced on the admin status page.
+        # Guarded by ``_refresh_lock`` (only written inside refresh_cache).
+        self._last_success_at = None      # wall-clock of last successful refresh
+        self._last_refresh_ok = None      # bool of last attempt; None = never run
+        self._last_refresh_error = None   # error string from the last failure
+        self._last_refresh_seconds = None # duration of the last attempt
         self.refresh_thread = None
 
     def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
@@ -181,11 +195,22 @@ class PropertyService:
                 < self.REFRESH_COALESCE_SECONDS
             ):
                 return
+            started = time.monotonic()
             try:
                 latest = self.fetch_all_properties()
                 with self.cache_lock:
                     self.cache = latest
                 self.logger.info("Cache refreshed with %s properties", len(self.cache))
+                self._last_refresh_ok = True
+                self._last_refresh_error = None
+                self._last_success_at = datetime.now(timezone.utc)
+            except Exception as exc:
+                # Record the failure for the status page, then re-raise so the
+                # caller's UpstreamUnavailable fallback still serves the
+                # existing cache rather than blanking the listings.
+                self._last_refresh_ok = False
+                self._last_refresh_error = str(exc)
+                raise
             finally:
                 # Record the attempt time on both success AND failure: an
                 # upstream outage means queued followers should serve the
@@ -193,10 +218,30 @@ class PropertyService:
                 # fallback rather than each retry the dead endpoint in
                 # series.
                 self._last_refresh_monotonic = time.monotonic()
+                self._last_refresh_seconds = time.monotonic() - started
 
     def get_cached_properties(self) -> list[dict]:
         with self.cache_lock:
             return copy.deepcopy(self.cache)
+
+    def get_cache_health(self) -> dict:
+        """Snapshot of upstream-API refresh health for the admin status page.
+
+        ``age_seconds`` is how long ago the cache data was last successfully
+        refreshed from the API Gateway/Lambda backend; ``None`` until the
+        first successful refresh in this process.
+        """
+        last_success = self._last_success_at
+        age_seconds = None
+        if last_success is not None:
+            age_seconds = (datetime.now(timezone.utc) - last_success).total_seconds()
+        return {
+            "last_attempt_ok": self._last_refresh_ok,
+            "last_success_at": last_success,
+            "age_seconds": age_seconds,
+            "last_error": self._last_refresh_error,
+            "last_refresh_seconds": self._last_refresh_seconds,
+        }
 
     def get_property(self, property_id: str):
         with self.cache_lock:
@@ -215,6 +260,19 @@ class PropertyService:
         return serialized
 
     def trigger_background_refresh(self, actor_email: str = "anonymous") -> None:
+        # Coalesce: at most one background refresh in flight per process.
+        # ``/for-rent-refresh.json`` accepts up to 6 GETs per minute per IP
+        # and admin mutations also trigger this path, so without the guard
+        # a burst of callers each spawn their own daemon thread doing a
+        # full 8-worker upstream fanout — stampeding the AWS API Gateway /
+        # Lambda backend and piling up thread stacks for work that ends up
+        # producing the same cache snapshot. One in-flight refresh's
+        # result covers everyone arriving while it's running; subsequent
+        # callers can be served from the now-fresh cache.
+        with self._background_refresh_flag_lock:
+            if self._background_refresh_active:
+                return
+            self._background_refresh_active = True
         thread = threading.Thread(target=self._refresh_with_change_log, args=(actor_email,), daemon=True)
         thread.start()
 
@@ -268,6 +326,9 @@ class PropertyService:
                     self._last_refresh_monotonic = time.monotonic()
         except Exception as exc:
             self.logger.error("On-demand refresh failed: %s", exc)
+        finally:
+            with self._background_refresh_flag_lock:
+                self._background_refresh_active = False
 
     def _build_change_log(self, current_properties: list[dict], latest_properties: list[dict]) -> dict:
         def ids_for(properties):
@@ -585,7 +646,17 @@ class PropertyService:
         payload = self.property_payload_from_form(form)
         response = requests.post(f"{self.config.api_base_url}/properties", json=payload, timeout=20)
         response.raise_for_status()
-        new_id = response.json().get("id") or response.json().get("property_id") or ""
+        # Parse once and tolerate a non-dict / invalid-JSON body rather than
+        # crashing the admin POST with AttributeError or JSONDecodeError.
+        # The upstream creates the property either way; a missing id just
+        # means the change-log entry won't carry it.
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            body = {}
+        new_id = body.get("id") or body.get("property_id") or ""
         self.notifications.log_site_change(
             actor_email,
             "property_created",
@@ -755,11 +826,19 @@ class PropertyService:
         # forward the stable relative URL to the upstream API.
         absolute_url = relative_url
         try:
-            requests.post(
+            assoc_response = requests.post(
                 f"{self.config.api_base_url}/properties/{property_id}/photos",
                 json={"image_url": absolute_url},
                 timeout=20,
             )
+            # Without raise_for_status() a 4xx/5xx response is silently
+            # swallowed: the local file is saved and the change-log records
+            # a successful "image_added", but the upstream never associates
+            # the URL, so the next cache refresh blanks it from the listing
+            # and the local file becomes orphaned in static/uploads. Treat
+            # the HTTP error the same way as a connection failure and at
+            # least surface a warning so the operator can investigate.
+            assoc_response.raise_for_status()
         except Exception as exc:
             self.logger.warning("Failed to associate uploaded image with property %s: %s", property_id, exc)
         self.trigger_background_refresh(actor_email)
