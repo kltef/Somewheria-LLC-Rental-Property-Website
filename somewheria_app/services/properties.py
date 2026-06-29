@@ -138,6 +138,13 @@ class PropertyService:
         self.cache_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
         self._last_refresh_monotonic = 0.0
+        # Guards ``_background_refresh_active``. Held only for the brief
+        # check-and-set in ``trigger_background_refresh`` and the reset
+        # in ``_refresh_with_change_log``'s finally — never while doing
+        # actual work — so a long-running upstream fanout can't block
+        # other call sites from observing the flag.
+        self._background_refresh_flag_lock = threading.Lock()
+        self._background_refresh_active = False
         # Lightweight upstream-API health, surfaced on the admin status page.
         # Guarded by ``_refresh_lock`` (only written inside refresh_cache).
         self._last_success_at = None      # wall-clock of last successful refresh
@@ -253,12 +260,36 @@ class PropertyService:
         return serialized
 
     def trigger_background_refresh(self, actor_email: str = "anonymous") -> None:
+        # Coalesce: at most one background refresh in flight per process.
+        # ``/for-rent-refresh.json`` accepts up to 6 GETs per minute per IP
+        # and admin mutations also trigger this path, so without the guard
+        # a burst of callers each spawn their own daemon thread doing a
+        # full 8-worker upstream fanout — stampeding the AWS API Gateway /
+        # Lambda backend and piling up thread stacks for work that ends up
+        # producing the same cache snapshot. One in-flight refresh's
+        # result covers everyone arriving while it's running; subsequent
+        # callers can be served from the now-fresh cache.
+        with self._background_refresh_flag_lock:
+            if self._background_refresh_active:
+                return
+            self._background_refresh_active = True
         thread = threading.Thread(target=self._refresh_with_change_log, args=(actor_email,), daemon=True)
         thread.start()
 
     def _refresh_with_change_log(self, actor_email: str) -> None:
         try:
-            latest_properties = self.fetch_all_properties()
+            try:
+                latest_properties = self.fetch_all_properties()
+            finally:
+                # Share the refresh-coalesce timestamp with ``refresh_cache``
+                # so a synchronous /for-rent hit landing within
+                # REFRESH_COALESCE_SECONDS of this background fanout skips
+                # its own fetch and serves the just-updated cache. Record
+                # on both success AND failure for the same reason
+                # refresh_cache does: a follower hitting a dead upstream in
+                # series gains nothing over serving whatever's already
+                # cached.
+                self._last_refresh_monotonic = time.monotonic()
             with self.cache_lock:
                 current_snapshot = copy.deepcopy(self.cache)
                 if json.dumps(current_snapshot, sort_keys=True) == json.dumps(latest_properties, sort_keys=True):
@@ -275,6 +306,9 @@ class PropertyService:
             )
         except Exception as exc:
             self.logger.error("On-demand refresh failed: %s", exc)
+        finally:
+            with self._background_refresh_flag_lock:
+                self._background_refresh_active = False
 
     def _build_change_log(self, current_properties: list[dict], latest_properties: list[dict]) -> dict:
         def ids_for(properties):

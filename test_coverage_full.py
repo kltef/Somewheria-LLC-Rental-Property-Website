@@ -178,6 +178,67 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(thread_ctor.call_args.kwargs["args"], ("admin@example.com",))
         thread_mock.start.assert_called_once()
 
+    def test_trigger_background_refresh_coalesces_concurrent_callers(self):
+        # /for-rent-refresh.json accepts up to 6 GETs per minute per IP and
+        # admin mutations also call this path, so a burst of callers used
+        # to each spawn their own daemon thread doing a full 8-worker
+        # upstream fanout. Coalesce so at most one is in flight at a time —
+        # the running thread's cache update covers everyone arriving while
+        # it works.
+        thread_mock = Mock()
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ) as thread_ctor:
+            self.service.trigger_background_refresh("admin@example.com")
+            self.service.trigger_background_refresh("user@example.com")
+            self.service.trigger_background_refresh("anonymous")
+
+        thread_ctor.assert_called_once()
+        thread_mock.start.assert_called_once()
+
+    def test_refresh_with_change_log_updates_coalesce_timestamp(self):
+        # Sharing ``_last_refresh_monotonic`` with refresh_cache lets a
+        # synchronous /for-rent hit landing within the coalesce window
+        # skip its own fanout after a background refresh just populated
+        # the cache. Before the shared timestamp every admin mutation
+        # silently forced a second upstream fetch on the next page load.
+        latest = [{"id": "prop-1", "name": "New"}]
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=latest
+        ) as fetch_mock:
+            self.service._refresh_with_change_log("admin@example.com")
+            self.service.refresh_cache()
+
+        fetch_mock.assert_called_once()
+        self.assertEqual(self.service.cache, latest)
+
+    def test_trigger_background_refresh_re_arms_after_worker_completes(self):
+        # The in-flight guard must reset whether the worker succeeded or
+        # raised, otherwise a single upstream blip would wedge the
+        # background-refresh path forever (every subsequent caller would
+        # see the flag still set and silently skip).
+        thread_mock = Mock()
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ):
+            self.service.trigger_background_refresh("admin@example.com")
+        self.assertTrue(self.service._background_refresh_active)
+
+        with patch.object(
+            self.service, "fetch_all_properties", side_effect=RuntimeError("boom")
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+        self.assertFalse(self.service._background_refresh_active)
+
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=thread_mock,
+        ) as thread_ctor:
+            self.service.trigger_background_refresh("admin@example.com")
+        thread_ctor.assert_called_once()
+
     def test_refresh_with_change_log_returns_when_snapshot_is_unchanged(self):
         self.service.cache = [{"id": "prop-1", "name": "Old"}]
         with patch.object(self.service, "fetch_all_properties", return_value=[{"id": "prop-1", "name": "Old"}]), patch.object(
