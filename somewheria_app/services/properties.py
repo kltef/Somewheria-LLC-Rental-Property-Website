@@ -7,6 +7,7 @@ import re
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -137,6 +138,12 @@ class PropertyService:
         self.cache_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
         self._last_refresh_monotonic = 0.0
+        # Lightweight upstream-API health, surfaced on the admin status page.
+        # Guarded by ``_refresh_lock`` (only written inside refresh_cache).
+        self._last_success_at = None      # wall-clock of last successful refresh
+        self._last_refresh_ok = None      # bool of last attempt; None = never run
+        self._last_refresh_error = None   # error string from the last failure
+        self._last_refresh_seconds = None # duration of the last attempt
         self.refresh_thread = None
 
     def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
@@ -181,11 +188,22 @@ class PropertyService:
                 < self.REFRESH_COALESCE_SECONDS
             ):
                 return
+            started = time.monotonic()
             try:
                 latest = self.fetch_all_properties()
                 with self.cache_lock:
                     self.cache = latest
                 self.logger.info("Cache refreshed with %s properties", len(self.cache))
+                self._last_refresh_ok = True
+                self._last_refresh_error = None
+                self._last_success_at = datetime.now(timezone.utc)
+            except Exception as exc:
+                # Record the failure for the status page, then re-raise so the
+                # caller's UpstreamUnavailable fallback still serves the
+                # existing cache rather than blanking the listings.
+                self._last_refresh_ok = False
+                self._last_refresh_error = str(exc)
+                raise
             finally:
                 # Record the attempt time on both success AND failure: an
                 # upstream outage means queued followers should serve the
@@ -193,10 +211,30 @@ class PropertyService:
                 # fallback rather than each retry the dead endpoint in
                 # series.
                 self._last_refresh_monotonic = time.monotonic()
+                self._last_refresh_seconds = time.monotonic() - started
 
     def get_cached_properties(self) -> list[dict]:
         with self.cache_lock:
             return copy.deepcopy(self.cache)
+
+    def get_cache_health(self) -> dict:
+        """Snapshot of upstream-API refresh health for the admin status page.
+
+        ``age_seconds`` is how long ago the cache data was last successfully
+        refreshed from the API Gateway/Lambda backend; ``None`` until the
+        first successful refresh in this process.
+        """
+        last_success = self._last_success_at
+        age_seconds = None
+        if last_success is not None:
+            age_seconds = (datetime.now(timezone.utc) - last_success).total_seconds()
+        return {
+            "last_attempt_ok": self._last_refresh_ok,
+            "last_success_at": last_success,
+            "age_seconds": age_seconds,
+            "last_error": self._last_refresh_error,
+            "last_refresh_seconds": self._last_refresh_seconds,
+        }
 
     def get_property(self, property_id: str):
         with self.cache_lock:
