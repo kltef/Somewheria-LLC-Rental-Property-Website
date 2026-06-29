@@ -257,6 +257,51 @@ def admin_status():
         "cache_refresh_interval": f"{config.cache_refresh_interval}s",
     }
 
+    cache_health = services.properties.get_cache_health()
+
+    def _format_age(seconds):
+        if seconds is None:
+            return "never refreshed yet"
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s ago"
+        if seconds < 3600:
+            return f"{seconds // 60}m {seconds % 60}s ago"
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m ago"
+
+    upstream_status = [
+        {
+            "label": "Last Refresh Result",
+            "detail": (
+                "Not yet attempted in this process"
+                if cache_health["last_attempt_ok"] is None
+                else "Succeeded against the property API"
+                if cache_health["last_attempt_ok"]
+                else f"Failed: {cache_health['last_error']}"
+            ),
+            "ok": cache_health["last_attempt_ok"] is not False,
+        },
+        {
+            "label": "Cache Age",
+            "detail": f"Listings last refreshed {_format_age(cache_health['age_seconds'])}",
+            "ok": cache_health["age_seconds"] is not None,
+        },
+        {
+            "label": "Last Refresh Duration",
+            "detail": (
+                f"{cache_health['last_refresh_seconds']:.1f}s upstream fan-out"
+                if cache_health["last_refresh_seconds"] is not None
+                else "Not measured yet"
+            ),
+            # API Gateway caps each call at 29s; flag an aggregate fan-out
+            # that is creeping toward that ceiling.
+            "ok": (
+                cache_health["last_refresh_seconds"] is None
+                or cache_health["last_refresh_seconds"] < 25
+            ),
+        },
+    ]
+
     service_status = [
         {
             "label": "Property API Base",
@@ -369,6 +414,7 @@ def admin_status():
         service_status=service_status,
         file_status=file_status,
         website_status=website_status,
+        upstream_status=upstream_status,
         user=get_current_user(),
     )
 

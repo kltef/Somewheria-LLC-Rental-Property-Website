@@ -77,6 +77,23 @@
         {% endfor %}
       </div>
     </section>
+
+    <section class="p-4 bg-white dark:bg-neutral-800 rounded shadow">
+      <h2 class="text-2xl font-semibold mb-4 text-[#111518] dark:text-white">Upstream Property API</h2>
+      <div class="space-y-3">
+        {% for item in upstream_status %}
+          <div class="flex items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-700 pb-3">
+            <div>
+              <p class="font-medium text-[#111518] dark:text-white">{{ item.label }}</p>
+              <p class="text-sm text-gray-500 break-all">{{ item.detail }}</p>
+            </div>
+            <span class="px-3 py-1 rounded text-sm font-semibold {% if item.ok %}bg-green-200 dark:bg-green-900 text-green-800 dark:text-green-200{% else %}bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200{% endif %}">
+              {{ "OK" if item.ok else "Issue" }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
   </div>
 </div>
 {% endblock %}
