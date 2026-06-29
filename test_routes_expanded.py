@@ -588,6 +588,26 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"updated to renter", response.data)
         set_user_role_mock.assert_called_once_with("user@example.com", "renter")
 
+    def test_admin_users_rejects_malformed_email_on_role_assignment(self):
+        # Defense-in-depth check: an admin pasting a typo'd value like "not-an-email"
+        # should be rejected at the route boundary before user_roles storage is
+        # touched. Without this gate, garbage entries accumulate in user_roles.json
+        # that no real OAuth login can ever match.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "set_user_role") as set_user_role_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ):
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "not-an-email", "role": "renter", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
+
     def test_admin_dashboard_forbids_standard_admin(self):
         self.login_as("admin")
 
@@ -627,6 +647,25 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"added as admin", response.data)
         set_user_role_mock.assert_called_once_with("new@example.com", "admin")
         log_site_change_mock.assert_called_once()
+
+    def test_admin_dashboard_rejects_malformed_email_on_add(self):
+        # Mirror of test_admin_users_rejects_malformed_email_on_role_assignment for
+        # the combined admin dashboard's "add user" path. A typo'd email must not
+        # reach user_roles storage.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.analytics, "dashboard_data", return_value=({"visits": 10}, {"labels": []})), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.storage, "set_user_role") as set_user_role_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "add", "email": "not-an-email", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
 
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
@@ -711,6 +750,30 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"All fields are required.", response.data)
+
+    def test_admin_contracts_add_rejects_malformed_renter_email(self):
+        # A typo like "renter@" must not be persisted: it would create an
+        # orphan contract that no real OAuth login can ever surface.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid renter email is required", response.data)
+        save_contracts_mock.assert_not_called()
 
     def test_admin_contracts_add_successfully_saves(self):
         self.login_as("admin")
