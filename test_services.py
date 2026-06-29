@@ -1504,6 +1504,39 @@ class TourUrlSanitizationTestCase(unittest.TestCase):
         ):
             self.assertEqual(sanitize_tour_url(hostile), "")
 
+    def test_sanitize_rejects_userinfo_in_authority(self):
+        from somewheria_app.services.properties import sanitize_tour_url
+
+        for hostile in (
+            "https://user:pass@evil.com/show",
+            "https://user@evil.com/show",
+            "http://admin:hunter2@matterport.com/show",
+        ):
+            self.assertEqual(sanitize_tour_url(hostile), "")
+
+    def test_sanitize_rejects_control_characters(self):
+        from somewheria_app.services.properties import sanitize_tour_url
+
+        for hostile in (
+            "https://example.com\n/show",
+            "https://example.com\r\n/show",
+            "https://example.com\t/show",
+            "https://example.com\x00.evil.com/show",
+            "https://example.com\x1f/show",
+            "https://example.com\x7f/show",
+        ):
+            self.assertEqual(sanitize_tour_url(hostile), "")
+
+    def test_sanitize_rejects_backslashes(self):
+        from somewheria_app.services.properties import sanitize_tour_url
+
+        for hostile in (
+            "https://evil.com\\@target.com/show",
+            "https://example.com/\\evil/show",
+            "https:\\\\example.com/show",
+        ):
+            self.assertEqual(sanitize_tour_url(hostile), "")
+
     def test_property_payload_from_form_includes_sanitized_tour_url(self):
         notifications = Mock()
         config = SimpleNamespace(

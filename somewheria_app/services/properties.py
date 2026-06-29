@@ -102,6 +102,22 @@ def sanitize_tour_url(raw: str) -> str:
     value = raw.strip()[:2048]
     if not value:
         return ""
+    # Reject anything below 0x20 (NUL, TAB, CR, LF, …) or DEL (0x7F). Browsers
+    # and urllib disagree on how to handle embedded control characters: urlparse
+    # silently strips a stray "\n" or "\t" from the netloc, but the raw value we
+    # return still carries it. Embedding that in an iframe ``src`` attribute is
+    # a known URL-spoofing vector — different parsers cut the URL at different
+    # points. Rejecting at the boundary keeps the value byte-identical to what
+    # both we and the browser will parse.
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        return ""
+    # Reject backslashes anywhere in the URL. Python's urlparse keeps them
+    # in the path/netloc as-is, but some browsers normalize "\" to "/" before
+    # parsing, which lets ``https://evil.com\@target.com`` resolve to either
+    # ``evil.com`` or ``target.com`` depending on the consumer. Refusing them
+    # avoids the ambiguity entirely.
+    if "\\" in value:
+        return ""
     try:
         parsed = urlparse(value)
     except ValueError:
@@ -110,6 +126,12 @@ def sanitize_tour_url(raw: str) -> str:
     if scheme not in _ALLOWED_TOUR_SCHEMES:
         return ""
     if not parsed.netloc:
+        return ""
+    # Reject URLs that embed credentials in the authority section
+    # (``https://user:pass@host/``). Modern browsers warn or refuse outright,
+    # but an iframe ``src`` with userinfo can still leak through and is never
+    # legitimate for a 3D-tour embed — Matterport / Kuula links never use it.
+    if "@" in parsed.netloc:
         return ""
     return value
 
