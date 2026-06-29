@@ -24,10 +24,14 @@ WorkingDirectory=/opt/somewheria/Somewheria-LLC-Rental-Property-Website
 
 # Config (secrets, AUTHORIZED_USERS, Google OAuth, etc.) lives in .env.
 EnvironmentFile=/opt/somewheria/Somewheria-LLC-Rental-Property-Website/.env
-# Trust exactly one proxy hop (nginx) so ProxyFix reads X-Forwarded-* and the
-# secure-cookie / OAuth https logic works. Leave FLASK_ENV UNSET for prod.
+# Trust exactly one proxy hop (the AWS ALB) so ProxyFix reads X-Forwarded-*
+# and the secure-cookie / OAuth https logic sees the original https scheme.
+# Leave FLASK_ENV UNSET for prod.
 Environment=TRUSTED_PROXY_COUNT=1
-Environment=BIND=127.0.0.1:8000
+# Bind the instance's network interface so the ALB can reach gunicorn. The
+# instance security group MUST allow this port ONLY from the ALB's security
+# group — never from the public internet.
+Environment=BIND=0.0.0.0:8000
 
 # Use the venv's gunicorn with the repo's gunicorn.conf.py.
 ExecStart=/opt/somewheria/Somewheria-LLC-Rental-Property-Website/venv/bin/gunicorn \

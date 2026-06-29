@@ -1,6 +1,11 @@
 """Gunicorn configuration for the Somewheria web app.
 
-Used in production behind nginx:  nginx -> gunicorn -> Flask (website_app:app)
+Used in production behind an AWS ALB:
+    ALB (TLS via ACM) -> gunicorn -> Flask (website_app:app)
+
+The ALB terminates HTTPS and forwards plain HTTP to gunicorn on the EC2
+instance. The systemd unit sets BIND=0.0.0.0:8000 so the ALB can reach it;
+the instance security group must restrict that port to the ALB only.
 
 Defaults are tuned for this app's workload, which is I/O-bound: most routes
 spend their time waiting on the upstream AWS properties API, and the property
