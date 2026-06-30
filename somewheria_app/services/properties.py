@@ -1,7 +1,6 @@
 import base64
 import concurrent.futures
 import copy
-import json
 import os
 import re
 import secrets
@@ -326,10 +325,22 @@ class PropertyService:
                 try:
                     latest_properties = self.fetch_all_properties()
                     with self.cache_lock:
-                        current_snapshot = copy.deepcopy(self.cache)
-                        if json.dumps(current_snapshot, sort_keys=True) == json.dumps(latest_properties, sort_keys=True):
+                        # Compare the live cache to the latest fetch directly.
+                        # The prior implementation serialized both sides to
+                        # canonical JSON and compared the strings, which on a
+                        # cache full of base64-encoded photo data allocates and
+                        # walks tens of megabytes twice per admin-triggered
+                        # refresh. ``list``/``dict`` equality in Python 3 is
+                        # already order-independent for dict keys and walks
+                        # element-by-element with a short-circuit on the first
+                        # mismatch — same result, no large string allocation.
+                        if self.cache == latest_properties:
                             self.logger.info("Refresh completed with no property changes")
                             return
+                        # Snapshot the pre-write cache for the change-log diff.
+                        # Deep-copied so ``_build_change_log`` doesn't see the
+                        # post-assignment cache state via aliasing.
+                        current_snapshot = copy.deepcopy(self.cache)
                         log_details = self._build_change_log(current_snapshot, latest_properties)
                         self.cache = latest_properties
                     self.notifications.log_site_change(actor_email, "properties_cache_updated", log_details)

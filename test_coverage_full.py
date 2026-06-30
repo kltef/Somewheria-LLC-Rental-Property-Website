@@ -250,6 +250,20 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_not_called()
         info_mock.assert_called_once()
 
+    def test_refresh_with_change_log_treats_dict_key_order_as_equal(self):
+        # The "no-change" short-circuit compares the live cache to the
+        # upstream fetch with Python ``==`` rather than serializing both
+        # sides to canonical JSON. Dict equality in Python 3 is already
+        # order-independent, so a property whose fields come back in a
+        # different key order from upstream must NOT register as a change
+        # and trigger a phantom ``properties_cache_updated`` audit entry.
+        self.service.cache = [{"id": "prop-1", "name": "Maple", "rent": "2000"}]
+        latest = [{"rent": "2000", "id": "prop-1", "name": "Maple"}]
+        with patch.object(self.service, "fetch_all_properties", return_value=latest):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        self.notifications.log_site_change.assert_not_called()
+
     def test_refresh_with_change_log_updates_cache_and_logs_change(self):
         self.service.cache = [{"id": "prop-1", "name": "Old"}]
         latest = [{"id": "prop-1", "name": "New"}]
