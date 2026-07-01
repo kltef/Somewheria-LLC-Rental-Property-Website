@@ -257,7 +257,13 @@ def admin_ticket_update(ticket_id: str):
     }
     # Trim unset keys so the service only considers fields the form submitted.
     updates = {k: v for k, v in updates.items() if v is not None}
-    services.tickets.update_ticket(ticket_id, updates, _actor_email())
+    # 404 when the ticket has been deleted (or the id was mistyped) so the
+    # admin sees the miss instead of a silent redirect to a broken detail
+    # page. ``update_ticket`` returns None on a miss; the other ticket
+    # routes (detail, add-note, toggle-email) already 404 in this case.
+    result = services.tickets.update_ticket(ticket_id, updates, _actor_email())
+    if result is None:
+        return render_template("404.html", title="Ticket Not Found"), 404
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))
 
 

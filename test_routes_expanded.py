@@ -1262,6 +1262,46 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_admin_ticket_update_returns_404_when_ticket_missing(self):
+        # The other ticket routes (detail, add-note, toggle-email) already
+        # 404 on a miss. Before this fix admin_ticket_update silently
+        # redirected to a broken detail page whenever the ticket had been
+        # deleted or the id was mistyped, hiding the mistake from admins.
+        self.login_as("admin")
+
+        with patch.object(
+            self.services.tickets, "update_ticket", return_value=None
+        ) as mock_update:
+            response = self.client.post(
+                "/admin/tickets/nonexistent-id",
+                data={"status": "in_progress"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 404)
+        mock_update.assert_called_once()
+
+    def test_admin_ticket_update_redirects_on_success(self):
+        self.login_as("admin")
+
+        sample_ticket = {
+            "id": "abc123",
+            "title": "Leaky",
+            "status": "in_progress",
+            "priority": "high",
+        }
+        with patch.object(
+            self.services.tickets, "update_ticket", return_value=sample_ticket
+        ):
+            response = self.client.post(
+                "/admin/tickets/abc123",
+                data={"status": "in_progress"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/tickets/abc123", response.headers["Location"])
+
     def test_admin_contracts_export_csv_neutralizes_formula_injection(self):
         # A malicious admin or hand-edited storage could record a property
         # name beginning with `=` (or `+`, `-`, `@`). When the resulting CSV

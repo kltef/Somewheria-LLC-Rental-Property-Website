@@ -1210,6 +1210,74 @@ class AnalyticsPruningTestCase(unittest.TestCase):
         self.assertEqual(len(tracker.errors), 0)
 
 
+class RecentListingActivityTestCase(unittest.TestCase):
+    """`recent_listing_activity` buckets entries by the UTC ``YYYY-MM`` prefix
+    of the change-log timestamp (`utcnow_iso()` writes Z-suffixed UTC). Labels
+    must also come from UTC so a fresh entry logged just after the UTC month
+    rolls over still lands in the current-window buckets when the server's
+    local calendar hasn't rolled yet — otherwise the current month's data is
+    silently dropped from the admin chart."""
+
+    def _tracker(self, tmpdir: Path):
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        change_log = tmpdir / "site_changes.log"
+        config = SimpleNamespace(change_log_file=change_log)
+        return AnalyticsTracker(analytics_days=7, config=config), change_log
+
+    def test_labels_use_utc_not_local_time(self):
+        # Simulate a server whose local calendar reads 2026-06-30 while
+        # UTC has already rolled over to 2026-07-01. Under the old code,
+        # ``date.today()`` returned the local date, labels ended at
+        # "2026-06", and any entry timestamped with the current UTC month
+        # ("2026-07-...Z") fell outside the label set and was silently
+        # dropped from the admin chart.
+        import somewheria_app.services.analytics as analytics_module
+
+        real_datetime_module = analytics_module.datetime
+
+        class _FrozenDate(real_datetime_module.date):
+            @classmethod
+            def today(cls):
+                # Local calendar still reads the previous UTC month.
+                return real_datetime_module.date(2026, 6, 30)
+
+        class _FrozenDatetime(real_datetime_module.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                # UTC has already rolled over to the next month.
+                return real_datetime_module.datetime(
+                    2026, 7, 1, 6, 30, 0,
+                    tzinfo=tz or real_datetime_module.timezone.utc,
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            tracker, change_log = self._tracker(Path(td))
+            change_log.write_text(
+                '{"timestamp": "2026-07-01T06:31:00Z", "action": "property_created", "extra": {}}\n'
+                '{"timestamp": "2026-06-30T23:59:00Z", "action": "property_created", "extra": {}}\n',
+                encoding="utf-8",
+            )
+
+            fake_module = SimpleNamespace(
+                date=_FrozenDate,
+                datetime=_FrozenDatetime,
+                timedelta=real_datetime_module.timedelta,
+                timezone=real_datetime_module.timezone,
+            )
+            with patch.object(analytics_module, "datetime", fake_module):
+                result = tracker.recent_listing_activity(months=3)
+
+        # Current-window labels must include the current UTC month.
+        self.assertIn("2026-07", result["months"])
+        self.assertIn("2026-06", result["months"])
+        # And the UTC-July entry must be counted, not silently dropped.
+        july_idx = result["months"].index("2026-07")
+        june_idx = result["months"].index("2026-06")
+        self.assertEqual(result["created"][july_idx], 1)
+        self.assertEqual(result["created"][june_idx], 1)
+
+
 class RateLimiterTestCase(unittest.TestCase):
     def _make_limiter(self):
         from somewheria_app.services.security import _RateLimiter
