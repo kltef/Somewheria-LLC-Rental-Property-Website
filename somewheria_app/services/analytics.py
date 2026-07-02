@@ -120,7 +120,14 @@ class AnalyticsTracker:
         order ending with the current month.
         """
         months = max(1, int(months))
-        today = datetime.date.today()
+        # Labels are computed from UTC "today" because entries in
+        # site_changes.log are written with utcnow_iso() and bucketed by the
+        # UTC ``YYYY-MM`` prefix. Using ``date.today()`` (local) here would
+        # silently drop the first hours of a new UTC month whenever the
+        # server's local date lags UTC (or the last hours of a UTC month
+        # when local leads UTC) -- the entries land in a month label that
+        # isn't in the window yet.
+        today = datetime.datetime.now(datetime.timezone.utc).date()
         labels: list[str] = []
         # Build labels in chronological order ending on the current month.
         year, month = today.year, today.month
