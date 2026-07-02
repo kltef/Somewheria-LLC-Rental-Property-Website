@@ -228,7 +228,7 @@ def renter_dashboard():
 @high_admin_required
 def analytics_dashboard():
     services = get_services()
-    metrics, chart_data = services.analytics.dashboard_data(len(services.properties.get_cached_properties()))
+    metrics, chart_data = services.analytics.dashboard_data(services.properties.property_count())
     return render_template(
         "analytics_dashboard.html",
         user=get_current_user(),
@@ -242,7 +242,7 @@ def analytics_dashboard():
 def admin_status():
     services = get_services()
     config = services.config
-    property_count = len(services.properties.get_cached_properties())
+    property_count = services.properties.property_count()
     pending_registrations = services.storage.get_pending_registrations()
     user_roles = services.storage.get_user_roles()
     registered_routes = set(current_app.view_functions.keys())
@@ -481,7 +481,7 @@ def admin_dashboard_combined():
                     "user_added",
                     {"email": email, "role": new_role},
                 )
-    metrics, chart_data = services.analytics.dashboard_data(len(services.properties.get_cached_properties()))
+    metrics, chart_data = services.analytics.dashboard_data(services.properties.property_count())
     ticket_summary = services.tickets.summary()
     ticket_status_counts = services.tickets.status_counts()
     listing_activity = services.analytics.recent_listing_activity(months=12)

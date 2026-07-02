@@ -245,6 +245,15 @@ class PropertyService:
         with self.cache_lock:
             return copy.deepcopy(self.cache)
 
+    def property_count(self) -> int:
+        # Callers that only need the length (admin status/dashboard metrics)
+        # should reach for this instead of ``len(get_cached_properties())``.
+        # ``get_cached_properties`` deep-copies the full cache — including the
+        # base64-encoded photo payload attached to every property — which can
+        # be tens of MB per call for a routine dashboard render.
+        with self.cache_lock:
+            return len(self.cache)
+
     def get_cache_health(self) -> dict:
         """Snapshot of upstream-API refresh health for the admin status page.
 
