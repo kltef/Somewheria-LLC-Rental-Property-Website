@@ -489,6 +489,24 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         self.assertCountEqual(serialized[0]["amenities"], ["Parking", "Laundry"])
 
+    def test_property_count_returns_length_without_deep_copy(self):
+        # property_count() is the cheap alternative to
+        # ``len(get_cached_properties())`` — it must return the same length
+        # without deep-copying the underlying cache entries, which would
+        # otherwise allocate a fresh list and dict tree per admin dashboard
+        # render just to compute a size.
+        sentinel = {"id": "prop-1", "photos": ["data:image/jpeg;base64,AAAA"]}
+        self.service.cache = [sentinel, {"id": "prop-2"}]
+
+        self.assertEqual(self.service.property_count(), 2)
+        # The exact object must still be inside the cache — property_count
+        # must not have copied it.
+        self.assertIs(self.service.cache[0], sentinel)
+
+    def test_property_count_empty_cache(self):
+        self.service.cache = []
+        self.assertEqual(self.service.property_count(), 0)
+
     def test_normalize_property_applies_defaults(self):
         normalized = self.service.normalize_property({"name": "Maple House"}, "prop-1")
 
