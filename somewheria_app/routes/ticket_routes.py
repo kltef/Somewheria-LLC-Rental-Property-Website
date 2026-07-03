@@ -78,9 +78,10 @@ def ticket_new_submit():
     property_id = (request.form.get("property_id") or "").strip()
     property_name = ""
     if property_id:
-        info = services.properties.get_property(property_id)
-        if info:
-            property_name = info.get("name", "")
+        # Read just the name from the cache rather than pulling back a
+        # deep-copy of the whole property record — the photos payload alone
+        # runs into the tens of MB when a property is fully populated.
+        property_name = services.properties.get_property_name(property_id) or ""
 
     payload = {
         "title": request.form.get("title", ""),

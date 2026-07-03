@@ -170,6 +170,37 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.assertIsNone(self.service.get_property("missing"))
 
+    def test_get_property_name_returns_matching_name(self):
+        self.service.cache = [
+            {"id": "prop-1", "name": "Maple"},
+            {"id": "prop-2", "name": "Oak"},
+        ]
+
+        self.assertEqual(self.service.get_property_name("prop-2"), "Oak")
+
+    def test_get_property_name_returns_none_when_missing(self):
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+
+        self.assertIsNone(self.service.get_property_name("nope"))
+
+    def test_get_property_name_returns_none_when_name_is_not_a_string(self):
+        # Upstream can hand back ``null`` (or a misshaped value) for the name
+        # field; return None so callers don't render the literal "None".
+        self.service.cache = [{"id": "prop-1", "name": None}]
+
+        self.assertIsNone(self.service.get_property_name("prop-1"))
+
+    def test_get_property_name_does_not_deep_copy_the_record(self):
+        # The whole point of this method vs. get_property() is that it must
+        # avoid the deep-copy of the full record (photos payload can be
+        # tens of MB). Patch deepcopy to explode if anyone reaches for it.
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch(
+            "somewheria_app.services.properties.copy.deepcopy",
+            side_effect=AssertionError("get_property_name must not deep-copy"),
+        ):
+            self.assertEqual(self.service.get_property_name("prop-1"), "Maple")
+
     def test_trigger_background_refresh_starts_daemon_thread(self):
         thread_mock = Mock()
         with patch("somewheria_app.services.properties.threading.Thread", return_value=thread_mock) as thread_ctor:

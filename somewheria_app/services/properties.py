@@ -280,6 +280,20 @@ class PropertyService:
                     return copy.deepcopy(property_info)
         return None
 
+    def get_property_name(self, property_id: str) -> str | None:
+        # Callers that only need the display name (ticket submissions labeling
+        # a property, etc.) should reach for this instead of get_property().
+        # ``get_property`` deep-copies the whole record — including the
+        # base64-encoded photo payload, which can be tens of MB — just so the
+        # caller can read a single string field. Returning the name directly
+        # from the cache under the lock avoids that copy entirely.
+        with self.cache_lock:
+            for property_info in self.cache:
+                if property_info.get("id") == property_id:
+                    name = property_info.get("name")
+                    return name if isinstance(name, str) else None
+        return None
+
     def serialize_properties(self, properties: list[dict]) -> list[dict]:
         serialized = []
         for property_info in properties:
