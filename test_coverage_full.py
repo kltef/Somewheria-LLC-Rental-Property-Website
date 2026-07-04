@@ -431,6 +431,66 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(self.service.cache, [{"id": "prop-1", "name": "Maple"}])
         self.notifications.log_site_change.assert_not_called()
 
+    def test_refresh_with_change_log_records_success_health(self):
+        # ``get_cache_health`` powers /admin/status. Before this fix, an
+        # admin-triggered refresh (property_created / property_updated /
+        # image_added / …) never touched ``_last_success_at`` /
+        # ``_last_refresh_ok`` / ``_last_refresh_seconds``, so the status
+        # page showed "never refreshed yet" until a public /for-rent hit
+        # exercised ``refresh_cache`` — misleading during an admin-only
+        # burst of activity.
+        self.service.cache = [{"id": "prop-1", "name": "Old"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            return_value=[{"id": "prop-1", "name": "New"}],
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        health = self.service.get_cache_health()
+        self.assertIs(health["last_attempt_ok"], True)
+        self.assertIsNone(health["last_error"])
+        self.assertIsNotNone(health["last_success_at"])
+        self.assertIsNotNone(health["last_refresh_seconds"])
+
+    def test_refresh_with_change_log_records_success_even_when_unchanged(self):
+        # The "no-op, cache identical" path also successfully reached upstream —
+        # it just happened to find no diff. The status page must still see
+        # this as a successful refresh, otherwise a steady-state site with
+        # no property changes but frequent admin activity would drift the
+        # displayed health toward "stale" purely because nothing changed.
+        self.service.cache = [{"id": "prop-1", "name": "Maple"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            return_value=[{"id": "prop-1", "name": "Maple"}],
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        health = self.service.get_cache_health()
+        self.assertIs(health["last_attempt_ok"], True)
+        self.assertIsNone(health["last_error"])
+        self.assertIsNotNone(health["last_success_at"])
+
+    def test_refresh_with_change_log_records_failure_health(self):
+        # A failed admin-triggered refresh must surface the error to
+        # /admin/status, mirroring refresh_cache's error path. Without this,
+        # an ongoing upstream outage during admin activity would keep the
+        # status page pinned to the last public /for-rent success.
+        self.service._last_refresh_ok = True
+        self.service._last_refresh_error = None
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            side_effect=RuntimeError("upstream 502"),
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        health = self.service.get_cache_health()
+        self.assertIs(health["last_attempt_ok"], False)
+        self.assertIn("upstream 502", health["last_error"])
+        self.assertIsNotNone(health["last_refresh_seconds"])
+
     def test_fetch_all_properties_preserves_cache_when_every_record_fetch_fails(self):
         # IDs listing succeeds, but every per-property details fetch fails
         # (transient 5xx on the details endpoint). Without the guard,

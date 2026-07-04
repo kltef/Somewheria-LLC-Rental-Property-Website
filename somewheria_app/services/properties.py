@@ -331,8 +331,27 @@ class PropertyService:
                         self.REFRESH_COALESCE_SECONDS,
                     )
                     return
+                started = time.monotonic()
                 try:
-                    latest_properties = self.fetch_all_properties()
+                    try:
+                        latest_properties = self.fetch_all_properties()
+                    except Exception as fetch_exc:
+                        # Mirror refresh_cache's health-tracking on failure so
+                        # /admin/status shows the outage regardless of which
+                        # code path attempted the refresh. Without this,
+                        # admin-triggered refreshes could silently regress the
+                        # status page to "never attempted" or leave a stale
+                        # "succeeded" from a much earlier /for-rent hit.
+                        self._last_refresh_ok = False
+                        self._last_refresh_error = str(fetch_exc)
+                        raise
+                    # Upstream reachable — record the success before mutating
+                    # (or short-circuiting on) the local cache so the admin
+                    # status page reflects real upstream connectivity even
+                    # when the fetch happened to return an identical listing.
+                    self._last_refresh_ok = True
+                    self._last_refresh_error = None
+                    self._last_success_at = datetime.now(timezone.utc)
                     with self.cache_lock:
                         # Compare the live cache to the latest fetch directly.
                         # The prior implementation serialized both sides to
@@ -364,8 +383,11 @@ class PropertyService:
                     # followers (a ``/for-rent`` hit or another trigger)
                     # arriving within the coalesce window don't immediately
                     # re-hit the same dead endpoint — mirrors the refresh_cache
-                    # contract.
+                    # contract. Also stamp the observed fanout duration so
+                    # the admin status page's "creeping toward 29s" check
+                    # covers both refresh paths.
                     self._last_refresh_monotonic = time.monotonic()
+                    self._last_refresh_seconds = time.monotonic() - started
         except Exception as exc:
             self.logger.error("On-demand refresh failed: %s", exc)
         finally:
