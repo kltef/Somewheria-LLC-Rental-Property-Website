@@ -39,7 +39,13 @@ class AppConfig:
             "https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test",
         ).rstrip("/")
     )
-    cache_refresh_interval: int = field(default_factory=lambda: int(os.getenv("CACHE_REFRESH_INTERVAL", "60")))
+    # ``int()`` alone would raise ValueError at startup on a mistyped env value
+    # (``CACHE_REFRESH_INTERVAL=sixty``) and refuse to boot. ``_int_env``
+    # matches the ``TRUSTED_PROXY_COUNT`` contract: blank / non-numeric /
+    # negative all fall back to the default rather than crashing.
+    cache_refresh_interval: int = field(
+        default_factory=lambda: _int_env("CACHE_REFRESH_INTERVAL", 60)
+    )
     analytics_days: int = 7
     email_sender: str = "anthony.j.ekberg@gmail.com"
     email_recipient: str = "anthony@ekbergproperties.com"

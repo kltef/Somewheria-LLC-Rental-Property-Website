@@ -1504,6 +1504,54 @@ class TrustedProxyConfigTestCase(unittest.TestCase):
         self.assertEqual(self._load_count("2"), 2)
 
 
+class CacheRefreshIntervalConfigTestCase(unittest.TestCase):
+    """``CACHE_REFRESH_INTERVAL`` must tolerate malformed env values the same
+    way ``TRUSTED_PROXY_COUNT`` does: the app has to boot even when an
+    operator typos the number, rather than raising ValueError inside the
+    dataclass ``default_factory`` and crashing at startup."""
+
+    def _load_interval(self, raw):
+        import os
+        from importlib import reload
+
+        import somewheria_app.config as cfg
+
+        previous = os.environ.get("CACHE_REFRESH_INTERVAL")
+        if raw is None:
+            os.environ.pop("CACHE_REFRESH_INTERVAL", None)
+        else:
+            os.environ["CACHE_REFRESH_INTERVAL"] = raw
+        try:
+            reload(cfg)
+            return cfg.AppConfig().cache_refresh_interval
+        finally:
+            if previous is None:
+                os.environ.pop("CACHE_REFRESH_INTERVAL", None)
+            else:
+                os.environ["CACHE_REFRESH_INTERVAL"] = previous
+            reload(cfg)
+
+    def test_unset_defaults_to_sixty(self):
+        self.assertEqual(self._load_interval(None), 60)
+
+    def test_blank_defaults_to_sixty(self):
+        self.assertEqual(self._load_interval("   "), 60)
+
+    def test_non_numeric_defaults_to_sixty(self):
+        # Before the fix, ``int("sixty")`` raised ValueError inside the
+        # dataclass default_factory and prevented ``create_app()`` from
+        # succeeding — the whole process failed to boot on a mistyped env.
+        self.assertEqual(self._load_interval("sixty"), 60)
+
+    def test_negative_defaults_to_sixty(self):
+        # ``_int_env`` treats negatives as invalid so the polling loop
+        # (and admin status card) never see a nonsense window.
+        self.assertEqual(self._load_interval("-5"), 60)
+
+    def test_valid_integer_parses(self):
+        self.assertEqual(self._load_interval("120"), 120)
+
+
 class CsrfTokenExtractionTestCase(unittest.TestCase):
     """``_extract_submitted_token`` must always return a string so the
     ``secrets.compare_digest`` check in ``_csrf_before_request`` can never
