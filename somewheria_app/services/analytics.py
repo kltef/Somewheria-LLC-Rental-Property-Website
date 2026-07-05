@@ -83,9 +83,16 @@ class AnalyticsTracker:
             self.errors[today] += 1
 
     def dashboard_data(self, property_count: int) -> tuple[dict, dict]:
-        today = datetime.date.today().isoformat()
+        # Snapshot the current date ONCE so ``today`` and the tail of ``days``
+        # are guaranteed to agree even if the process crosses midnight between
+        # the two reads. Calling ``date.today()`` twice would rarely — but
+        # observably — bucket ``metrics["site_visits"]`` under yesterday while
+        # the chart's rightmost column labels today, and the two views of the
+        # same request would silently disagree.
+        today_date = datetime.date.today()
+        today = today_date.isoformat()
         days = [
-            (datetime.date.today() - datetime.timedelta(days=offset)).isoformat()
+            (today_date - datetime.timedelta(days=offset)).isoformat()
             for offset in range(self.analytics_days - 1, -1, -1)
         ]
         # Snapshot under the lock so the dashboard sees a consistent view even
