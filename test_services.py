@@ -1228,6 +1228,54 @@ class AnalyticsPruningTestCase(unittest.TestCase):
         self.assertEqual(len(tracker.errors), 0)
 
 
+class DashboardDataDayBoundaryTestCase(unittest.TestCase):
+    """`dashboard_data` reads the current date once. The old code called
+    ``date.today()`` for ``today`` and then again inside the ``days`` list
+    comprehension; a request that happened to straddle midnight between those
+    two reads had ``metrics["site_visits"]`` bucketed under yesterday while
+    the chart's rightmost day labeled today, so the same request rendered
+    inconsistent numbers for the metric card and the chart."""
+
+    def test_today_matches_last_day_across_midnight(self):
+        import somewheria_app.services.analytics as analytics_module
+        from somewheria_app.services.analytics import AnalyticsTracker
+
+        real_datetime_module = analytics_module.datetime
+        # Advance the "clock" by one day on the second read. Under the old
+        # implementation the metrics bucket read the day-1 value while the
+        # chart's rightmost label was day-2 — visibly inconsistent.
+        returned = [
+            real_datetime_module.date(2026, 7, 4),
+            real_datetime_module.date(2026, 7, 5),
+        ]
+
+        class _AdvancingDate(real_datetime_module.date):
+            @classmethod
+            def today(cls):
+                return returned.pop(0) if returned else real_datetime_module.date(2026, 7, 5)
+
+        tracker = AnalyticsTracker(analytics_days=3)
+        # Seed both possible "today" buckets so we can prove which one won.
+        tracker.site_visits["2026-07-04"] = 42
+        tracker.site_visits["2026-07-05"] = 7
+
+        fake_module = SimpleNamespace(
+            date=_AdvancingDate,
+            datetime=real_datetime_module.datetime,
+            timedelta=real_datetime_module.timedelta,
+            timezone=real_datetime_module.timezone,
+        )
+        with patch.object(analytics_module, "datetime", fake_module):
+            metrics, chart_data = tracker.dashboard_data(property_count=0)
+
+        # ``today`` was read exactly once — so ``days[-1]`` and the bucket the
+        # ``site_visits`` metric read from must agree. Without the fix the
+        # metric would be 7 (from the second ``date.today()`` call) while the
+        # chart's last label would still read "2026-07-04" — or vice versa.
+        self.assertEqual(chart_data["days"][-1], "2026-07-04")
+        self.assertEqual(metrics["site_visits"], 42)
+
+
 class RecentListingActivityTestCase(unittest.TestCase):
     """`recent_listing_activity` buckets entries by the UTC ``YYYY-MM`` prefix
     of the change-log timestamp (`utcnow_iso()` writes Z-suffixed UTC). Labels

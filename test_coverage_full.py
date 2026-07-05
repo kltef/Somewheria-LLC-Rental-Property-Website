@@ -522,6 +522,54 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertIn("upstream 502", health["last_error"])
         self.assertIsNotNone(health["last_refresh_seconds"])
 
+    def test_refresh_cache_records_consistent_timestamps(self):
+        # ``_last_refresh_monotonic`` and ``_last_refresh_seconds`` are both
+        # written in the ``finally`` block. The old code called
+        # ``time.monotonic()`` twice, so the "when did we finish?" timestamp
+        # and the "how long did it take?" duration derived from two different
+        # clock samples — a subtle inconsistency for the follower-coalesce
+        # comparison and the admin-status "creeping toward 29s" check. Pin the
+        # invariant: the recorded end-time must equal start-time plus duration.
+        # Sequence: [coalesce-check, started, completed].
+        coalesce_check_at = 100.0
+        started_at = 100.5
+        finished_at = 106.0
+        with patch.object(
+            self.service, "fetch_all_properties", return_value=[]
+        ), patch(
+            "somewheria_app.services.properties.time.monotonic",
+            side_effect=[coalesce_check_at, started_at, finished_at],
+        ):
+            self.service.refresh_cache()
+
+        self.assertEqual(self.service._last_refresh_monotonic, finished_at)
+        self.assertEqual(
+            self.service._last_refresh_seconds, finished_at - started_at
+        )
+
+    def test_refresh_with_change_log_records_consistent_timestamps(self):
+        # Same invariant as refresh_cache but for the admin-triggered path,
+        # which had the same duplicate-monotonic pattern in its finally.
+        # Sequence: [coalesce-check, started, completed].
+        coalesce_check_at = 200.0
+        started_at = 200.25
+        finished_at = 208.5
+        self.service.cache = [{"id": "prop-1", "name": "Old"}]
+        with patch.object(
+            self.service,
+            "fetch_all_properties",
+            return_value=[{"id": "prop-1", "name": "New"}],
+        ), patch(
+            "somewheria_app.services.properties.time.monotonic",
+            side_effect=[coalesce_check_at, started_at, finished_at],
+        ):
+            self.service._refresh_with_change_log("admin@example.com")
+
+        self.assertEqual(self.service._last_refresh_monotonic, finished_at)
+        self.assertEqual(
+            self.service._last_refresh_seconds, finished_at - started_at
+        )
+
     def test_fetch_all_properties_preserves_cache_when_every_record_fetch_fails(self):
         # IDs listing succeeds, but every per-property details fetch fails
         # (transient 5xx on the details endpoint). Without the guard,

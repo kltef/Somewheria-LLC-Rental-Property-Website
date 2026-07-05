@@ -237,9 +237,15 @@ class PropertyService:
                 # upstream outage means queued followers should serve the
                 # existing cache via the route's UpstreamUnavailable
                 # fallback rather than each retry the dead endpoint in
-                # series.
-                self._last_refresh_monotonic = time.monotonic()
-                self._last_refresh_seconds = time.monotonic() - started
+                # series. Take a single monotonic reading so the recorded
+                # completion timestamp and duration derive from the same
+                # clock sample — otherwise the follower coalesce check
+                # (``time.monotonic() - _last_refresh_monotonic``) and the
+                # admin-status duration would be computed from monotonic
+                # values a few operations apart.
+                completed_at = time.monotonic()
+                self._last_refresh_monotonic = completed_at
+                self._last_refresh_seconds = completed_at - started
 
     def get_cached_properties(self) -> list[dict]:
         with self.cache_lock:
@@ -399,9 +405,12 @@ class PropertyService:
                     # re-hit the same dead endpoint — mirrors the refresh_cache
                     # contract. Also stamp the observed fanout duration so
                     # the admin status page's "creeping toward 29s" check
-                    # covers both refresh paths.
-                    self._last_refresh_monotonic = time.monotonic()
-                    self._last_refresh_seconds = time.monotonic() - started
+                    # covers both refresh paths. Take a single monotonic
+                    # reading so the completion timestamp and duration
+                    # come from the same clock sample.
+                    completed_at = time.monotonic()
+                    self._last_refresh_monotonic = completed_at
+                    self._last_refresh_seconds = completed_at - started
         except Exception as exc:
             self.logger.error("On-demand refresh failed: %s", exc)
         finally:
