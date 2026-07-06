@@ -1937,6 +1937,55 @@ class TimeUtilTestCase(unittest.TestCase):
         self.assertIs(tickets._now_iso, timeutil.utcnow_iso)
 
 
+class NotificationsChangeLogConcurrencyTestCase(unittest.TestCase):
+    def test_concurrent_log_site_change_writes_intact_json_lines(self):
+        # Concurrent appends to change_log_file must produce whole JSONL rows,
+        # not interleaved partial writes. POSIX guarantees an O_APPEND single
+        # write() is atomic only up to PIPE_BUF (~4KB); a large payload
+        # (e.g. properties_cache_updated with many changed properties) racing
+        # a small ticket_created write can otherwise mid-line-splice into an
+        # unparseable row, which analytics.recent_listing_activity silently
+        # drops. The lock added in this commit is what keeps the log intact.
+        import json as _json
+        import threading
+
+        with tempfile.TemporaryDirectory() as td:
+            change_log = Path(td) / "site_changes.log"
+            config = SimpleNamespace(change_log_file=change_log)
+            service = NotificationService(config, Mock())
+
+            big_extra = {"payload": "x" * 8000}  # pushes each line past PIPE_BUF
+            small_extra = {"id": "t1"}
+            threads = []
+            for _ in range(20):
+                threads.append(
+                    threading.Thread(
+                        target=service.log_site_change,
+                        args=("a@example.com", "properties_cache_updated", big_extra),
+                    )
+                )
+                threads.append(
+                    threading.Thread(
+                        target=service.log_site_change,
+                        args=("b@example.com", "ticket_created", small_extra),
+                    )
+                )
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            lines = change_log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 40)
+            # Every line must parse as JSON with the expected action set —
+            # any interleave would raise ValueError here or misroute the row.
+            for line in lines:
+                entry = _json.loads(line)
+                self.assertIn(
+                    entry["action"], ("properties_cache_updated", "ticket_created")
+                )
+
+
 class NotificationsChangeLogTimestampTestCase(unittest.TestCase):
     def test_log_site_change_writes_utc_z_timestamp(self):
         # Naive local-time isoformat() looks UTC-shaped but isn't, so

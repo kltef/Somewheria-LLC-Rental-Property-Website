@@ -3,6 +3,7 @@ import html
 import json
 import re
 import smtplib
+import threading
 from email.message import EmailMessage
 
 from .console import get_console_logger
@@ -24,6 +25,15 @@ class NotificationService:
         self.config = config
         self.analytics = analytics
         self.console = get_console_logger("notify")
+        # Serializes appends to ``change_log_file`` across concurrent request
+        # threads. POSIX guarantees a single ``write()`` syscall on an
+        # O_APPEND file is atomic only up to PIPE_BUF (typically 4096 bytes).
+        # A ``properties_cache_updated`` entry that lists field diffs across
+        # many changed properties easily exceeds that ceiling, so a
+        # concurrent smaller write (a ticket_created, a user_added) can
+        # interleave into the middle of it and corrupt the JSONL — which
+        # ``analytics.recent_listing_activity`` then silently drops.
+        self._change_log_lock = threading.Lock()
 
     def send_email(self, subject: str, body: str, to: str | None = None) -> bool:
         app_password = self._email_password()
@@ -115,8 +125,16 @@ class NotificationService:
                 "action": action,
                 "extra": extra or {},
             }
-            with self.config.change_log_file.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # Serialize the JSON outside the lock (CPU work only) and hold
+            # the lock across the open+write+close so a concurrent writer
+            # cannot interleave its own line inside ours. Without this, a
+            # large ``properties_cache_updated`` entry racing a small
+            # ``ticket_created`` entry can produce a corrupt JSONL row that
+            # ``analytics.recent_listing_activity`` silently drops.
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+            with self._change_log_lock:
+                with self.config.change_log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
         except Exception as exc:
             self.console.error("Failed to record site change '%s': %s", action, exc)
 
