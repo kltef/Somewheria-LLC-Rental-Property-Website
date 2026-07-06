@@ -520,7 +520,11 @@ for role_name, expectations in NAV_EXPECTATIONS.items():
         def _make_nav_missing(role_value=role_value, label=label):
             def test(self):
                 response = self.request_for_role("get", "/for-rent", role=role_value)
-                self.assertNotIn(label.encode("utf-8"), response.data)
+                # Anchor the check to the rendered link boundary (">Label<")
+                # so unrelated substrings on the page — e.g. ``id="mapStatus"``
+                # in the /for-rent map div — don't false-positive an intent
+                # that's actually "this nav LINK is hidden for this role."
+                self.assertNotIn(f">{label}<".encode("utf-8"), response.data)
             return test
 
         setattr(
