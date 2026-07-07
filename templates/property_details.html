@@ -1,213 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-{# Property Details — Direction C "Split-screen": fixed gallery left, scrolling info right.
-   All selectors are scoped under #pd so the wireframe tokens never leak into the shared
-   header/footer that base.html renders. #}
+{# Property Details — split-screen: sticky gallery left, scrolling "parcel record" right.
+   Restyled to the Somewheria plat-map system. Everything page-specific stays scoped
+   under #pd so the carousel/lightbox/modal chrome never leaks into the shared shell.
+   All ids and the classes the script relies on (.carousel-dot, .thumb, is-on, is-open)
+   are unchanged. #}
 <style>
-  #pd {
-    --brand-blue:       #2563eb;
-    --brand-blue-hover: #1d4ed8;
-    --brand-blue-press: #1e40af;
-    --ink:        #111518;
-    --bg-app:     #f5f5f5;
-    --bg-surface: #ffffff;
-    --bg-subtle:  #fafafa;
-    --bg-hover:   #eaedf1;
-    --border:     #e5e5e5;
-    --fg:         #111518;
-    --fg-muted:   #4b5563;
-    --fg-subtle:  #6b7280;
-    --success:    #059669;
+  #pd { background: var(--sw-paper); color: var(--sw-ink); }
 
-    --radius-sm:   0.25rem;
-    --radius-md:   0.5rem;
-    --radius-lg:   0.75rem;
-    --radius-full: 9999px;
-    --shadow-card:  0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px -1px rgba(0,0,0,.1);
-    --shadow-pop:   0 8px 24px rgba(17,21,24,.08);
-    --shadow-sheet: 0 24px 60px rgba(17,21,24,.18);
-
-    --accent:       var(--brand-blue);
-    --accent-hover: var(--brand-blue-hover);
-    --accent-press: var(--brand-blue-press);
-
-    --pad-section: 2.5rem;
-    --gap-block:   1.5rem;
-    --pad-card:    1.5rem;
-    --stat-num:    1.75rem;
-
-    font-family: "Plus Jakarta Sans", "Noto Sans", sans-serif;
-    background: var(--bg-app);
-    color: var(--fg);
-  }
-
-  /* Dark mode — base.html toggles `.dark` on <html>. Re-point the tokens. */
-  html.dark #pd {
-    --ink:        #ffffff;
-    --bg-app:     #0a0a0a;
-    --bg-surface: #171717;
-    --bg-subtle:  #262626;
-    --bg-hover:   #262626;
-    --border:     #262626;
-    --fg:         #ffffff;
-    --fg-muted:   #a3a3a3;
-    --fg-subtle:  #9aa3ad;
-    --accent-press: #93c5fd;
-  }
-
-  #pd * { box-sizing: border-box; }
-
-  /* ---- generic blocks ---- */
-  #pd .crumb {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    font-size: 0.85rem; font-weight: 600; color: var(--accent);
-    text-decoration: none; cursor: pointer;
-  }
-  #pd .crumb:hover { color: var(--accent-hover); }
-  #pd .sec-title {
-    font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em;
-    color: var(--ink); margin: 0 0 0.85rem;
-  }
-  #pd .body-copy {
-    font-size: 1rem; line-height: 1.6rem; color: var(--fg); margin: 0; text-wrap: pretty;
-  }
-  #pd .muted { color: var(--fg-muted); }
-
-  /* ---- stats bar ---- */
-  #pd .stats {
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    border: 1px solid var(--border); border-radius: var(--radius-lg);
-    background: var(--bg-surface); overflow: hidden;
-  }
-  #pd .stat { padding: var(--pad-card); border-right: 1px solid var(--border); text-align: left; }
-  #pd .stat:last-child { border-right: none; }
-  #pd .stats.cols-2 { grid-template-columns: repeat(2, 1fr); }
-  #pd .stats.cols-2 .stat { border-right: 1px solid var(--border); }
-  #pd .stats.cols-2 .stat:nth-child(2n) { border-right: none; }
-  #pd .stats.cols-2 .stat:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
-  #pd .stat-num {
-    font-size: var(--stat-num); font-weight: 800; line-height: 1.1;
-    color: var(--ink); letter-spacing: -0.02em; white-space: nowrap;
-  }
-  #pd .stat-num .stat-unit { font-size: 0.8rem; font-weight: 600; color: var(--fg-subtle); margin-left: 0.2rem; }
-  #pd .stat-label {
-    font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.06em; color: var(--fg-subtle); margin-top: 0.25rem;
-  }
-  #pd .stat-price .stat-num { color: var(--accent-press); }
-
-  /* ---- amenity chips ---- */
-  #pd .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-  #pd .chip {
-    font-size: 0.85rem; font-weight: 500; color: var(--fg);
-    background: var(--bg-subtle); border: 1px solid var(--border);
-    padding: 0.4rem 0.8rem; border-radius: var(--radius-full);
-    display: inline-flex; align-items: center; gap: 0.4rem;
-  }
-  #pd .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-
-  /* ---- details grid ---- */
-  #pd .facts {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: 0;
-    border: 1px solid var(--border); border-radius: var(--radius-lg);
-    overflow: hidden; background: var(--bg-surface);
-  }
-  #pd .fact { padding: 0.85rem var(--pad-card); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
-  #pd .fact:nth-child(2n) { border-right: none; }
-  #pd .fact:nth-last-child(-n+1) { border-bottom: none; }
-  #pd .fact:nth-last-child(2):nth-child(odd) { border-bottom: none; }
-  #pd .fact-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); }
-  #pd .fact-val { font-size: 0.95rem; font-weight: 600; color: var(--ink); margin-top: 0.2rem; }
-
-  /* ---- map block ---- */
-  #pd .map {
-    position: relative; border: 1px solid var(--border); border-radius: var(--radius-lg);
-    overflow: hidden; min-height: 220px;
-    background:
-      repeating-linear-gradient(0deg, var(--map-grid) 0 1px, transparent 1px 46px),
-      repeating-linear-gradient(90deg, var(--map-grid) 0 1px, transparent 1px 46px),
-      var(--map-bg);
-    --map-grid: #e9ece8; --map-bg: #f1f3ee;
-  }
-  html.dark #pd .map { --map-grid: #1f2937; --map-bg: #111827; }
-  #pd .map::before {
-    content: ""; position: absolute; inset: 0;
-    background:
-      linear-gradient(115deg, transparent 46%, var(--map-road) 46% 48%, transparent 48%),
-      linear-gradient(20deg, transparent 62%, var(--map-road) 62% 64%, transparent 64%);
-    --map-road: #dfe3da;
-  }
-  html.dark #pd .map::before { --map-road: #273244; }
-  #pd .map-pin { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -100%); color: var(--accent); filter: drop-shadow(0 4px 6px rgba(0,0,0,.25)); }
-  #pd .map-card {
-    position: absolute; left: 1rem; bottom: 1rem; background: var(--bg-surface);
-    border: 1px solid var(--border); border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop); padding: 0.7rem 0.9rem; max-width: 70%;
-  }
-  #pd .map-card .addr { font-size: 0.85rem; font-weight: 600; color: var(--ink); }
-  #pd .map-link { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; color: var(--accent); margin-top: 0.25rem; text-decoration: none; }
-  #pd .map-link:hover { color: var(--accent-hover); }
-
-  /* ---- gallery / carousel ---- */
-  #pd .carousel {
-    position: relative; border-radius: var(--radius-lg); overflow: hidden;
-    background: var(--bg-subtle); cursor: zoom-in;
-  }
-  #pd .carousel .photo-img {
-    width: 100%; height: 100%; object-fit: cover; display: block;
-    will-change: transform; touch-action: pan-y;
-  }
-  #pd .carousel.is-empty { display: grid; place-items: center; min-height: 320px; }
-  #pd .carousel .empty-note { color: var(--fg-subtle); font-size: 0.9rem; }
-  #pd .car-chip {
-    position: absolute; top: 50%; transform: translateY(-50%);
-    width: 38px; height: 38px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,.85); color: #111518; font-size: 1.2rem; line-height: 1;
-    cursor: pointer; box-shadow: var(--shadow-pop); display: grid; place-items: center; z-index: 5;
-  }
-  #pd .car-chip.left { left: 0.85rem; }
-  #pd .car-chip.right { right: 0.85rem; }
-  #pd .car-counter {
-    position: absolute; right: 0.85rem; bottom: 0.85rem; background: rgba(0,0,0,.55);
-    color: #fff; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.65rem;
-    border-radius: var(--radius-full); z-index: 5;
-  }
-  #pd .car-dots { position: absolute; left: 50%; bottom: 0.85rem; transform: translateX(-50%); display: flex; gap: 0.4rem; z-index: 5; }
-  #pd .car-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.55); cursor: pointer; }
-  #pd .car-dot.is-on { background: #fff; }
-  #pd .thumbs { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex: none; }
-  #pd .thumb { flex: 1; height: 64px; border-radius: var(--radius-sm); overflow: hidden; cursor: pointer; opacity: 0.6; border: 2px solid transparent; background: var(--bg-subtle); padding: 0; }
-  #pd .thumb.is-on { opacity: 1; border-color: var(--accent); }
-  #pd .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-
-  /* ---- tour ---- */
-  #pd .tour-frame { position: relative; width: 100%; padding-top: 56.25%; overflow: hidden; border-radius: var(--radius-lg); background: var(--bg-subtle); }
-  #pd .tour-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-
-  /* ---- buttons / request card ---- */
-  #pd .btn {
-    appearance: none; border: none; font-family: inherit; font-weight: 700;
-    border-radius: var(--radius-sm); cursor: pointer; padding: 0.7rem 1rem; font-size: 0.95rem;
-    background: var(--accent); color: #fff; transition: background .18s ease;
-  }
-  #pd .btn:hover { background: var(--accent-hover); }
-  #pd .btn.full { width: 100%; }
-  #pd .req-card {
-    border: 1px solid var(--border); border-radius: var(--radius-lg);
-    background: var(--bg-surface); box-shadow: var(--shadow-card); padding: var(--pad-card);
-  }
-  #pd .req-price { font-size: 1.65rem; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
-  #pd .req-price .per { font-size: 0.9rem; font-weight: 600; color: var(--fg-subtle); }
-  #pd .req-meta { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.15rem; }
-
-  /* ---- split-screen scaffold (C) ---- */
+  /* ---- split-screen scaffold ---- */
   #pd .split-screen { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; }
   #pd .split-gallery {
-    position: sticky; top: 0; height: 100vh; background: var(--bg-app);
+    position: sticky; top: 0; height: 100vh; background: var(--sw-paper);
     padding: 1.5rem; display: flex; flex-direction: column; gap: 0.6rem;
   }
   #pd .split-gallery .carousel { flex: 1; }
-  #pd .split-info { padding: 2.5rem; display: flex; flex-direction: column; gap: var(--pad-section); max-width: 640px; }
+  #pd .split-info { padding: 2.5rem; display: flex; flex-direction: column; gap: 2.5rem; max-width: 640px; }
   #pd .split-info section { margin: 0; }
 
   @media (max-width: 880px) {
@@ -215,71 +23,200 @@
     #pd .split-gallery { position: static; height: auto; }
     #pd .split-gallery .carousel { min-height: 300px; }
     #pd .split-info { padding: 1.5rem; max-width: none; }
-    #pd .stats { grid-template-columns: repeat(2, 1fr); }
   }
 
-  /* ---- appointment modal ---- */
+  /* ---- header annotations ---- */
+  #pd .crumb { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; letter-spacing: 0.04em; }
+  #pd .addr { display: inline-flex; align-items: center; gap: 0.45rem; margin-top: 0.8rem; font-size: 0.82rem; letter-spacing: 0.03em; color: var(--sw-ink-soft); }
+  #pd .addr svg { color: var(--sw-brass); flex: none; }
+
+  /* ---- surveyor's fact block (lives inside the sw-parcel) ---- */
+  #pd .facts { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 1.4rem; margin-top: 1.1rem; border-top: 1px dashed var(--sw-line-faint); }
+  #pd .fact { padding: 0.72rem 0 0.62rem; border-bottom: 1px dashed var(--sw-line-faint); }
+  #pd .fact:nth-last-child(-n+2) { border-bottom: 0; padding-bottom: 0.2rem; }
+  #pd .fact-label {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.64rem; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--sw-brass-ink);
+  }
+  #pd .fact-val { margin-top: 0.22rem; font-size: 0.98rem; font-weight: 600; color: var(--sw-ink); }
+  #pd .fact-val .unit {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; font-weight: 500; color: var(--sw-ink-soft); margin-left: 0.2rem;
+  }
+  #pd .fact-rent .fact-val {
+    font-family: "Bricolage Grotesque", "Plus Jakarta Sans", sans-serif;
+    font-size: 1.45rem; font-weight: 800; letter-spacing: -0.01em; color: var(--sw-brass-ink);
+  }
+  #pd .parcel-site {
+    display: flex; align-items: baseline; gap: 0.7rem; margin-top: 1.05rem;
+    padding-top: 0.85rem; border-top: 1px dashed var(--sw-line-faint);
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem; letter-spacing: 0.03em; color: var(--sw-ink-soft); overflow-wrap: anywhere;
+  }
+
+  /* ---- prose ---- */
+  #pd .body-copy { font-size: 1rem; line-height: 1.65; color: var(--sw-ink); margin: 0; text-wrap: pretty; }
+
+  /* ---- gallery / carousel (ids + .carousel-dot/.thumb/is-on are JS hooks) ---- */
+  #pd .carousel {
+    position: relative; border: 1px solid var(--sw-line-faint); border-radius: 2px;
+    overflow: hidden; background: var(--sw-card); cursor: zoom-in;
+  }
+  #pd .carousel .photo-img {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+    will-change: transform; touch-action: pan-y;
+  }
+  #pd .carousel.is-empty { display: grid; place-items: center; min-height: 320px; border: 1px dashed var(--sw-line); cursor: default; }
+  #pd .car-chip {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--sw-line);
+    background: var(--sw-card); color: var(--sw-ink); font-size: 1.2rem; line-height: 1;
+    cursor: pointer; box-shadow: 0 8px 24px rgba(18, 28, 21, 0.14); display: grid; place-items: center; z-index: 5;
+  }
+  #pd .car-chip:hover { border-color: var(--sw-brass); color: var(--sw-brass-ink); }
+  #pd .car-chip.left { left: 0.85rem; }
+  #pd .car-chip.right { right: 0.85rem; }
+  #pd .car-counter {
+    position: absolute; right: 0.85rem; bottom: 0.85rem; background: rgba(18, 28, 21, 0.72);
+    color: #f1f3ed; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; font-weight: 500; letter-spacing: 0.08em; padding: 0.25rem 0.6rem;
+    border-radius: 2px; z-index: 5;
+  }
+  #pd .car-dots { position: absolute; left: 50%; bottom: 0.85rem; transform: translateX(-50%); display: flex; gap: 0.4rem; z-index: 5; }
+  #pd .car-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(241, 243, 237, 0.6); box-shadow: 0 0 0 1px rgba(18, 28, 21, 0.25); cursor: pointer; }
+  #pd .car-dot.is-on { background: var(--sw-brass); }
+  #pd .thumbs { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex: none; }
+  #pd .thumb { flex: 1; height: 64px; border-radius: 2px; overflow: hidden; cursor: pointer; opacity: 0.55; border: 1px dashed var(--sw-line-faint); background: var(--sw-card); padding: 0; }
+  #pd .thumb.is-on { opacity: 1; border: 1px solid var(--sw-brass); }
+  #pd .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* ---- 3D tour ---- */
+  #pd .tour-frame { position: relative; width: 100%; padding-top: 56.25%; overflow: hidden; border: 1px solid var(--sw-line-faint); border-radius: 2px; background: var(--sw-card); }
+  #pd .tour-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  /* ---- location sketch ---- */
+  #pd .map {
+    position: relative; border: 1px dashed var(--sw-line); border-radius: 2px;
+    overflow: hidden; min-height: 220px;
+    background:
+      repeating-linear-gradient(0deg, var(--pd-map-grid) 0 1px, transparent 1px 46px),
+      repeating-linear-gradient(90deg, var(--pd-map-grid) 0 1px, transparent 1px 46px),
+      var(--pd-map-bg);
+    --pd-map-grid: rgba(34, 58, 44, 0.10); --pd-map-bg: #edf0e7;
+  }
+  html[data-theme="dark"] #pd .map { --pd-map-grid: rgba(228, 235, 224, 0.09); --pd-map-bg: #16211a; }
+  #pd .map::before {
+    content: ""; position: absolute; inset: 0;
+    background:
+      linear-gradient(115deg, transparent 46%, var(--pd-map-road) 46% 48%, transparent 48%),
+      linear-gradient(20deg, transparent 62%, var(--pd-map-road) 62% 64%, transparent 64%);
+    --pd-map-road: rgba(34, 58, 44, 0.14);
+  }
+  html[data-theme="dark"] #pd .map::before { --pd-map-road: rgba(228, 235, 224, 0.12); }
+  #pd .map-pin { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -100%); color: var(--sw-brass); filter: drop-shadow(0 4px 6px rgba(18, 28, 21, 0.3)); }
+  #pd .map-card {
+    position: absolute; left: 1rem; bottom: 1rem; background: var(--sw-card);
+    border: 1px solid var(--sw-line-faint); border-radius: 2px;
+    box-shadow: 0 8px 24px rgba(18, 28, 21, 0.12); padding: 0.7rem 0.9rem; max-width: 70%;
+  }
+  #pd .map-card .addr-line { font-size: 0.85rem; font-weight: 600; color: var(--sw-ink); }
+  #pd .map-link { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; margin-top: 0.3rem; }
+
+  /* ---- sticky tour-request card ---- */
+  #pd .req-card {
+    border: 1px dashed var(--sw-line); border-radius: 2px;
+    background: var(--sw-card); box-shadow: 0 14px 34px rgba(18, 28, 21, 0.12); padding: 1.1rem 1.25rem;
+  }
+  #pd .req-price {
+    font-family: "Bricolage Grotesque", "Plus Jakarta Sans", sans-serif;
+    font-size: 1.35rem; font-weight: 800; color: var(--sw-ink); letter-spacing: -0.01em;
+  }
+  #pd .req-price .per {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.74rem; font-weight: 500; color: var(--sw-ink-soft);
+  }
+  #pd .req-meta {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; letter-spacing: 0.05em; color: var(--sw-ink-soft); margin-top: 0.25rem;
+  }
+
+  /* ---- tour-request modal (ids + is-on are JS hooks; JS sets display grid/none) ---- */
   #pd .am-scrim {
-    position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,.42);
+    position: fixed; inset: 0; z-index: 300; background: rgba(18, 28, 21, 0.5);
     display: grid; place-items: center; padding: 1.25rem; animation: pd-am-fade .18s ease;
   }
   @keyframes pd-am-fade { from { opacity: 0; } }
   #pd .am-modal {
     width: 100%; max-width: 420px; max-height: calc(100vh - 2.5rem);
-    background: var(--bg-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-sheet);
+    background: var(--sw-card);
+    background-image:
+      radial-gradient(circle at 7px 7px, var(--sw-brass) 2.2px, transparent 3px),
+      radial-gradient(circle at calc(100% - 7px) 7px, var(--sw-brass) 2.2px, transparent 3px),
+      radial-gradient(circle at 7px calc(100% - 7px), var(--sw-brass) 2.2px, transparent 3px),
+      radial-gradient(circle at calc(100% - 7px) calc(100% - 7px), var(--sw-brass) 2.2px, transparent 3px);
+    background-repeat: no-repeat;
+    border: 1px dashed var(--sw-line); border-radius: 4px;
+    box-shadow: 0 24px 60px rgba(18, 28, 21, 0.4);
     display: flex; flex-direction: column; overflow: hidden; animation: pd-am-rise .22s ease;
   }
   @keyframes pd-am-rise { from { transform: translateY(8px); opacity: 0; } }
   #pd .am-head {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
-    padding: 1.1rem 1.25rem 0.9rem; border-bottom: 1px solid var(--border); flex: none;
+    padding: 1.2rem 1.25rem 0.95rem; border-bottom: 1px dashed var(--sw-line-faint); flex: none;
   }
-  #pd .am-head .ttl { font-size: 1.1rem; font-weight: 800; color: var(--ink); letter-spacing: -0.01em; }
-  #pd .am-head .sub { font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.15rem; }
+  #pd .am-head .ttl { font-size: 1.15rem; font-weight: 700; color: var(--sw-ink); letter-spacing: -0.01em; }
+  #pd .am-head .sub {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--sw-brass-ink); margin-top: 0.3rem;
+  }
   #pd .am-x {
-    appearance: none; border: none; cursor: pointer; width: 32px; height: 32px; flex: none;
-    border-radius: var(--radius-full); background: var(--bg-hover); color: var(--ink); font-size: 1.2rem; line-height: 1;
+    appearance: none; border: 1px solid transparent; cursor: pointer; width: 32px; height: 32px; flex: none;
+    border-radius: 50%; background: var(--sw-hover); color: var(--sw-ink); font-size: 1.2rem; line-height: 1;
   }
-  #pd .am-x:hover { background: var(--border); }
+  #pd .am-x:hover { border-color: var(--sw-line); }
   #pd .am-body { padding: 1.25rem; overflow: auto; }
-  #pd .am-foot { padding: 1rem 1.25rem; border-top: 1px solid var(--border); flex: none; }
-  #pd .am-field { margin-bottom: 0.85rem; }
-  #pd .am-field label { display: block; font-size: 0.75rem; font-weight: 600; color: var(--fg-muted); margin-bottom: 0.3rem; }
-  #pd .am-field input, #pd .am-field select {
-    width: 100%; height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-    padding: 0 0.75rem; font-family: inherit; font-size: 0.92rem; background: var(--bg-surface); color: var(--fg);
-  }
-  #pd .am-field input:focus, #pd .am-field select:focus {
-    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-  }
+  #pd .am-foot { padding: 1rem 1.25rem 1.15rem; border-top: 1px dashed var(--sw-line-faint); flex: none; }
   #pd .am-seg { display: flex; gap: 0.5rem; }
   #pd .am-seg button {
-    flex: 1; height: 40px; border: 1px solid var(--border); background: var(--bg-surface);
-    border-radius: var(--radius-sm); font: inherit; font-size: 0.88rem; font-weight: 600; color: var(--fg-muted); cursor: pointer;
+    flex: 1; height: 40px; border: 1px dashed var(--sw-line); background: transparent;
+    border-radius: 0.375rem; font: inherit; font-size: 0.88rem; font-weight: 600; color: var(--sw-ink-soft); cursor: pointer;
   }
-  #pd .am-seg button.is-on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-  #pd .am-fine { font-size: 0.74rem; color: var(--fg-subtle); text-align: center; margin: 0.7rem 0 0; }
-  #pd .am-err { font-size: 0.78rem; color: #dc2626; margin: 0.2rem 0 0; min-height: 1rem; }
+  #pd .am-seg button.is-on { border-style: solid; border-color: var(--sw-brass); color: var(--sw-brass-ink); background: var(--sw-warn-bg); }
+  #pd .am-fine {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; letter-spacing: 0.03em; color: var(--sw-ink-soft); text-align: center; margin: 0.75rem 0 0;
+  }
+  #pd .am-err { font-size: 0.78rem; color: var(--sw-bad); margin: 0.2rem 0 0; min-height: 1rem; }
   #pd .am-ok { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0.7rem; padding: 2rem 1.5rem; }
-  #pd .am-ok .ck { width: 56px; height: 56px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); display: grid; place-items: center; }
-  #pd .am-ok .h { font-size: 1.15rem; font-weight: 800; color: var(--ink); }
-  #pd .am-ok .p { font-size: 0.88rem; color: var(--fg-muted); max-width: 280px; line-height: 1.4; }
+  #pd .am-ok .ck { width: 56px; height: 56px; border-radius: 50%; background: var(--sw-ok-bg); color: var(--sw-ok); display: grid; place-items: center; }
+  #pd .am-ok .h { font-size: 1.15rem; font-weight: 700; color: var(--sw-ink); }
+  #pd .am-ok .p { font-size: 0.88rem; color: var(--sw-ink-soft); max-width: 280px; line-height: 1.5; }
 
-  /* ---- lightbox ---- */
-  #pd .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 320; display: none; align-items: center; justify-content: center; touch-action: pan-y; }
+  /* ---- lightbox (ids + is-open are JS hooks) ---- */
+  #pd .lightbox { position: fixed; inset: 0; background: rgba(10, 16, 12, 0.92); z-index: 320; display: none; align-items: center; justify-content: center; touch-action: pan-y; }
   #pd .lightbox.is-open { display: flex; }
-  #pd .lightbox img { max-height: 90vh; max-width: 92vw; object-fit: contain; border-radius: var(--radius-md); box-shadow: 0 24px 60px rgba(0,0,0,.6); user-select: none; }
-  #pd .lb-btn { position: absolute; background: transparent; border: none; color: #fff; cursor: pointer; }
-  #pd .lb-close { top: 0.75rem; right: 1rem; font-size: 2rem; line-height: 1; padding: 0.25rem 0.75rem; border-radius: var(--radius-sm); }
-  #pd .lb-close:hover, #pd .lb-nav:hover { background: rgba(255,255,255,.1); }
-  #pd .lb-nav { top: 50%; transform: translateY(-50%); font-size: 2.25rem; font-weight: 700; padding: 0.5rem 0.85rem; border-radius: var(--radius-sm); }
+  #pd .lightbox img { max-height: 90vh; max-width: 92vw; object-fit: contain; border-radius: 2px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6); user-select: none; }
+  #pd .lb-btn { position: absolute; background: transparent; border: none; color: #f1f3ed; cursor: pointer; }
+  #pd .lb-close { top: 0.75rem; right: 1rem; font-size: 2rem; line-height: 1; padding: 0.25rem 0.75rem; border-radius: 2px; }
+  #pd .lb-close:hover, #pd .lb-nav:hover { background: rgba(241, 243, 237, 0.12); }
+  #pd .lb-nav { top: 50%; transform: translateY(-50%); font-size: 2.25rem; font-weight: 700; padding: 0.5rem 0.85rem; border-radius: 2px; }
   #pd .lb-nav.left { left: 0.5rem; }
   #pd .lb-nav.right { right: 0.5rem; }
-  #pd .lb-counter { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); color: #fff; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); }
+  #pd .lb-counter {
+    position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); background: rgba(18, 28, 21, 0.72);
+    color: #f1f3ed; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem; font-weight: 500; letter-spacing: 0.08em; padding: 0.25rem 0.65rem; border-radius: 2px;
+  }
 </style>
 
 {% set image_count = property.photos | length %}
-{% set maps_url = "https://www.google.com/maps/search/?api=1&query=" ~ (property.address | urlencode) %}
+{# Only build a Maps search link from a real address. Feeding the "N/A"
+   fallback (or an empty value) into Google's fuzzy search lands users on an
+   arbitrary wrong location. #}
+{% set has_address = property.address and property.address != 'N/A' %}
+{% set maps_url = "https://www.google.com/maps/search/?api=1&query=" ~ (property.address | urlencode) if has_address else '' %}
 <div id="pd">
   <div class="split-screen">
     <!-- LEFT · fixed gallery -->
@@ -296,7 +233,7 @@
             {% endfor %}
           </div>
         {% else %}
-          <span class="empty-note">No photos available</span>
+          <span class="empty-note sw-parcel-num">NO PHOTOS ON FILE</span>
         {% endif %}
       </div>
       {% if image_count > 1 %}
@@ -310,60 +247,63 @@
       {% endif %}
     </div>
 
-    <!-- RIGHT · scrolling info -->
+    <!-- RIGHT · scrolling parcel record -->
     <div class="split-info">
       <div>
-        <a class="crumb" href="{{ url_for('for_rent') }}">&#8249; Back to listings</a>
-        <h1 style="font-size:1.8rem;font-weight:800;margin:0.6rem 0 0.25rem;letter-spacing:-0.02em;color:var(--ink)">{{ property.name }}</h1>
-        <div class="muted" style="display:inline-flex;align-items:center;gap:0.35rem;font-size:0.95rem">
+        <a class="crumb sw-link sw-mono" href="{{ url_for('for_rent') }}">&#8249; Back to listings</a>
+        <p class="sw-eyebrow" style="margin-top:1.2rem">For rent</p>
+        <h1 class="sw-title">{{ property.name }}</h1>
+        <div class="addr sw-mono">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
           {{ property.address }}
         </div>
         {% if property.tour_url %}
-          <div style="margin-top:0.75rem">
-            <a href="#tour-embed" class="btn" style="display:inline-flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.45rem 0.85rem">View 3D tour</a>
+          <div style="margin-top:1rem">
+            <a href="#tour-embed" class="sw-btn sw-btn-ghost sw-btn-sm">View 3D tour</a>
           </div>
         {% endif %}
       </div>
 
-      <div class="stats cols-2">
-        <div class="stat"><div class="stat-num">{{ property.bedrooms }}</div><div class="stat-label">Bedrooms</div></div>
-        <div class="stat"><div class="stat-num">{{ property.bathrooms }}</div><div class="stat-label">Bathrooms</div></div>
-        <div class="stat"><div class="stat-num">{{ property.sqft }}<span class="stat-unit">sq ft</span></div><div class="stat-label">Interior</div></div>
-        <div class="stat stat-price"><div class="stat-num">${{ property.rent }}<span class="stat-unit">/mo</span></div><div class="stat-label">Rent</div></div>
+      <!-- THE parcel: the property's fact block, surveyor style -->
+      <div class="sw-parcel">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <span class="sw-parcel-num">PARCEL RECORD</span>
+          <span class="sw-parcel-num">MONTHLY TENANCY</span>
+        </div>
+        <div class="facts">
+          <div class="fact fact-rent"><div class="fact-label">Rent</div><div class="fact-val">${{ property.rent }}<span class="unit">/mo</span></div></div>
+          <div class="fact"><div class="fact-label">Deposit</div><div class="fact-val">${{ property.deposit }}</div></div>
+          <div class="fact"><div class="fact-label">Bedrooms</div><div class="fact-val">{{ property.bedrooms }}</div></div>
+          <div class="fact"><div class="fact-label">Bathrooms</div><div class="fact-val">{{ property.bathrooms }}</div></div>
+          <div class="fact"><div class="fact-label">Interior</div><div class="fact-val">{{ property.sqft }}<span class="unit">sq ft</span></div></div>
+          <div class="fact"><div class="fact-label">Lease term</div><div class="fact-val">{{ property.lease_length }}</div></div>
+          <div class="fact"><div class="fact-label">Pets allowed</div><div class="fact-val">{{ property.pets_allowed }}</div></div>
+          <div class="fact"><div class="fact-label">ADA accessible</div><div class="fact-val">{{ property.ada_accessible }}</div></div>
+        </div>
+        <p class="parcel-site"><span class="fact-label">Site</span>{{ property.address }}</p>
       </div>
 
       <section>
-        <h2 class="sec-title">About this home</h2>
+        <h2 class="sw-h3" style="margin-bottom:0.85rem">About this home</h2>
         <p class="body-copy">{{ property.description or property.blurb }}</p>
       </section>
 
       <section>
-        <h2 class="sec-title">Amenities</h2>
+        <h2 class="sw-h3" style="margin-bottom:0.85rem">Amenities</h2>
         {% if property.included_amenities %}
-          <div class="chips">
+          <div class="flex flex-wrap gap-2">
             {% for amenity in property.included_amenities %}
-              <span class="chip"><span class="dot"></span>{{ amenity }}</span>
+              <span class="sw-badge">{{ amenity }}</span>
             {% endfor %}
           </div>
         {% else %}
-          <p class="body-copy muted">No amenities listed.</p>
+          <p class="sw-help" style="margin-top:0">No amenities listed.</p>
         {% endif %}
-      </section>
-
-      <section>
-        <h2 class="sec-title">Property Details</h2>
-        <div class="facts">
-          <div class="fact"><div class="fact-label">Lease term</div><div class="fact-val">{{ property.lease_length }}</div></div>
-          <div class="fact"><div class="fact-label">Deposit</div><div class="fact-val">${{ property.deposit }}</div></div>
-          <div class="fact"><div class="fact-label">Pets allowed</div><div class="fact-val">{{ property.pets_allowed }}</div></div>
-          <div class="fact"><div class="fact-label">ADA Accessible</div><div class="fact-val">{{ property.ada_accessible }}</div></div>
-        </div>
       </section>
 
       {% if property.tour_url %}
         <section id="tour-embed">
-          <h2 class="sec-title">3D virtual tour</h2>
+          <h2 class="sw-h3" style="margin-bottom:0.85rem">3D virtual tour</h2>
           <div class="tour-frame">
             <iframe
               src="{{ property.tour_url }}"
@@ -378,26 +318,30 @@
       {% endif %}
 
       <section>
-        <h2 class="sec-title">Location</h2>
+        <h2 class="sw-h3" style="margin-bottom:0.85rem">Location</h2>
         <div class="map">
           <span class="map-pin"><svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg></span>
           <div class="map-card">
-            <div class="addr">{{ property.address }}</div>
-            <a class="map-link" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-              Open in Maps
-            </a>
+            {% if has_address %}
+              <div class="addr-line">{{ property.address }}</div>
+              <a class="map-link sw-link sw-mono" href="{{ maps_url }}" target="_blank" rel="noopener noreferrer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                Open in Maps
+              </a>
+            {% else %}
+              <div class="addr-line">Address available on request</div>
+            {% endif %}
           </div>
         </div>
       </section>
 
       <div class="req-card" style="position:sticky;bottom:1rem">
-        <div style="display:flex;align-items:center;gap:1rem">
-          <div style="flex:1">
-            <div class="req-price" style="font-size:1.3rem">${{ property.rent }}<span class="per">/mo</span></div>
+        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+          <div style="flex:1;min-width:9rem">
+            <div class="req-price">${{ property.rent }}<span class="per">/mo</span></div>
             <div class="req-meta">{{ property.lease_length }} lease &middot; ${{ property.deposit }} deposit</div>
           </div>
-          <button id="openCalModal" class="btn" type="button">Request Appointment</button>
+          <button id="openCalModal" class="sw-btn sw-btn-primary" type="button">Request a tour</button>
         </div>
       </div>
     </div>
@@ -412,41 +356,41 @@
     <div id="lightboxCounter" class="lb-counter">1 / 1</div>
   </div>
 
-  <!-- Appointment modal -->
+  <!-- Tour-request modal -->
   <div id="calModal" class="am-scrim" style="display:none">
     <div class="am-modal" role="dialog" aria-modal="true" aria-labelledby="apptTitle">
       <div class="am-head">
         <div>
-          <div class="ttl" id="apptTitle">Request an Appointment</div>
+          <div class="ttl sw-display" id="apptTitle">Request a tour</div>
           <div class="sub">{{ property.name }}</div>
         </div>
         <button id="closeCalModal" class="am-x" type="button" aria-label="Close">&times;</button>
       </div>
       <form id="apptForm">
         <div class="am-body">
-          <div class="am-field">
-            <label for="apptName">Your name</label>
-            <input id="apptName" type="text" required placeholder="Jordan Rivera" />
+          <div class="sw-field">
+            <label class="sw-label" for="apptName">Your name</label>
+            <input class="sw-input" id="apptName" type="text" required placeholder="Jordan Rivera" />
           </div>
-          <div class="am-field">
-            <label for="apptDate">Choose a date</label>
-            <input id="apptDate" name="date" type="date" min="{{ nowdate }}" required />
+          <div class="sw-field">
+            <label class="sw-label" for="apptDate">Choose a date</label>
+            <input class="sw-input" id="apptDate" name="date" type="date" min="{{ nowdate }}" required />
           </div>
-          <div class="am-field">
-            <label>Preferred contact method</label>
+          <div class="sw-field">
+            <label class="sw-label">Preferred contact method</label>
             <div class="am-seg" id="contactSeg">
               <button type="button" class="is-on" data-method="email">Email</button>
               <button type="button" data-method="text">Text</button>
             </div>
           </div>
-          <div class="am-field" style="margin-bottom:0">
-            <label id="contactInfoLabel" for="contactInfo">Your email</label>
-            <input id="contactInfo" name="contactInfo" type="email" required placeholder="you@example.com" />
+          <div class="sw-field" style="margin-bottom:0">
+            <label class="sw-label" id="contactInfoLabel" for="contactInfo">Your email</label>
+            <input class="sw-input" id="contactInfo" name="contactInfo" type="email" required placeholder="you@example.com" />
           </div>
           <div id="apptDateFeedback" class="am-err"></div>
         </div>
         <div class="am-foot">
-          <button type="submit" class="btn full">Request Booking</button>
+          <button type="submit" class="sw-btn sw-btn-primary w-full">Send tour request</button>
           <p class="am-fine">Free to request — we'll confirm within a day.</p>
           <div id="apptSubmitFeedback" class="am-err" style="text-align:center"></div>
         </div>
@@ -455,9 +399,9 @@
         <div class="ck">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
         </div>
-        <div class="h">Appointment requested!</div>
+        <div class="h sw-display">Tour requested</div>
         <div class="p">We'll confirm your viewing of {{ property.name }} within a day — keep an eye on your inbox.</div>
-        <button id="successDone" class="btn" type="button" style="margin-top:0.4rem">Done</button>
+        <button id="successDone" class="sw-btn sw-btn-ghost sw-btn-sm" type="button" style="margin-top:0.4rem">Close</button>
       </div>
     </div>
   </div>

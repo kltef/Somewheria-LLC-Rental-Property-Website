@@ -72,6 +72,8 @@ class SqlStorageService:
             return "tickets"
         if path == self.config.lead_capture_file:
             return "lead_captures"
+        if path == self.config.hidden_listings_file:
+            return "hidden_listings"
         return ""
 
     # ---------------- Generic JSON shim used by TicketService et al --------
@@ -94,6 +96,8 @@ class SqlStorageService:
                 return self.get_renter_contracts()
             if key == "lead_captures":
                 return self.get_pending_lead_captures()
+            if key == "hidden_listings":
+                return self.get_hidden_listing_ids()
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to load %s from sqlite: %s", path, exc)
         return default
@@ -116,6 +120,8 @@ class SqlStorageService:
                 self.save_renter_contracts(data)
             elif key == "lead_captures":
                 self._replace_pending_lead_captures(data)
+            elif key == "hidden_listings":
+                self._replace_hidden_listings(data)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to save %s to sqlite: %s", path, exc)
 
@@ -307,6 +313,37 @@ class SqlStorageService:
                 conn.execute(
                     "INSERT OR REPLACE INTO lead_captures(email, payload) VALUES (?, ?)",
                     (email, dumps(item)),
+                )
+
+    # --------------------------------------------------------- hidden listings
+
+    def get_hidden_listing_ids(self) -> list[str]:
+        with self.db.read() as conn:
+            rows = conn.execute(
+                "SELECT property_id FROM hidden_listings ORDER BY property_id"
+            ).fetchall()
+        return [row["property_id"] for row in rows]
+
+    def set_listing_hidden(self, property_id: str, hidden: bool) -> None:
+        property_id = str(property_id)
+        with self.db.transaction() as conn:
+            if hidden:
+                conn.execute(
+                    "INSERT OR REPLACE INTO hidden_listings(property_id) VALUES (?)",
+                    (property_id,),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM hidden_listings WHERE property_id = ?", (property_id,)
+                )
+
+    def _replace_hidden_listings(self, data: list) -> None:
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM hidden_listings")
+            for property_id in data or []:
+                conn.execute(
+                    "INSERT OR REPLACE INTO hidden_listings(property_id) VALUES (?)",
+                    (str(property_id),),
                 )
 
     # --------------------------------------------------------------- binaries

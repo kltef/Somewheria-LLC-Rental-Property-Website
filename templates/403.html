@@ -1,8 +1,10 @@
 {% extends "error_base.html" %}
 {% set error_code = "403" %}
-{% set error_title = "Front Door Locked" %}
-{% set error_message = "This area of the rental house is reserved for approved staff only. Your account can see the neighborhood, but not this room." %}
-{% set primary_label = "Return Home" %}
-{% set secondary_label = "Go to Login" %}
+{% set error_eyebrow = "403 — Access restricted" %}
+{% set error_title = "This parcel isn't open to your account." %}
+{% set error_message = "This area is reserved for approved staff. Your account can browse the public site, but not this section." %}
+{% set primary_label = "Back to home" %}
+{% set primary_href = url_for('home') %}
+{% set secondary_label = "Go to sign-in" %}
 {% set secondary_href = url_for('login') %}
-{% set house_note = "If you should have access, check your account role or ask an admin to update your permissions." %}
+{% set house_note = "Access is granted by account role. If you should have it, ask an admin to update your permissions." %}

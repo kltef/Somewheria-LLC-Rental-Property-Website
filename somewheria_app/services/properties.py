@@ -29,6 +29,13 @@ MAX_IMAGE_PIXELS = 24_000_000
 # Cap any single dimension so an extreme aspect ratio can't blow up the
 # letterbox output even when total pixel count is within MAX_IMAGE_PIXELS.
 MAX_IMAGE_DIMENSION = 6000
+# Longest edge for gallery photos embedded (base64) in a property page. Full
+# 24MP phone photos both blew past the letterbox pixel guard (so they were
+# dropped from the listing entirely) and bloated the inline payload to several
+# MB each. 1200px is plenty for a web gallery; combined with GALLERY_JPEG_QUALITY
+# it keeps a multi-photo page to a couple of MB instead of ~8 MB.
+MAX_GALLERY_EDGE = 1200
+GALLERY_JPEG_QUALITY = 80
 PROPERTY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # Tighten Pillow's own decompression-bomb threshold so even if our explicit
@@ -135,6 +142,67 @@ def sanitize_tour_url(raw: str) -> str:
     return value
 
 
+# Canonical amenity labels and the variant spellings that mean the same
+# thing. Mirrors the checkbox aliases in templates/edit_listing.html — the
+# edit form pre-checks "Washer/Dryer" when a stored variant like "laundry"
+# matches, then submits the canonical value, so without write-time
+# canonicalization every edit-save round-trip appends a duplicate
+# ("Washer/Dryer" + "washer dryer") to included_amenities.
+AMENITY_ALIASES = {
+    "Air Conditioning": ["air conditioning", "ac", "a/c"],
+    "Heating": ["heating", "heat"],
+    "Dishwasher": ["dishwasher"],
+    "Microwave": ["microwave"],
+    "Refrigerator": ["refrigerator", "fridge"],
+    "Washer/Dryer": ["washer/dryer", "washer dryer", "laundry"],
+    "Washer/Dryer Hookup": ["washer/dryer hookup", "washer dryer hookup", "laundry hookup"],
+    "Balcony/Deck": ["balcony", "deck", "balcony/deck"],
+    "Parking": ["parking", "garage", "carport"],
+    "Gym": ["gym", "fitness", "fitness center"],
+    "Pool": ["pool", "swimming pool"],
+    "Pet Friendly": ["pet friendly", "pets allowed", "pets ok", "pet"],
+    "Furnished": ["furnished"],
+    "Hardwood Floors": ["hardwood floors", "wood floors", "hardwood"],
+    "Walk-in Closet": ["walk-in closet", "walk in closet", "walkin closet"],
+    "In-unit Laundry": ["in-unit laundry", "in unit laundry", "laundry in unit"],
+    "Central Air": ["central air", "central a/c", "central ac"],
+    "Fireplace": ["fireplace"],
+    "Garden": ["garden", "yard"],
+    "Storage": ["storage", "storage unit"],
+    "Snow Removal": ["snow removal", "snow"],
+    "Lawn Mowing Service": ["lawn mowing service", "lawn service", "lawn care", "mowing", "landscaping"],
+    "Common Area Cleaning Service": ["common area cleaning service", "common area cleaning", "cleaning service"],
+    "Water": ["water"],
+    "Trash": ["trash", "garbage", "refuse"],
+    "Sewer": ["sewer", "sewage"],
+}
+
+_AMENITY_CANONICAL_BY_ALIAS = {
+    alias: canonical
+    for canonical, aliases in AMENITY_ALIASES.items()
+    for alias in [canonical.lower(), *aliases]
+}
+
+
+def canonicalize_amenities(items) -> list[str]:
+    """Map amenity variants to their canonical label and drop duplicates,
+    case-insensitively, preserving first-seen order. Unrecognized custom
+    amenities pass through trimmed but otherwise unchanged."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items or []:
+        text = str(item).strip()
+        if not text:
+            continue
+        canonical = _AMENITY_CANONICAL_BY_ALIAS.get(text.lower(), text)
+        key = canonical.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(canonical)
+    return result
+
+
 class PropertyService:
     # Concurrent /for-rent and /for-rent.json hits each used to fire their
     # own upstream fanout (one ID listing + per-property detail/photos), so
@@ -146,7 +214,7 @@ class PropertyService:
     # request-fresh and large enough to absorb a realistic burst.
     REFRESH_COALESCE_SECONDS = 2.0
 
-    def __init__(self, config, notifications, zillow=None) -> None:
+    def __init__(self, config, notifications, zillow=None, storage=None) -> None:
         self.config = config
         self.notifications = notifications
         # Optional dependency: when present, every successful mutation
@@ -154,6 +222,10 @@ class PropertyService:
         # each call site so a Zillow failure NEVER blocks the admin op —
         # the site is the source of truth.
         self.zillow = zillow
+        # Optional dependency: persists which listings an admin has
+        # deactivated (hidden from the public site but kept upstream). When
+        # absent (some unit-test fixtures), nothing is hidden.
+        self.storage = storage
         self.logger = get_console_logger("properties")
         self.cache = []
         self.cache_lock = threading.Lock()
@@ -512,6 +584,13 @@ class PropertyService:
                     property_id,
                 )
                 return None
+            details = self._unwrap_details_payload(details, property_id)
+            if not isinstance(details, dict):
+                self.logger.warning(
+                    "Property %s details endpoint returned an empty envelope; skipping",
+                    property_id,
+                )
+                return None
             photo_urls = self._safe_json(
                 f"{self.config.api_base_url}/properties/{property_id}/photos",
                 [],
@@ -522,18 +601,43 @@ class PropertyService:
                 None,
                 expected_type=str,
             )
-            details["photos"] = []
-            for photo_url in photo_urls:
-                if not isinstance(photo_url, str):
-                    continue
-                encoded = self.get_base64_image_from_url(photo_url)
-                if encoded:
-                    details["photos"].append(encoded)
+            # Keep the S3 photo URLs as-is rather than downloading and
+            # base64-encoding every image here. The bucket objects are public
+            # and the CSP allows https images, so the browser loads them
+            # directly from S3. Encoding them inline turned this per-property
+            # fetch into a multi-megabyte download+re-encode: with one listing
+            # of ~16 full-res photos it made the /for-rent refresh take ~30s
+            # and bloated the detail page to several MB. URLs make the refresh
+            # a few small JSON calls and the detail page a few KB.
+            details["photos"] = [url for url in photo_urls if isinstance(url, str) and url]
             details["thumbnail"] = thumbnail_url or (details["photos"][0] if details["photos"] else "")
             return self.normalize_property(details, property_id)
         except Exception as exc:
             self.logger.warning("Failed to fetch property %s: %s", property_id, exc)
             return None
+
+    @staticmethod
+    def _unwrap_details_payload(payload: dict, property_id: str) -> dict | None:
+        # The details Lambda wraps the record as {"properties": [{...}]};
+        # earlier deployments returned the object bare. Accept both, and when
+        # the envelope carries several records prefer the one whose id matches.
+        records = payload.get("properties")
+        if not isinstance(records, list):
+            return payload
+        match = next(
+            (r for r in records if isinstance(r, dict) and r.get("id") == property_id),
+            None,
+        )
+        if match is None:
+            match = next((r for r in records if isinstance(r, dict)), None)
+        return match
+
+    def _write_headers(self) -> dict:
+        # The upstream API's write methods (POST/PUT/DELETE) require an API
+        # key; reads are public. With no key configured the header is omitted
+        # and the upstream rejects the write with 403.
+        api_key = getattr(self.config, "api_key", "")
+        return {"x-api-key": api_key} if api_key else {}
 
     def _safe_json(self, url: str, default, *, expected_type: type | tuple[type, ...] | None = None):
         try:
@@ -559,6 +663,10 @@ class PropertyService:
         # out of the listing entirely.
         if not isinstance(normalized["included_amenities"], list):
             normalized["included_amenities"] = []
+        # Defensive canonicalize+dedupe so records corrupted by earlier
+        # append-without-dedupe saves ("Washer/Dryer" + "laundry") render one
+        # badge per real amenity without needing a re-save.
+        normalized["included_amenities"] = canonicalize_amenities(normalized["included_amenities"])
         # Replace any missing OR explicit-null scalar with the safe default.
         # ``setdefault`` alone leaves ``None`` in place, so a partially-filled
         # upstream listing (``{"name": null, "address": null, ...}``) would
@@ -610,14 +718,23 @@ class PropertyService:
                 # value is missing or unrecognized — otherwise a property
                 # whose description reads "No pets allowed" would have its
                 # explicit "No" flipped to "Yes" by the substring match.
-                pets_allowed = "Unknown"
-                if any(
-                    "pet" in str(item).lower()
+                # Negations are checked first so that inference itself can
+                # produce "No", and \bpet keeps carpet/trumpet/puppet from
+                # matching at all.
+                amenity_text = " ".join(
+                    str(item).lower()
                     for item in normalized.get("included_amenities", [])
+                )
+                searchable = f"{normalized['description'].lower()} {amenity_text}"
+                if re.search(
+                    r"\bno\s+pets?\b|\bpets?\s+(?:are\s+)?not\s+(?:allowed|permitted)\b|\bpet[-\s]?free\b",
+                    searchable,
                 ):
+                    pets_allowed = "No"
+                elif re.search(r"\bpet", searchable):
                     pets_allowed = "Yes"
-                elif "pet" in normalized["description"].lower():
-                    pets_allowed = "Yes"
+                else:
+                    pets_allowed = "Unknown"
         else:
             pets_allowed = "Unknown"
         normalized["pets_allowed"] = pets_allowed
@@ -703,9 +820,16 @@ class PropertyService:
                 raw = buffer.getvalue()
             with Image.open(BytesIO(raw)) as image:
                 _ensure_safe_image_dimensions(image)
-                processed = self.letterbox_to_16_9(ImageOps.exif_transpose(image).convert("RGB"))
+                oriented = ImageOps.exif_transpose(image).convert("RGB")
+                # Downscale big source photos BEFORE letterboxing: a full-res
+                # landscape photo (e.g. 6000x4000) letterboxes to a canvas that
+                # exceeds MAX_IMAGE_PIXELS, so the old code dropped the photo
+                # entirely. thumbnail() only ever shrinks and preserves aspect
+                # ratio, so smaller images pass through untouched.
+                oriented.thumbnail((MAX_GALLERY_EDGE, MAX_GALLERY_EDGE))
+                processed = self.letterbox_to_16_9(oriented)
                 out = BytesIO()
-                processed.save(out, format="JPEG")
+                processed.save(out, format="JPEG", quality=GALLERY_JPEG_QUALITY, optimize=True)
                 encoded = base64.b64encode(out.getvalue()).decode("utf-8")
                 return f"data:image/jpeg;base64,{encoded}"
         except Exception as exc:
@@ -726,16 +850,25 @@ class PropertyService:
             "bedrooms": form.get("bedrooms", ""),
             "bathrooms": form.get("bathrooms", ""),
             "lease_length": form.get("lease_length", "12 months"),
-            "pets_allowed": form.get("pets_allowed", "Unknown") == "Yes",
+            # Send the tri-state string as-is. The old ``== "Yes"`` boolean
+            # collapse made "Unknown" unrepresentable — it round-tripped back
+            # from upstream as False and displayed as "No". The upstream
+            # column is text (its Lambda coerces booleans to "Yes"/"No").
+            "pets_allowed": form.get("pets_allowed", "Unknown"),
             "blurb": form.get("blurb", ""),
             "description": form.get("description", ""),
-            "included_amenities": amenities,
+            "included_amenities": canonicalize_amenities(amenities),
             "tour_url": sanitize_tour_url(form.get("tour_url", "")),
         }
 
     def create_property(self, form, actor_email: str) -> str:
         payload = self.property_payload_from_form(form)
-        response = requests.post(f"{self.config.api_base_url}/properties", json=payload, timeout=20)
+        response = requests.post(
+            f"{self.config.api_base_url}/properties",
+            json=payload,
+            headers=self._write_headers(),
+            timeout=20,
+        )
         response.raise_for_status()
         # Parse once and tolerate a non-dict / invalid-JSON body rather than
         # crashing the admin POST with AttributeError or JSONDecodeError.
@@ -788,7 +921,10 @@ class PropertyService:
                 for item in updated_property["custom_amenities"].split(",")
                 if item.strip()
             )
-        updated_property["included_amenities"] = amenities
+        # Canonicalize + dedupe: the checkbox re-submits the canonical label
+        # while the stored variant rides along in custom_amenities, so a raw
+        # extend() re-adds "washer dryer" next to "Washer/Dryer" on every save.
+        updated_property["included_amenities"] = canonicalize_amenities(amenities)
 
         update_payload = {
             "name": updated_property.get("name"),
@@ -799,7 +935,8 @@ class PropertyService:
             "bedrooms": updated_property.get("bedrooms"),
             "bathrooms": updated_property.get("bathrooms"),
             "lease_length": updated_property.get("lease_length"),
-            "pets_allowed": updated_property.get("pets_allowed") == "Yes",
+            # Tri-state string, same rationale as property_payload_from_form.
+            "pets_allowed": updated_property.get("pets_allowed") or "Unknown",
             "blurb": updated_property.get("blurb"),
             "description": updated_property.get("description"),
             "included_amenities": updated_property.get("included_amenities", []),
@@ -810,12 +947,53 @@ class PropertyService:
         response = requests.put(
             f"{self.config.api_base_url}/properties/{property_id}/details",
             json=update_payload,
+            headers=self._write_headers(),
             timeout=20,
         )
         response.raise_for_status()
         self.notifications.log_site_change(actor_email, "property_updated", {"property_id": property_id})
         self.trigger_background_refresh(actor_email)
         self._safe_zillow_publish("publish_update", {**update_payload, "id": property_id})
+
+    def hidden_listing_ids(self) -> set[str]:
+        if self.storage is None:
+            return set()
+        return set(self.storage.get_hidden_listing_ids())
+
+    def is_listing_hidden(self, property_id: str) -> bool:
+        return str(property_id) in self.hidden_listing_ids()
+
+    def get_visible_properties(self) -> list[dict]:
+        """Cached properties minus the ones an admin has deactivated.
+
+        Public pages (/for-rent, sitemap) render this; Manage Listings keeps
+        using get_cached_properties so admins still see hidden listings.
+        """
+        hidden = self.hidden_listing_ids()
+        if not hidden:
+            return self.get_cached_properties()
+        return [
+            item for item in self.get_cached_properties()
+            if str(item.get("id")) not in hidden
+        ]
+
+    def set_listing_active(self, property_id: str, active: bool, actor_email: str) -> None:
+        """Reversible unpublish: hide/show a listing on the public site.
+
+        The upstream property record is untouched (its table has no
+        active/status column) — the hidden set is site-local state, which is
+        what makes this safely reversible, unlike delete_property.
+        """
+        if self.storage is None:
+            raise RuntimeError("No storage service configured; cannot hide listings.")
+        if not self.get_property(property_id):
+            raise KeyError("Property not found")
+        self.storage.set_listing_hidden(property_id, not active)
+        self.notifications.log_site_change(
+            actor_email,
+            "property_reactivated" if active else "property_deactivated",
+            {"property_id": property_id},
+        )
 
     def delete_property(self, property_id: str, actor_email: str) -> None:
         # Validate the id at the boundary so a malformed value (e.g. "../foo"
@@ -826,7 +1004,11 @@ class PropertyService:
         # check has to live here.
         if not PROPERTY_ID_PATTERN.match(property_id or ""):
             raise KeyError("Invalid property id.")
-        response = requests.delete(f"{self.config.api_base_url}/properties/{property_id}", timeout=20)
+        response = requests.delete(
+            f"{self.config.api_base_url}/properties/{property_id}",
+            headers=self._write_headers(),
+            timeout=20,
+        )
         if response.status_code not in (200, 204):
             raise RuntimeError(f"Remote API responded {response.status_code}: {response.text}")
         with self.cache_lock:
@@ -844,6 +1026,7 @@ class PropertyService:
         response = requests.put(
             f"{self.config.api_base_url}/properties/{property_id}/details",
             json={"for_sale": new_status},
+            headers=self._write_headers(),
             timeout=20,
         )
         response.raise_for_status()
@@ -913,25 +1096,32 @@ class PropertyService:
             raise UploadValidationError("Failed to process image.") from exc
 
         relative_url = url_for("static", filename=f"uploads/{new_filename}", _external=False)
-        # url_root is taken from Host header and can be spoofed, so we only
-        # forward the stable relative URL to the upstream API.
         absolute_url = relative_url
+        # Photos live in the upstream S3 bucket (the photos endpoint lists
+        # s3://somewheriaweb/{property_id}/), so the processed image bytes
+        # are shipped up as base64; the local static/uploads copy is only a
+        # fallback while the next cache refresh picks up the S3 URL.
         try:
+            with open(save_path, "rb") as fh:
+                encoded = base64.b64encode(fh.read()).decode("ascii")
             assoc_response = requests.post(
                 f"{self.config.api_base_url}/properties/{property_id}/photos",
-                json={"image_url": absolute_url},
-                timeout=20,
+                json={"filename": new_filename, "content_base64": encoded},
+                headers=self._write_headers(),
+                timeout=30,
             )
             # Without raise_for_status() a 4xx/5xx response is silently
             # swallowed: the local file is saved and the change-log records
-            # a successful "image_added", but the upstream never associates
-            # the URL, so the next cache refresh blanks it from the listing
-            # and the local file becomes orphaned in static/uploads. Treat
-            # the HTTP error the same way as a connection failure and at
-            # least surface a warning so the operator can investigate.
+            # a successful "image_added", but the upstream never stores the
+            # photo, so the next cache refresh blanks it from the listing.
+            # Treat the HTTP error like a connection failure and surface a
+            # warning so the operator can investigate.
             assoc_response.raise_for_status()
+            uploaded = assoc_response.json()
+            if isinstance(uploaded, dict) and uploaded.get("url"):
+                absolute_url = uploaded["url"]
         except Exception as exc:
-            self.logger.warning("Failed to associate uploaded image with property %s: %s", property_id, exc)
+            self.logger.warning("Failed to upload image for property %s upstream: %s", property_id, exc)
         self.trigger_background_refresh(actor_email)
         self.notifications.notify_image_edit([absolute_url])
         self.notifications.log_site_change(
@@ -958,6 +1148,9 @@ class PropertyService:
             property_info = response.json()
         except Exception:
             return None
+        if not isinstance(property_info, dict):
+            return None
+        property_info = self._unwrap_details_payload(property_info, property_id)
         if not isinstance(property_info, dict):
             return None
         name = property_info.get("name")

@@ -1,10 +1,185 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-10 md:py-12 max-w-full sm:max-w-2xl mx-auto bg-white dark:bg-neutral-950 rounded shadow">
-    <h1 class="text-3xl font-bold mb-4 text-[#111518] dark:text-white">Welcome to Somewheria, LLC.</h1>
-    <p class="mb-6 text-[#111518] dark:text-neutral-200">Find your next rental in style and comfort.</p>
-    <a class="bg-blue-600 hover:bg-blue-800 dark:bg-blue-400 dark:hover:bg-blue-600 text-white dark:text-[#111518] px-6 py-3 rounded transition-colors" href="{{ url_for('for_rent') }}">
-        View Properties
-    </a>
+<div class="sw-home">
+
+  <!-- Hero: headline left, plat map right -->
+  <section class="sw-wrap sw-hero">
+    <div>
+      <p class="sw-eyebrow sw-rise">Somewheria, LLC &middot; Rental homes</p>
+      <h1 class="sw-h1 sw-rise sw-rise-2">Find your <span class="sw-mark">somewhere</span>.</h1>
+      <p class="sw-lede sw-rise sw-rise-3">
+        Somewheria is a small, family-run rental company. We keep a short list
+        of homes and look after them &mdash; and the people in them &mdash; ourselves.
+        No call centers. When you have a question, you talk to a real person.
+      </p>
+      <div class="sw-hero-ctas sw-rise sw-rise-4">
+        <a class="sw-btn sw-btn-primary" href="{{ url_for('for_rent') }}">See what&rsquo;s for rent</a>
+        <a class="sw-btn sw-btn-ghost" href="#how-it-works">How renting works</a>
+      </div>
+    </div>
+
+    <div class="sw-map" aria-hidden="true">
+      <svg viewBox="0 0 520 470" fill="none" xmlns="http://www.w3.org/2000/svg" role="presentation" focusable="false">
+        <!-- outer tract boundary -->
+        <path class="sw-draw sw-d7" d="M28 50 L336 38 L502 66 L490 380 L298 448 L42 418 Z"
+              stroke="var(--sw-line)" stroke-width="1.4" stroke-dasharray="6 5" pathLength="130"/>
+
+        <!-- parcels, north of the lane -->
+        <path class="sw-draw sw-d1" d="M40 62 L172 46 L178 226 L46 238 Z"
+              stroke="var(--sw-line)" stroke-width="1.1" pathLength="130"/>
+        <path class="sw-draw sw-d2" d="M184 45 L334 50 L328 214 L190 226 Z"
+              stroke="var(--sw-line)" stroke-width="1.1" pathLength="130"/>
+        <path class="sw-draw sw-d3" d="M346 52 L490 76 L482 202 L340 214 Z"
+              stroke="var(--sw-line)" stroke-width="1.1" pathLength="130"/>
+
+        <!-- parcels, south of the lane -->
+        <path class="sw-draw sw-d4" d="M48 270 L180 258 L186 394 L54 408 Z"
+              stroke="var(--sw-line)" stroke-width="1.1" pathLength="130"/>
+        <path class="sw-draw sw-d5" d="M192 257 L332 246 L338 414 L298 436 L196 400 Z"
+              fill="var(--sw-brass)" fill-opacity="0.12"
+              stroke="var(--sw-brass)" stroke-width="1.6" pathLength="130"/>
+        <path class="sw-draw sw-d6" d="M344 245 L480 234 L474 372 L348 408 Z"
+              stroke="var(--sw-line)" stroke-width="1.1" pathLength="130"/>
+
+        <!-- the lane -->
+        <path d="M30 254 C 180 242, 340 232, 492 220" stroke="var(--sw-line-faint)" stroke-width="1" stroke-dasharray="8 6"/>
+        <text class="sw-mono" x="200" y="243" transform="rotate(-3.5 200 243)"
+              font-size="9" letter-spacing="3" fill="var(--sw-ink-soft)">SOMEWHERIA&#8201;LN</text>
+
+        <!-- contour hints -->
+        <path d="M362 108 q 42 -15 84 5" stroke="var(--sw-line-faint)" stroke-width="1"/>
+        <path d="M356 132 q 48 -17 96 6" stroke="var(--sw-line-faint)" stroke-width="1"/>
+
+        <!-- bearings -->
+        <text class="sw-mono" x="88" y="36" transform="rotate(-2.5 88 36)" font-size="8" letter-spacing="1.5"
+              fill="var(--sw-ink-soft)">N&#8201;82&#176;30&#8242;E &#8212; 212.4&#8242;</text>
+        <text class="sw-mono" x="500" y="150" transform="rotate(88 500 150)" font-size="8" letter-spacing="1.5"
+              fill="var(--sw-ink-soft)">S&#8201;12&#176;08&#8242;W &#8212; 96.5&#8242;</text>
+        <text class="sw-mono" x="140" y="442" transform="rotate(6 140 442)" font-size="8" letter-spacing="1.5"
+              fill="var(--sw-ink-soft)">S&#8201;78&#176;54&#8242;E &#8212; 164.2&#8242;</text>
+
+        <!-- lot labels -->
+        <text class="sw-mono" x="108" y="146" text-anchor="middle" font-size="9.5" letter-spacing="2.5" fill="var(--sw-ink-soft)">LOT&#8201;01</text>
+        <text class="sw-mono" x="258" y="136" text-anchor="middle" font-size="9.5" letter-spacing="2.5" fill="var(--sw-ink-soft)">LOT&#8201;02</text>
+        <text class="sw-mono" x="412" y="140" text-anchor="middle" font-size="9.5" letter-spacing="2.5" fill="var(--sw-ink-soft)">LOT&#8201;03</text>
+        <text class="sw-mono" x="116" y="338" text-anchor="middle" font-size="9.5" letter-spacing="2.5" fill="var(--sw-ink-soft)">LOT&#8201;04</text>
+        <text class="sw-mono" x="410" y="324" text-anchor="middle" font-size="9.5" letter-spacing="2.5" fill="var(--sw-ink-soft)">LOT&#8201;06</text>
+
+        <!-- survey pins on the open lot -->
+        <circle cx="192" cy="257" r="3" fill="var(--sw-brass)"/>
+        <circle cx="332" cy="246" r="3" fill="var(--sw-brass)"/>
+        <circle cx="338" cy="414" r="3" fill="var(--sw-brass)"/>
+        <circle cx="298" cy="436" r="3" fill="var(--sw-brass)"/>
+        <circle cx="196" cy="400" r="3" fill="var(--sw-brass)"/>
+        <!-- a few quiet pins elsewhere -->
+        <circle cx="40" cy="62" r="2.2" fill="var(--sw-line)"/>
+        <circle cx="334" cy="50" r="2.2" fill="var(--sw-line)"/>
+        <circle cx="490" cy="76" r="2.2" fill="var(--sw-line)"/>
+        <circle cx="48" cy="270" r="2.2" fill="var(--sw-line)"/>
+        <circle cx="474" cy="372" r="2.2" fill="var(--sw-line)"/>
+
+        <!-- the stamp -->
+        <g class="sw-stamp">
+          <g transform="translate(263 336)">
+            <rect x="-80" y="-31" width="160" height="62" stroke="var(--sw-brass)" stroke-width="2.5"/>
+            <rect x="-74" y="-25" width="148" height="50" stroke="var(--sw-brass)" stroke-width="1"/>
+            <text class="sw-display" x="0" y="0" text-anchor="middle" font-size="21" font-weight="800"
+                  letter-spacing="3" fill="var(--sw-brass)">FOR&#8201;RENT</text>
+            <text class="sw-mono" x="0" y="16" text-anchor="middle" font-size="8" letter-spacing="2.5"
+                  fill="var(--sw-brass)">SOMEWHERIA</text>
+          </g>
+        </g>
+
+        <!-- north arrow -->
+        <g stroke="var(--sw-ink-soft)" stroke-width="1.2">
+          <line x1="492" y1="436" x2="492" y2="408"/>
+          <path d="M486 416 L492 406 L498 416" fill="none"/>
+        </g>
+        <text class="sw-mono" x="492" y="452" text-anchor="middle" font-size="9" fill="var(--sw-ink-soft)">N</text>
+
+        <!-- scale bar -->
+        <g stroke="var(--sw-ink-soft)" stroke-width="1">
+          <line x1="36" y1="448" x2="116" y2="448"/>
+          <line x1="36" y1="444" x2="36" y2="452"/>
+          <line x1="76" y1="445" x2="76" y2="451"/>
+          <line x1="116" y1="444" x2="116" y2="452"/>
+        </g>
+        <text class="sw-mono" x="124" y="451" font-size="8" letter-spacing="1" fill="var(--sw-ink-soft)">60&#8201;FT</text>
+      </svg>
+      <p class="sw-map-caption">Plat of Somewheria &mdash; sheet 1 of 1</p>
+    </div>
+  </section>
+
+  <div class="sw-wrap"><hr class="sw-rule"></div>
+
+  <!-- Process: a real sequence, each step is a real feature of the site -->
+  <section id="how-it-works" class="sw-wrap sw-section">
+    <p class="sw-eyebrow">The process &middot; 01&ndash;04</p>
+    <h2 class="sw-h2">How renting here works</h2>
+    <div class="sw-steps">
+      <div class="sw-parcel">
+        <div class="sw-parcel-num">01 / LOOK</div>
+        <h3>Browse what&rsquo;s open</h3>
+        <p>Every available home is listed with photos, rent, and details. Filter by bedrooms, pets, rent, and accessibility.</p>
+      </div>
+      <div class="sw-parcel">
+        <div class="sw-parcel-num">02 / TOUR</div>
+        <h3>Walk through it</h3>
+        <p>Request a tour from any listing and pick a time that works for you. You&rsquo;ll see the home before you commit to anything.</p>
+      </div>
+      <div class="sw-parcel">
+        <div class="sw-parcel-num">03 / SIGN</div>
+        <h3>Sign your lease</h3>
+        <p>Review and sign your lease online, then keep a copy in your renter dashboard whenever you need it.</p>
+      </div>
+      <div class="sw-parcel">
+        <div class="sw-parcel-num">04 / MOVE&#8201;IN</div>
+        <h3>Get the keys</h3>
+        <p>Once you&rsquo;re in, report anything that needs fixing straight from your dashboard &mdash; and track it until it&rsquo;s done.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="sw-wrap"><hr class="sw-rule"></div>
+
+  <!-- The person behind it -->
+  <section class="sw-wrap sw-section">
+    <div class="sw-person">
+      <div>
+        <p class="sw-eyebrow">Who you&rsquo;ll talk to</p>
+        <h2 class="sw-h2">A person, not a portal.</h2>
+        <p class="sw-lede">
+          Somewheria is family-run, with a short list of homes we look after
+          ourselves. Questions about a listing go straight to the owner &mdash;
+          before, during, and after your lease.
+        </p>
+      </div>
+      <div class="sw-parcel">
+        <div class="sw-parcel-num">CONTACT US</div>
+        <div class="sw-contact-row" style="margin-top:0.9rem;">
+          <span class="sw-contact-label">TEL</span>
+          <a href="tel:+15702369960">(570) 236-9960</a>
+        </div>
+        <div class="sw-contact-row">
+          <span class="sw-contact-label">MAIL</span>
+          <a href="{{ url_for('contact') }}">Use our contact form</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Closing band -->
+  <section class="sw-wrap sw-section">
+    <div class="sw-band">
+      <p class="sw-eyebrow">Your lot is waiting</p>
+      <h2 class="sw-h2 sw-display">Your somewhere is on the map.</h2>
+      <p>See what&rsquo;s open now, or leave your email and we&rsquo;ll tell you when something new is listed.</p>
+      <div class="sw-band-ctas">
+        <a class="sw-btn sw-btn-primary" href="{{ url_for('for_rent') }}">See what&rsquo;s for rent</a>
+        <a class="sw-btn sw-btn-ghost" href="{{ url_for('for_rent') }}#notify">Get notified about new homes</a>
+      </div>
+    </div>
+  </section>
+
 </div>
 {% endblock %}

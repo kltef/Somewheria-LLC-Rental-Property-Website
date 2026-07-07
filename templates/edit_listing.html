@@ -1,83 +1,98 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-40 flex flex-1 justify-center py-5 bg-white dark:bg-neutral-950 rounded shadow">
-  <div class="layout-content-container flex flex-col max-w-[960px] flex-1">
-    <div class="flex flex-wrap justify-between gap-3 p-4"><p class="text-[#181111] dark:text-white tracking-light text-[32px] font-bold leading-tight min-w-72">Edit your listing</p></div>
-    <form id="edit-listing-form">
+<div class="sw-page sw-page-narrow">
+  <p class="sw-eyebrow">Owner tools</p>
+  <h1 class="sw-title">Edit your listing</h1>
+  <p class="sw-sub">Update this property's facts, amenities, and photos. Nothing changes on the live listing until you save.</p>
+    <form id="edit-listing-form" class="mt-8">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Address</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="address" value="{{ property.address }}" />
-        </label>
+      <div class="sw-panel">
+        <h3 class="sw-h3">Listing facts</h3>
+        <div class="mt-5">
+        <div class="sw-field">
+          <label>
+            <span class="sw-label">Listing name</span>
+            <input class="sw-input" name="name" value="{{ property.name }}" placeholder="e.g., The Maple House" required />
+          </label>
+        </div>
+        <div class="sw-field">
+          <label>
+            <span class="sw-label">Address</span>
+            <input class="sw-input" name="address" value="{{ property.address }}" />
+          </label>
+        </div>
+        <div class="sw-field">
+          <label>
+            <span class="sw-label">Description</span>
+            <textarea class="sw-input min-h-36" name="description">{{ property.description }}</textarea>
+          </label>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Deposit</span>
+              <input class="sw-input" name="deposit" value="{{ property.deposit }}" />
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Square footage</span>
+              <input class="sw-input" name="sqft" value="{{ property.sqft }}" />
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Lease term</span>
+              <select class="sw-input" name="lease_length">
+                <option value="12 months" {% if property.lease_length == '12 months' %}selected{% endif %}>12 months</option>
+                <option value="6 months" {% if property.lease_length == '6 months' %}selected{% endif %}>6 months</option>
+                <option value="month-to-month" {% if property.lease_length == 'month-to-month' %}selected{% endif %}>Month-to-month</option>
+              </select>
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Rental rate</span>
+              <input class="sw-input" name="rent" value="{{ property.rent }}" />
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Pets allowed</span>
+              <select class="sw-input" name="pets_allowed">
+                <option value="Yes" {% if property.pets_allowed == 'Yes' %}selected{% endif %}>Yes</option>
+                <option value="No" {% if property.pets_allowed == 'No' %}selected{% endif %}>No</option>
+                <option value="Unknown" {% if property.pets_allowed == 'Unknown' %}selected{% endif %}>Unknown</option>
+              </select>
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Bedrooms</span>
+              <input class="sw-input" name="bedrooms" value="{{ property.bedrooms }}" />
+            </label>
+          </div>
+          <div class="sw-field">
+            <label>
+              <span class="sw-label">Bathrooms</span>
+              <input class="sw-input" name="bathrooms" value="{{ property.bathrooms }}" />
+            </label>
+          </div>
+        </div>
+        <div class="sw-field" style="margin-bottom:0">
+          <label>
+            <span class="sw-label">3D tour URL</span>
+            <input type="url" inputmode="url" name="tour_url" value="{{ property.tour_url or '' }}"
+              placeholder="https://my.matterport.com/show/?m=..."
+              class="sw-input" />
+            <span class="sw-help block">Optional. Paste a Matterport or Kuula share URL (https only). Leave blank to hide the embed on the listing page.</span>
+          </label>
+        </div>
+        </div>
       </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Description</p>
-          <textarea class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none min-h-36 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="description">{{ property.description }}</textarea>
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Deposit</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="deposit" value="{{ property.deposit }}" />
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Square Footage</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="sqft" value="{{ property.sqft }}" />
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Lease Term</p>
-          <select class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 bg-[image:--select-button-svg] placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="lease_length">
-            <option value="12 months" {% if property.lease_length == '12 months' %}selected{% endif %}>12 months</option>
-            <option value="6 months" {% if property.lease_length == '6 months' %}selected{% endif %}>6 months</option>
-            <option value="month-to-month" {% if property.lease_length == 'month-to-month' %}selected{% endif %}>Month-to-month</option>
-          </select>
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Rental Rate</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="rent" value="{{ property.rent }}" />
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Pet Allowed</p>
-          <select class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 bg-[image:--select-button-svg] placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="pets_allowed">
-            <option value="Yes" {% if property.pets_allowed == 'Yes' %}selected{% endif %}>Yes</option>
-            <option value="No" {% if property.pets_allowed == 'No' %}selected{% endif %}>No</option>
-            <option value="Unknown" {% if property.pets_allowed == 'Unknown' %}selected{% endif %}>Unknown</option>
-          </select>
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Number of Bedrooms</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="bedrooms" value="{{ property.bedrooms }}" />
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">Number of Bathrooms</p>
-          <input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" name="bathrooms" value="{{ property.bathrooms }}" />
-        </label>
-      </div>
-      <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-        <label class="flex flex-col min-w-40 flex-1">
-          <p class="text-[#181111] dark:text-white text-base font-medium leading-normal pb-2">3D Tour URL</p>
-          <input type="url" inputmode="url" name="tour_url" value="{{ property.tour_url or '' }}"
-            placeholder="https://my.matterport.com/show/?m=..."
-            class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] dark:text-white focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] dark:bg-neutral-900 focus:border-none h-14 placeholder:text-[#886364] dark:placeholder:text-neutral-400 p-4 text-base font-normal leading-normal" />
-          <span class="text-xs text-gray-600 dark:text-neutral-400 pt-1">Optional. Paste a Matterport or Kuula share URL (https only). Leave blank to hide the embed on the listing page.</span>
-        </label>
-      </div>
-      <h3 class="text-[#181111] dark:text-white text-lg font-bold leading-tight tracking-[-0.015em] px-4 pb-2 pt-4">Amenities</h3>
-      <div class="px-4 py-3">
+      <div class="sw-panel mt-6">
+        <h3 class="sw-h3">Amenities</h3>
+        <div class="mt-5">
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
           {% set common_amenities = [
             'Air Conditioning', 'Heating', 'Dishwasher', 'Microwave', 'Refrigerator',
@@ -124,31 +139,35 @@
             {% set aliases = aliases + [amenity] %}
             {% set aliases = aliases | map('lower') | map('trim') | list %}
           <label class="flex items-center space-x-2 cursor-pointer">
-            <input type="checkbox" name="amenities" value="{{ amenity }}" 
-                   class="w-4 h-4 text-blue-600 dark:text-blue-400 bg-gray-100 dark:bg-neutral-900 border-gray-300 dark:border-neutral-800 rounded focus:ring-blue-500"
+            <input type="checkbox" name="amenities" value="{{ amenity }}"
+                   class="w-4 h-4 rounded" style="accent-color: var(--sw-brass)"
                    {% if aliases|select('in', normalized_amenities)|list|length > 0 %}checked{% endif %}>
-              <span class="text-[#181111] dark:text-white text-sm">{{ amenity }}</span>
+              <span class="text-sm">{{ amenity }}</span>
             </label>
           {% endfor %}
         </div>
         
         <!-- Custom amenities input -->
-        <div class="mt-4">
-          <label class="block text-[#181111] dark:text-white text-sm font-medium mb-2">Custom Amenities (comma-separated)</label>
-          <input type="text" name="custom_amenities" 
-                 class="w-full p-2 border border-gray-300 dark:border-neutral-800 rounded-md bg-[#f4f0f0] dark:bg-neutral-900 text-[#181111] dark:text-white"
+        <div class="mt-5">
+          <label>
+            <span class="sw-label">Custom amenities (comma-separated)</span>
+            <input type="text" name="custom_amenities"
+                 class="sw-input"
                  placeholder="e.g., Rooftop access, Bike storage, Concierge"
                  value="{{ property.custom_amenities or '' }}">
+          </label>
+        </div>
         </div>
       </div>
-      <h3 class="text-[#181111] dark:text-white text-lg font-bold leading-tight tracking-[-0.015em] px-4 pb-2 pt-4">Photos</h3>
-      <div class="px-4 py-3">
-        <div class="flex justify-between items-center mb-4">
-          <span class="text-sm text-gray-600 dark:text-gray-300">Click photos to select/deselect. Selected photos will be deleted when you save.</span>
-          <button type="button" id="select-all-btn" class="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-600 text-sm font-medium transition-colors">Select All</button>
+      <div class="sw-panel mt-6">
+        <h3 class="sw-h3">Photos</h3>
+        <div class="mt-5">
+        <div class="flex justify-between items-center gap-4 flex-wrap mb-4">
+          <span class="sw-help" style="margin-top:0">Click photos to select or deselect. Selected photos are deleted when you save.</span>
+          <button type="button" id="select-all-btn" class="sw-btn sw-btn-ghost sw-btn-sm">Select All</button>
         </div>
-        
-          <div id="photo-grid" class="w-full gap-2 overflow-y-auto overflow-x-hidden bg-white rounded-xl grid grid-cols-3 aspect-[3/2] max-h-[420px] scrollbar-thin scrollbar-thumb-blue-300 scrollbar-track-blue-50" style="scrollbar-width: thin;">
+
+          <div id="photo-grid" class="w-full gap-2 overflow-y-auto overflow-x-hidden rounded grid grid-cols-3 aspect-[3/2] max-h-[420px]" style="scrollbar-width: thin;">
     {% for img in property.photos %}
       <div class="photo-item relative w-full bg-center bg-no-repeat bg-cover aspect-square rounded-lg cursor-pointer border-2 border-transparent hover:border-blue-400 transition-all" 
            style="background-image: url('{{ img }}');" 
@@ -163,32 +182,30 @@
     {% endfor %}
   </div>
         
-        <div class="flex gap-2 mt-4">
+        <div class="flex flex-wrap gap-2 mt-4">
           <form id="image-upload-form" enctype="multipart/form-data" class="flex items-center">
             <input type="file" id="image-upload-input" name="file" accept="image/*" multiple style="display:none;" />
-            <button type="button" id="add-image-btn" class="flex items-center justify-center px-4 py-2 bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 gap-2 text-sm font-medium transition-colors">
+            <button type="button" id="add-image-btn" class="sw-btn sw-btn-ghost sw-btn-sm">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 256 256">
                 <path d="M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z"></path>
               </svg>
-              Add Images
+              Add images
             </button>
           </form>
-          
-          <button type="button" id="delete-selected-btn" class="px-4 py-2 bg-red-600 dark:bg-red-400 text-white dark:text-[#111518] rounded-lg hover:bg-red-700 dark:hover:bg-red-600 text-sm font-medium opacity-50 transition-colors" disabled>
-            Delete Selected
+
+          <button type="button" id="delete-selected-btn" class="sw-btn sw-btn-danger sw-btn-sm opacity-50" disabled>
+            Delete selected
           </button>
         </div>
+        </div>
       </div>
-      <div class="flex px-4 py-3 justify-end">
-        <button id="save-changes-btn" class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-4 bg-[#e82630] dark:bg-red-400 text-white dark:text-[#111518] text-sm font-bold leading-normal tracking-[0.015em] transition-colors">
-          <span class="truncate">Save Changes</span>
-        </button>
+      <div class="flex justify-end mt-6">
+        <button id="save-changes-btn" class="sw-btn sw-btn-primary">Save changes</button>
       </div>
     </form>
-  </div>
 </div>
-<div id="save-toast" class="fixed top-6 left-1/2 transform -translate-x-1/2 z-50 bg-green-600 dark:bg-green-400 text-white dark:text-[#111518] px-6 py-3 rounded shadow-lg text-lg font-semibold opacity-0 pointer-events-none transition-opacity duration-300">
-  Changes have been saved!
+<div id="save-toast" class="fixed top-6 left-1/2 transform -translate-x-1/2 z-50 sw-alert sw-alert-ok shadow-lg font-semibold opacity-0 pointer-events-none transition-opacity duration-300">
+  Changes saved.
 </div>
 <script>
   // Photo management and form submission
@@ -367,275 +384,3 @@
   }
 </script>
 {% endblock %}
-        <div class="px-40 flex flex-1 justify-center py-5">
-          <div class="layout-content-container flex flex-col max-w-[960px] flex-1">
-            <div class="flex flex-wrap justify-between gap-3 p-4"><p class="text-[#181111] tracking-light text-[32px] font-bold leading-tight min-w-72">Edit your listing</p></div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Address</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="address"
-                  value="{{ property.address }}"
-                />
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Description</p>
-                <textarea
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none min-h-36 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="description"
-                >{{ property.description }}</textarea>
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Deposit</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="deposit"
-                  value="{{ property.deposit }}"
-                />
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Square Footage</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="sqft"
-                  value="{{ property.sqft }}"
-                />
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Lease Term</p>
-                <select
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 bg-[image:--select-button-svg] placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="lease_length"
-                >
-                  <option value="12 months" {% if property.lease_length == '12 months' %}selected{% endif %}>12 months</option>
-                  <option value="6 months" {% if property.lease_length == '6 months' %}selected{% endif %}>6 months</option>
-                  <option value="month-to-month" {% if property.lease_length == 'month-to-month' %}selected{% endif %}>Month-to-month</option>
-                </select>
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Rental Rate</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="rent"
-                  value="{{ property.rent }}"
-                />
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Pet Allowed</p>
-                <select
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 bg-[image:--select-button-svg] placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="pets_allowed"
-                >
-                  <option value="Yes" {% if property.pets_allowed == 'Yes' %}selected{% endif %}>Yes</option>
-                  <option value="No" {% if property.pets_allowed == 'No' %}selected{% endif %}>No</option>
-                  <option value="Unknown" {% if property.pets_allowed == 'Unknown' %}selected{% endif %}>Unknown</option>
-                </select>
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Number of Bedrooms</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="bedrooms"
-                  value="{{ property.bedrooms }}"
-                />
-              </label>
-            </div>
-            <div class="flex max-w-[480px] flex-wrap items-end gap-4 px-4 py-3">
-              <label class="flex flex-col min-w-40 flex-1">
-                <p class="text-[#181111] text-base font-medium leading-normal pb-2">Number of Bathrooms</p>
-                <input
-                  class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#181111] focus:outline-0 focus:ring-0 border-none bg-[#f4f0f0] focus:border-none h-14 placeholder:text-[#886364] p-4 text-base font-normal leading-normal"
-                  name="bathrooms"
-                  value="{{ property.bathrooms }}"
-                />
-              </label>
-            </div>
-            <h3 class="text-[#181111] text-lg font-bold leading-tight tracking-[-0.015em] px-4 pb-2 pt-4">Amenities</h3>
-            <div class="px-4">
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                  checked=""
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Wi-Fi</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                  checked=""
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Air Conditioning</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                  checked=""
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Heating</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Washer</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Dryer</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Washer Dryer Hookup</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Pool</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Snow Removal</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Lawn Mowing Service</p>
-              </label>
-              <label class="flex gap-x-3 py-3 flex-row">
-                <input
-                  type="checkbox"
-                  class="h-5 w-5 rounded border-[#e5dcdc] border-2 bg-transparent text-[#e82630] checked:bg-[#e82630] checked:border-[#e82630] checked:bg-[image:--checkbox-tick-svg] focus:ring-0 focus:ring-offset-0 focus:border-[#e5dcdc] focus:outline-none"
-                />
-                <p class="text-[#181111] text-base font-normal leading-normal">Common Area Cleaning Service</p>
-              </label>
-            </div>
-            <h3 class="text-[#181111] text-lg font-bold leading-tight tracking-[-0.015em] px-4 pb-2 pt-4">Photos</h3>
-            <div class="flex w-full grow bg-white @container p-4">
-              <div class="w-full gap-1 overflow-hidden bg-white @[480px]:gap-2 aspect-[3/2] rounded-xl grid grid-cols-[2fr_1fr_1fr]">
-                {% for img in property.photos %}
-                  <div class="w-full bg-center bg-no-repeat bg-cover aspect-auto rounded-none" style="background-image: url('{{ img }}');"></div>
-                {% endfor %}
-              </div>
-            </div>
-            <div class="flex px-4 py-3 justify-start">
-              <form id="image-upload-form" enctype="multipart/form-data" class="flex items-center">
-                <input type="file" id="image-upload-input" name="file" accept="image/*" style="display:none;" />
-                <button type="button"
-                  id="add-image-btn"
-                  class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-4 bg-[#f4f0f0] text-[#181111] gap-2 pl-4 text-sm font-bold leading-normal tracking-[0.015em]"
-                >
-                  <div class="text-[#181111]" data-icon="Plus" data-size="20px" data-weight="regular">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20px" height="20px" fill="currentColor" viewBox="0 0 256 256">
-                      <path d="M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z"></path>
-                    </svg>
-                  </div>
-                  <span class="truncate">Add Images</span>
-                </button>
-              </form>
-            </div>
-            <div class="flex px-4 py-3 justify-end">
-              <button
-                id="save-changes-btn"
-                class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-full h-10 px-4 bg-[#e82630] text-white text-sm font-bold leading-normal tracking-[0.015em]"
-              >
-                <span class="truncate">Save Changes</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <script>
-      // AJAX form submission for auto-update
-      document.addEventListener('DOMContentLoaded', function() {
-        const saveBtn = document.getElementById('save-changes-btn');
-        const form = saveBtn.closest('form') || document.querySelector('form');
-        if (form) {
-          form.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const formData = new FormData(form);
-            fetch(`{{ url_for('save_edit', id=property_id) }}`, {
-              method: 'POST',
-              body: formData
-            })
-            .then(res => {
-              if (res.redirected) {
-                window.location.href = res.url;
-              } else {
-                return res.text();
-              }
-            })
-            .catch(err => alert('Error saving changes: ' + err));
-          });
-        }
-
-        // Add Images button functionality
-        const addImageBtn = document.getElementById('add-image-btn');
-        const imageInput = document.getElementById('image-upload-input');
-        const imageForm = document.getElementById('image-upload-form');
-        addImageBtn.addEventListener('click', function(e) {
-          imageInput.click();
-        });
-        imageInput.addEventListener('change', function(e) {
-          if (imageInput.files.length > 0) {
-            const file = imageInput.files[0];
-            const uploadData = new FormData();
-            uploadData.append('file', file);
-            fetch(`/upload-image/{{ property_id }}`, {
-              method: 'POST',
-              body: uploadData
-            })
-            .then(res => res.json())
-            .then(data => {
-              if (data.success && data.new_image_url) {
-                // Add new image to photo grid
-                const photoGrid = document.querySelector('.grid.grid-cols-[2fr_1fr_1fr]');
-                if (photoGrid) {
-                  const div = document.createElement('div');
-                  div.className = 'w-full bg-center bg-no-repeat bg-cover aspect-auto rounded-none';
-                  div.style.backgroundImage = `url('${data.new_image_url}')`;
-                  photoGrid.appendChild(div);
-                }
-              } else {
-                alert('Image upload failed.');
-              }
-            })
-            .catch(err => alert('Image upload error: ' + err));
-          }
-        });
-      });
-    </script>
-  </body>
-</html>

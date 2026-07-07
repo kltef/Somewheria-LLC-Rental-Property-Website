@@ -1,8 +1,10 @@
 {% extends "error_base.html" %}
 {% set error_code = "401" %}
-{% set error_title = "Lease Key Needed" %}
-{% set error_message = "You need to sign in before entering this part of the site. Think of it like needing the right key before opening the rental house." %}
-{% set primary_label = "Go to Login" %}
+{% set error_eyebrow = "401 — Signature required" %}
+{% set error_title = "Sign in to view this parcel." %}
+{% set error_message = "This part of the site is only shown to signed-in users. Sign in with your account and continue where you left off." %}
+{% set primary_label = "Go to sign-in" %}
 {% set primary_href = url_for('login') %}
-{% set secondary_label = "Return Home" %}
-{% set house_note = "Signing in should bring you back to the main lobby so you can continue where you left off." %}
+{% set secondary_label = "Back to home" %}
+{% set secondary_href = url_for('home') %}
+{% set house_note = "Once you sign in, you can return to the page you were trying to reach." %}

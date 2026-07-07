@@ -11,7 +11,7 @@ from ``somewheria_app/__init__.py``.
 
 from __future__ import annotations
 
-from flask import redirect, render_template, request, url_for
+from flask import abort, redirect, render_template, request, url_for
 
 from ..services.auth import (
     admin_required,
@@ -52,6 +52,11 @@ def _renter_email_default(services, email: str) -> bool:
 
 
 def ticket_new_form():
+    # Tickets are filed by renters (or anonymous visitors), not by the staff
+    # who service them. Send admins to their management view instead of the
+    # submission form.
+    if _is_admin():
+        return redirect(url_for("admin_ticket_list"))
     services = get_services()
     properties = services.properties.get_cached_properties() or []
     user = get_current_user() or {}
@@ -71,6 +76,10 @@ def ticket_new_form():
 
 @rate_limit(limit=5, window_seconds=600)
 def ticket_new_submit():
+    # Mirror the GET guard for hand-crafted POSTs: staff manage tickets, they
+    # don't file them.
+    if _is_admin():
+        abort(403)
     services = get_services()
     user = get_current_user() or {}
     submitter_email = (user.get("email") or "").lower()

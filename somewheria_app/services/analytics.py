@@ -1,12 +1,48 @@
 import collections
 import datetime
 import json
+import re
 import threading
 import time
 
 from flask import current_app, g, request, session
 
 from .console import get_console_logger
+
+
+# Substrings that mark an automated client. A public site is hit by dozens of
+# distinct scanner/crawler IPs a day (vulnerability scanners, SEO/AI crawlers,
+# uptime monitors); counting each as a "unique user" made the numbers
+# meaningless. Matched case-insensitively against the User-Agent.
+_BOT_UA_RE = re.compile(
+    r"bot|crawl|spider|scan|slurp|curl|wget|python-requests|python-httpx|"
+    r"http[-_]?client|libwww|okhttp|go-http|java/|apache-httpclient|"
+    r"headless|phantom|puppeteer|playwright|selenium|"
+    r"leakix|l9scan|masscan|zgrab|nuclei|censys|nmap|"
+    r"semrush|ahrefs|mj12|dotbot|petalbot|dataforseo|bingpreview|"
+    r"facebookexternalhit|whatsapp|telegrambot|discordbot|"
+    r"gptbot|claudebot|ccbot|oai-searchbot|perplexitybot|amazonbot|"
+    r"genomecrawler|expanse|internet-?measurement|paloalto",
+    re.IGNORECASE,
+)
+
+
+def _is_bot_user_agent(user_agent: str) -> bool:
+    ua = (user_agent or "").strip()
+    # No UA (or a placeholder dash) is overwhelmingly automated traffic —
+    # real browsers always send one.
+    if not ua or ua == "-":
+        return True
+    return bool(_BOT_UA_RE.search(ua))
+
+
+# A "site visit" is a browsing session, not a page view: the same visitor
+# only counts again after this much inactivity (the conventional web-analytics
+# session window).
+VISIT_SESSION_GAP_SECONDS = 30 * 60
+# Cap on the visitor-recency map so a flood of one-off clients (scanners,
+# bots) can't grow it unbounded; stale entries are dropped once crossed.
+_LAST_SEEN_PRUNE_THRESHOLD = 5000
 
 
 class AnalyticsTracker:
@@ -18,6 +54,9 @@ class AnalyticsTracker:
         self.unique_users = collections.defaultdict(set)
         self.logins = collections.defaultdict(int)
         self.errors = collections.defaultdict(int)
+        # visitor id -> monotonic timestamp of their most recent request;
+        # drives the session-window check in before_request.
+        self._visitor_last_seen: dict[str, float] = {}
         # Serializes bucket mutations across concurrent requests. Without it,
         # two threads crossing a day boundary can race inside
         # ``_prune_old_buckets`` -- one snapshot iterates ``bucket.keys()``
@@ -45,12 +84,34 @@ class AnalyticsTracker:
         g.start_time = time.time()
         if request.endpoint == "static":
             return
+        # Don't count automated traffic toward visits/unique users:
+        #  - request.endpoint is None -> the URL matched no route, i.e. a
+        #    scanner probing /.env, /wp-login.php, phishing-kit paths, etc.
+        #  - a bot/crawler/empty User-Agent.
+        # (g.start_time is already set above, so the access log in
+        # after_request still records every request either way.)
+        if request.endpoint is None or _is_bot_user_agent(request.headers.get("User-Agent", "")):
+            return
         today = datetime.date.today().isoformat()
         user = session.get("user") or {}
         visitor = user.get("email") or request.remote_addr or "anonymous"
+        now = time.monotonic()
         with self._lock:
             self._prune_old_buckets(today)
-            self.site_visits[today] += 1
+            # Count a visit only when this visitor starts a new session —
+            # i.e. we haven't seen them within the session window. Every
+            # page view used to increment this, which made "site visits"
+            # just a request counter.
+            last_seen = self._visitor_last_seen.get(visitor)
+            if last_seen is None or now - last_seen >= VISIT_SESSION_GAP_SECONDS:
+                self.site_visits[today] += 1
+            self._visitor_last_seen[visitor] = now
+            if len(self._visitor_last_seen) > _LAST_SEEN_PRUNE_THRESHOLD:
+                self._visitor_last_seen = {
+                    key: seen
+                    for key, seen in self._visitor_last_seen.items()
+                    if now - seen < VISIT_SESSION_GAP_SECONDS
+                }
             self.unique_users[today].add(visitor)
 
     def after_request(self, response):

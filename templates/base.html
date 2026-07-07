@@ -3,8 +3,28 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"/>
   <meta name="csrf-token" content="{{ csrf_token() }}">
+  {% set _desc = meta_description or 'Somewheria, LLC — family-run rental homes. Browse available houses for rent with photos, floor details, and rent, then apply online.' %}
+  {% set _share_img = og_image or url_for('static', filename='web_light_rd_SI@1x.png', _external=True) %}
   <title>{{ title or 'Somewheria, LLC.' }}</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Noto+Sans:wght@400;500;700;900&family=Plus+Jakarta+Sans:wght@400;500;700;800"/>
+  <meta name="description" content="{{ _desc }}">
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
+
+  <!-- Open Graph / social share cards (iMessage, Facebook, LinkedIn, Slack) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Somewheria, LLC">
+  <meta property="og:title" content="{{ og_title or title or 'Somewheria, LLC' }}">
+  <meta property="og:description" content="{{ _desc }}">
+  <meta property="og:url" content="{{ request.url }}">
+  <meta property="og:image" content="{{ _share_img }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ og_title or title or 'Somewheria, LLC' }}">
+  <meta name="twitter:description" content="{{ _desc }}">
+  <meta name="twitter:image" content="{{ _share_img }}">
+
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?display=swap&family=Noto+Sans:wght@400;500;700;900&family=Plus+Jakarta+Sans:wght@400;500;700;800&family=Bricolage+Grotesque:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600"/>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
   <script>
     // Initialize theme immediately to prevent flash
@@ -27,13 +47,11 @@
     })();
   </script>
   <style>
-    /* @theme-toggles/react Around.css (inlined to satisfy CSP style-src) */
-    .theme-toggle.theme-toggle--reversed .theme-toggle__around{transform:scaleX(-1)}.theme-toggle{--theme-toggle__around--duration:.5s}.theme-toggle__around *{transform-origin:center;transition:transform calc(var(--theme-toggle__around--duration) * .6) ease}.theme-toggle__around>g g circle{transition-duration:calc(var(--theme-toggle__around--duration) * .2)}.theme-toggle__around>g g :nth-child(1){transition-delay:calc(var(--theme-toggle__around--duration)*.253)}.theme-toggle__around>g g :nth-child(2){transition-delay:calc(var(--theme-toggle__around--duration)*.348)}.theme-toggle__around>g g :nth-child(3){transition-delay:calc(var(--theme-toggle__around--duration)*.443)}.theme-toggle__around>g g :nth-child(4){transition-delay:calc(var(--theme-toggle__around--duration)*.538)}.theme-toggle__around>g g :nth-child(5){transition-delay:calc(var(--theme-toggle__around--duration)*.633)}.theme-toggle__around>g g :nth-child(6){transition-delay:calc(var(--theme-toggle__around--duration)*.728)}.theme-toggle__around>:first-child path{transition-property:transform,d}.theme-toggle--toggled.theme-toggle .theme-toggle__around *{transition-delay:0s;transition-duration:var(--theme-toggle__around--duration)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>g>circle{transform:scale(1.4)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>g g circle{transform:scale(0);transition-duration:calc(var(--theme-toggle__around--duration) * .4)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>:first-child{transform:rotate(-90deg)}.theme-toggle--toggled.theme-toggle .theme-toggle__around>:first-child path{d:path("M-12-14h42v30a1 1 0 00-16 13H0Z")}@supports not (d:path("")){.theme-toggle--toggled.theme-toggle .theme-toggle__around:first-child path{transform:translate3d(-12px,-14px,0)}}.theme-toggle{border:none;background:0 0;cursor:pointer}@media (prefers-reduced-motion:reduce){.theme-toggle:not(.theme-toggle--force-motion) *{transition:none!important}}
     @import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap");
     .bar1, .bar2, .bar3 {
       width: 24px;
       height: 2.5px;
-      background-color: #111518;
+      background-color: #223a2c;
       margin: 4px auto;
       border-radius: 9999px;
       transform-origin: center;
@@ -57,38 +75,43 @@
       cursor: pointer;
       padding: 10px 8px;
       border-radius: 9999px;
-      border: 1px solid rgba(17, 21, 24, 0.12);
-      background: rgba(255, 255, 255, 0.85);
-      box-shadow: 0 8px 24px rgba(17, 21, 24, 0.08);
+      border: 1px solid rgba(34, 58, 44, 0.16);
+      background: rgba(251, 252, 249, 0.9);
+      box-shadow: 0 8px 24px rgba(18, 28, 21, 0.08);
       transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease;
     }
     #hamburger-icon:hover,
     #hamburger-icon:focus-visible {
-      background: rgba(234, 237, 241, 0.98);
-      border-color: rgba(37, 99, 235, 0.22);
-      box-shadow: 0 10px 28px rgba(37, 99, 235, 0.14);
+      background: rgba(231, 235, 226, 0.98);
+      border-color: rgba(194, 154, 54, 0.4);
+      box-shadow: 0 10px 28px rgba(194, 154, 54, 0.16);
       outline: none;
     }
     #hamburger-icon:active {
       transform: scale(0.97);
     }
     #mobile-nav.open #hamburger-icon {
-      background: rgba(31, 59, 87, 0.08);
-      border-color: rgba(31, 59, 87, 0.18);
-      box-shadow: 0 12px 30px rgba(17, 21, 24, 0.12);
+      background: rgba(34, 58, 44, 0.08);
+      border-color: rgba(34, 58, 44, 0.2);
+      box-shadow: 0 12px 30px rgba(18, 28, 21, 0.12);
     }
+    /* Bars are 2.5px tall with 4px top/bottom margin => 10.5px center-to-
+       center. Translate each outer bar the full 10.5px onto the middle bar's
+       line so the two diagonals cross at one point and read as a clean X.
+       (The old 6.5px left them short of center, so they never met.) */
     #mobile-nav.open .bar1 {
-      -webkit-transform: translateY(6.5px) rotate(-45deg);
-      transform: translateY(6.5px) rotate(-45deg);
+      -webkit-transform: translateY(10.5px) rotate(45deg);
+      transform: translateY(10.5px) rotate(45deg);
       width: 24px;
     }
     #mobile-nav.open .bar2 {
       opacity: 0;
+      transform: scaleX(0.1);
       width: 24px;
     }
     #mobile-nav.open .bar3 {
-      -webkit-transform: translateY(-6.5px) rotate(45deg);
-      transform: translateY(-6.5px) rotate(45deg);
+      -webkit-transform: translateY(-10.5px) rotate(-45deg);
+      transform: translateY(-10.5px) rotate(-45deg);
       width: 24px;
     }
     #mobile-nav .mobile-menu {
@@ -100,11 +123,11 @@
       height: calc(100vh - 88px);            /* fallback */
       height: calc(100dvh - 88px);           /* respects mobile browser chrome */
       width: auto;
-      background: #fff;
-      color: #111518;
+      background: #fbfcf9;
+      color: #223a2c;
       border-radius: 24px;
-      border: 1px solid rgba(17, 21, 24, 0.08);
-      box-shadow: 0 24px 60px rgba(17, 21, 24, 0.18);
+      border: 1px dashed rgba(34, 58, 44, 0.28);
+      box-shadow: 0 24px 60px rgba(18, 28, 21, 0.16);
       padding: 20px 18px 28px;
       overflow-y: auto;
       overscroll-behavior: contain;
@@ -130,8 +153,8 @@
       flex-direction: column;
       align-items: stretch;
       justify-content: flex-start;
-      background: #fff;
-      color: #111518;
+      background: #fbfcf9;
+      color: #223a2c;
     }
     .mobile-menu li {
       margin-bottom: 8px;
@@ -146,50 +169,50 @@
     }
     .mobile-menu a:hover,
     .mobile-menu a:focus-visible {
-      background: #eaedf1;
-      color: #2563eb !important;
+      background: #e7ebe2;
+      color: #8a6b1b !important;
       outline: none;
     }
     html[data-theme="dark"] #hamburger-icon {
-      background: rgba(24, 24, 27, 0.95);
-      border-color: rgba(255, 255, 255, 0.08);
+      background: rgba(26, 39, 29, 0.95);
+      border-color: rgba(228, 235, 224, 0.1);
       box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
     }
     html[data-theme="dark"] #hamburger-icon:hover,
     html[data-theme="dark"] #hamburger-icon:focus-visible {
-      background: rgba(39, 39, 42, 0.98);
-      border-color: rgba(96, 165, 250, 0.26);
+      background: rgba(36, 51, 41, 0.98);
+      border-color: rgba(211, 172, 75, 0.35);
     }
     html[data-theme="dark"] #mobile-nav.open #hamburger-icon {
-      background: rgba(39, 39, 42, 1);
+      background: rgba(36, 51, 41, 1);
     }
     html[data-theme="dark"] #mobile-nav .mobile-menu {
-      background: #18181b !important;
-      color: #fff !important;
-      border-color: rgba(255, 255, 255, 0.08);
+      background: #1a271d !important;
+      color: #e4ebe0 !important;
+      border-color: rgba(228, 235, 224, 0.16);
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
     }
     html[data-theme="dark"] #mobile-nav.open .mobile-menu {
-      background: #18181b !important;
-      color: #fff !important;
+      background: #1a271d !important;
+      color: #e4ebe0 !important;
     }
     html[data-theme="dark"] .mobile-menu a {
-      color: #fff !important;
+      color: #e4ebe0 !important;
     }
     html[data-theme="dark"] .mobile-menu a:hover,
     html[data-theme="dark"] .mobile-menu a:focus-visible {
-      background: #27272a !important;
-      color: #60a5fa !important;
+      background: #243329 !important;
+      color: #d3ac4b !important;
     }
     html[data-theme="light"] .bar1,
     html[data-theme="light"] .bar2,
     html[data-theme="light"] .bar3 {
-      background-color: #111518 !important;
+      background-color: #223a2c !important;
     }
     html[data-theme="dark"] .bar1,
     html[data-theme="dark"] .bar2,
     html[data-theme="dark"] .bar3 {
-      background-color: #ffffff !important;
+      background-color: #e4ebe0 !important;
     }
     @media only screen and (max-width: 640px) {
       header nav.desktop-nav {
@@ -213,76 +236,123 @@
     }
     form input:focus, form textarea:focus, form select:focus {
       outline: none;
-      border-color: #2563eb;
-      background: #f3f4f6;
-      color: #111518;
+      border-color: #c29a36;
+      background: #f5f7f1;
+      color: #223a2c;
     }
     @media (prefers-color-scheme: dark) {
       form input, form textarea, form select {
-        background: #18181b;
-        color: #fff;
-        border-color: #27272a;
+        background: #1a271d;
+        color: #e4ebe0;
+        border-color: #2c3b30;
       }
       form input:focus, form textarea:focus, form select:focus {
-        background: #27272a;
-        color: #fff;
-        border-color: #2563eb;
+        background: #243329;
+        color: #e4ebe0;
+        border-color: #d3ac4b;
       }
     }
-    /* Theme Toggle Styles - Sun to Moon transformation */
+    /* Theme toggle — animated sun <-> crescent-moon (the web.dev
+       "sun-and-moon" technique), tuned to the site palette and driven purely
+       by the [data-theme] attribute the toggle JS sets. */
     .theme-toggle {
-      --icon-fill: #111518;
-      --icon-fill-hover: #2563eb;
+      --icon-fill: var(--sw-ink);
+      --icon-fill-hover: var(--sw-brass);
       cursor: pointer;
-      display: inline-block;
-      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: none;
+      padding: 6px;
+      border-radius: 9999px;
+      outline-offset: 3px;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.25s ease;
     }
-    
-    [data-theme="dark"] .theme-toggle {
-      --icon-fill: #ffffff;
-      --icon-fill-hover: #60a5fa;
+    .theme-toggle:hover,
+    .theme-toggle:focus-visible {
+      background: color-mix(in srgb, var(--sw-brass) 15%, transparent);
     }
-    
-    .theme-toggle svg {
+
+    .sun-and-moon {
+      inline-size: 24px;
+      block-size: 24px;
+    }
+    .sun-and-moon > :is(.moon, .sun, .sun-beams) {
+      transform-origin: center center;
+    }
+    .sun-and-moon > :is(.moon, .sun) {
       fill: var(--icon-fill);
-      transition: fill 0.3s ease;
     }
-    
-    .theme-toggle:hover svg {
+    .theme-toggle:hover .sun-and-moon > :is(.moon, .sun),
+    .theme-toggle:focus-visible .sun-and-moon > :is(.moon, .sun) {
       fill: var(--icon-fill-hover);
     }
-    
-    /* Sun to Moon Animation */
-    .theme-toggle .sun {
-      transition: all 0.5s ease;
+    .sun-and-moon > .sun-beams {
+      stroke: var(--icon-fill);
+      stroke-width: 2px;
+      stroke-linecap: round;
     }
-    
-    .theme-toggle .sun-beams {
-      transition: all 0.5s ease;
+    .theme-toggle:hover .sun-and-moon > .sun-beams,
+    .theme-toggle:focus-visible .sun-and-moon > .sun-beams {
+      stroke: var(--icon-fill-hover);
     }
-    
-    .theme-toggle .moon {
-      transition: all 0.5s ease;
+
+    /* Dark state: the sun swells behind the mask (carving a crescent) and the
+       rays retract into it. */
+    [data-theme="dark"] .sun-and-moon > .sun {
+      transform: scale(1.75);
+    }
+    [data-theme="dark"] .sun-and-moon > .sun-beams {
       opacity: 0;
-      transform: scale(0.8);
+      transform: rotateZ(-25deg);
     }
-    
-    /* Dark mode: Hide sun, show moon */
-    [data-theme="dark"] .theme-toggle .sun {
-      opacity: 0;
-      transform: scale(0.8);
+    [data-theme="dark"] .sun-and-moon > .moon > circle {
+      transform: translateX(-7px);
     }
-    
-    [data-theme="dark"] .theme-toggle .sun-beams {
-      opacity: 0;
-      transform: rotate(45deg);
+    @supports (cx: 1px) {
+      [data-theme="dark"] .sun-and-moon > .moon > circle {
+        cx: 17;
+        transform: translateX(0);
+      }
     }
-    
-    [data-theme="dark"] .theme-toggle .moon {
-      opacity: 1;
-      transform: scale(1);
+
+    /* Springy, staggered easing. */
+    .sun-and-moon > .sun {
+      transition: transform 0.5s cubic-bezier(0.5, 1.25, 0.75, 1.25);
     }
-    
+    .sun-and-moon > .sun-beams {
+      transition: transform 0.5s cubic-bezier(0.5, 1.5, 0.75, 1.25),
+                  opacity 0.5s ease;
+    }
+    .sun-and-moon .moon > circle {
+      transition: transform 0.25s cubic-bezier(0, 0, 0, 1);
+    }
+    @supports (cx: 1px) {
+      .sun-and-moon .moon > circle {
+        transition: cx 0.25s cubic-bezier(0, 0, 0, 1);
+      }
+    }
+    [data-theme="dark"] .sun-and-moon > .sun {
+      transition-timing-function: cubic-bezier(0.25, 0, 0.3, 1);
+      transition-duration: 0.25s;
+    }
+    [data-theme="dark"] .sun-and-moon > .sun-beams {
+      transition-duration: 0.15s;
+    }
+    [data-theme="dark"] .sun-and-moon > .moon > circle {
+      transition-delay: 0.25s;
+      transition-duration: 0.5s;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .sun-and-moon > :is(.sun, .sun-beams),
+      .sun-and-moon .moon > circle {
+        transition: none;
+      }
+    }
+
     /* Screen reader text */
     .theme-toggle-sr {
       position: absolute;
@@ -296,87 +366,54 @@
       border: 0;
     }
     
-    /* Simple transitions for the new SVG */
-    .theme-toggle svg circle,
-    .theme-toggle svg g {
-      transition: all 0.3s ease;
-    }
-    
-    /* Hide/show elements based on theme */
-    [data-theme="dark"] .sun-and-moon > .sun { 
-      opacity: 0;
-      transform: scale(0.8);
-    }
-    
-    [data-theme="dark"] .sun-and-moon > .sun-beams { 
-      opacity: 0;
-    }
-    
-    [data-theme="dark"] .sun-and-moon > .moon { 
-      opacity: 1;
-      transform: scale(1);
-    }
-    
-    [data-theme="light"] .sun-and-moon > .moon { 
-      opacity: 0;
-      transform: scale(0.8);
-    }
-    
-    /* Transitions */
-    .sun-and-moon > .sun,
-    .sun-and-moon > .moon,
-    .sun-and-moon > .sun-beams {
-      transition: opacity 0.3s ease, transform 0.3s ease;
-    }
-    
     /* Force override browser dark mode settings */
     html[data-theme="light"] {
-      background-color: #f5f5f5 !important;
-      color: #111518 !important;
+      background-color: #f1f3ed !important;
+      color: #223a2c !important;
     }
-    
+
     html[data-theme="light"] body {
-      background-color: #f5f5f5 !important;
-      color: #111518 !important;
+      background-color: #f1f3ed !important;
+      color: #223a2c !important;
     }
-    
+
     html[data-theme="light"] .bg-neutral-100 {
-      background-color: #f5f5f5 !important;
+      background-color: #f1f3ed !important;
     }
-    
+
     html[data-theme="light"] .bg-neutral-950 {
-      background-color: #f5f5f5 !important;
+      background-color: #f1f3ed !important;
     }
 
     html[data-theme="light"] .text-\[\#111518\] {
-      color: #111518 !important;
+      color: #223a2c !important;
     }
 
     html[data-theme="dark"] {
-      background-color: #0a0a0a !important;
-      color: #ffffff !important;
+      background-color: #121c15 !important;
+      color: #e4ebe0 !important;
     }
-    
+
     html[data-theme="dark"] body {
-      background-color: #0a0a0a !important;
-      color: #ffffff !important;
+      background-color: #121c15 !important;
+      color: #e4ebe0 !important;
     }
-    
+
     html[data-theme="dark"] .bg-neutral-100 {
-      background-color: #0a0a0a !important;
+      background-color: #121c15 !important;
     }
-    
+
     html[data-theme="dark"] .bg-neutral-950 {
-      background-color: #0a0a0a !important;
+      background-color: #121c15 !important;
     }
 
     html[data-theme="dark"] .text-\[\#111518\] {
-      color: #ffffff !important;
+      color: #e4ebe0 !important;
     }
   </style>
   <!-- PWA manifest: always served at /manifest.webmanifest and /manifest.json for compatibility -->
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#111518">
+  <meta name="theme-color" content="#223a2c">
   <link rel="apple-touch-icon" sizes="192x192" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
   <link rel="apple-touch-icon" sizes="384x384" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
   <link rel="apple-touch-icon" sizes="512x512" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
@@ -387,9 +424,9 @@
 <body style='font-family:"Plus Jakarta Sans","Noto Sans",sans-serif;'>
 <div class="relative flex min-h-screen flex-col group/design-root overflow-x-hidden bg-neutral-100 dark:bg-neutral-950">
   <div class="layout-container flex h-full grow flex-col">
-    <header class="flex items-center justify-between border-b px-4 sm:px-6 lg:px-10 py-3 w-full bg-neutral-100 dark:bg-neutral-900" style="position:relative;">
-      <a id="brand" href="{{ url_for('home') }}" class="flex items-center gap-4 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 rounded">
-        <div class="size-4">
+    <header class="sw-header flex items-center justify-between px-4 sm:px-6 lg:px-10 py-3 w-full" style="position:relative;">
+      <a id="brand" href="{{ url_for('home') }}" class="flex items-center gap-2.5 rounded" style="color:var(--sw-ink);">
+        <div class="size-5" style="color:var(--sw-brass);">
           <svg viewBox="0 0 48 48" fill="none"><g clip-path="url(#clip0_6_535)">
           <path fill-rule="evenodd" clip-rule="evenodd"
             d="M47.2426 24L24 47.2426L0.757355 24L24 0.757355L47.2426 24ZM12.2426 21H35.7574L24 9.24264L12.2426 21Z"
@@ -397,26 +434,35 @@
             <defs><clipPath id="clip0_6_535"><rect width="48" height="48" fill="white"/></clipPath></defs>
           </svg>
         </div>
+        <span class="sw-brand-word">Somewheria</span>
       </a>
+      {% set role = session.get('user', {}).get('role', '') %}
       <nav class="desktop-nav flex-1 hidden sm:block" aria-label="Main navigation">
         <ul class="flex items-center gap-6 justify-center w-full">
-          <li><a href="{{ url_for('home') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Home</a></li>
-          <li><a href="{{ url_for('for_rent') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">For Rent</a></li>
-          <li><a href="{{ url_for('about') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">About Us</a></li>
-          <li><a href="{{ url_for('contact') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Contact Us</a></li>
-          <li><a href="{{ url_for('register') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Register</a></li>
+          {% if role not in ['admin', 'high_admin'] %}
+            <li><a href="{{ url_for('home') }}" class="sw-nav-link">Home</a></li>
+            <li><a href="{{ url_for('for_rent') }}" class="sw-nav-link">For Rent</a></li>
+            <li><a href="{{ url_for('about') }}" class="sw-nav-link">About Us</a></li>
+            <li><a href="{{ url_for('contact') }}" class="sw-nav-link">Contact Us</a></li>
+            <li><a href="{{ url_for('register') }}" class="sw-nav-link">Register</a></li>
+          {% endif %}
           {% if session.get('user') %}
-            <li><a href="{{ url_for('manage_listings') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Manage Listings</a></li>
-            {% set role = session.get('user', {}).get('role', '') %}
+            <li><a href="{{ url_for('manage_listings') }}" class="sw-nav-link">Manage Listings</a></li>
+            {% if role == 'renter' %}
+              <li><a href="{{ url_for('renter_dashboard') }}" class="sw-nav-link">Renter Dashboard</a></li>
+            {% endif %}
             {% if role in ['renter', 'admin', 'high_admin'] %}
-              <li><a href="{{ url_for('renter_dashboard') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Renter Dashboard</a></li>
-              <li><a href="{{ url_for('ticket_list_mine') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Tickets</a></li>
+              <li><a href="{{ url_for('ticket_list_mine') }}" class="sw-nav-link">Tickets</a></li>
             {% endif %}
             {% if role in ['admin', 'high_admin'] %}
-              <li><a href="{{ url_for('admin_status') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Status</a></li>
+              <li><a href="{{ url_for('admin_status') }}" class="sw-nav-link">Status</a></li>
             {% endif %}
             {% if role == 'high_admin' %}
-              <li><a href="{{ url_for('admin_dashboard_combined') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Admin Panel</a></li>
+              <li><a href="{{ url_for('admin_dashboard_combined') }}" class="sw-nav-link">Admin Panel</a></li>
+            {% elif role == 'admin' %}
+              {# Dashboard is high_admin-only; land plain admins on Users,
+                 which renders the admin sidebar with everything they CAN reach. #}
+              <li><a href="{{ url_for('admin_users') }}" class="sw-nav-link">Admin Panel</a></li>
             {% endif %}
             <li class="flex items-center gap-2">
               {% if session.get('user', {}).get('picture') %}
@@ -424,34 +470,34 @@
               {% endif %}
               <span class="text-[#111518] dark:text-white text-sm">{{ session.get('user', {}).get('name', 'User') }}</span>
             </li>
-            <li><a href="{{ url_for('logout') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-red-600 dark:hover:text-red-400 px-3 py-2">Logout</a></li>
+            <li><a href="{{ url_for('logout') }}" class="sw-nav-link">Logout</a></li>
           {% else %}
-            <li><a href="{{ url_for('login') }}" class="text-[#111518] dark:text-white text-sm font-medium leading-normal transition hover:bg-[#EAEDF1] dark:hover:bg-neutral-800 hover:rounded hover:text-blue-600 dark:hover:text-blue-400 px-3 py-2">Login</a></li>
+            <li><a href="{{ url_for('login') }}" class="sw-nav-link">Login</a></li>
           {% endif %}
         </ul>
       </nav>
       <div class="flex flex-1 justify-end items-center">
         <!-- Theme Toggle Button -->
-        <div class="theme-toggle mr-2" id="theme-toggle" title="Toggle theme">
+        <button type="button" class="theme-toggle mr-2" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle light and dark theme">
           <span class="theme-toggle-sr">Toggle theme</span>
-          <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="24" height="24" fill="currentColor" class="theme-toggle__around" viewBox="0 0 32 32">
-            <!-- Sun circle -->
-            <circle class="sun" cx="16" cy="16" r="8" />
-            <!-- Sun beams -->
-            <g class="sun-beams" stroke="currentColor" stroke-width="2" fill="none">
-              <line x1="16" y1="2" x2="16" y2="4" />
-              <line x1="16" y1="28" x2="16" y2="30" />
-              <line x1="2" y1="16" x2="4" y2="16" />
-              <line x1="28" y1="16" x2="30" y2="16" />
-              <line x1="5.66" y1="5.66" x2="7.07" y2="7.07" />
-              <line x1="24.93" y1="24.93" x2="26.34" y2="26.34" />
-              <line x1="5.66" y1="26.34" x2="7.07" y2="24.93" />
-              <line x1="24.93" y1="7.07" x2="26.34" y2="5.66" />
+          <svg class="sun-and-moon" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24">
+            <mask class="moon" id="theme-toggle-moon-mask">
+              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              <circle cx="24" cy="10" r="6" fill="black" />
+            </mask>
+            <circle class="sun" cx="12" cy="12" r="6" mask="url(#theme-toggle-moon-mask)" />
+            <g class="sun-beams">
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="4.22" x2="19.78" y2="5.64" />
             </g>
-            <!-- Moon (hidden by default) -->
-            <circle class="moon" cx="20" cy="12" r="6" />
           </svg>
-        </div>
+        </button>
         <div id="mobile-nav">
           <button id="hamburger-icon" type="button" onclick="toggleMobileMenu(event)" aria-label="Open menu" aria-controls="mobile-menu" aria-expanded="false">
           <div class="bar1"></div>
@@ -459,16 +505,19 @@
           <div class="bar3"></div>
           </button>
           <ul id="mobile-menu" class="mobile-menu bg-white text-[#111518] dark:bg-neutral-900 dark:text-white" onclick="event.stopPropagation()">
-            <li><a href="{{ url_for('home') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Home</a></li>
-            <li><a href="{{ url_for('for_rent') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">For Rent</a></li>
-            <li><a href="{{ url_for('about') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">About Us</a></li>
-            <li><a href="{{ url_for('contact') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Contact Us</a></li>
-            <li><a href="{{ url_for('register') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Register</a></li>
+            {% if role not in ['admin', 'high_admin'] %}
+              <li><a href="{{ url_for('home') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Home</a></li>
+              <li><a href="{{ url_for('for_rent') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">For Rent</a></li>
+              <li><a href="{{ url_for('about') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">About Us</a></li>
+              <li><a href="{{ url_for('contact') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Contact Us</a></li>
+              <li><a href="{{ url_for('register') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Register</a></li>
+            {% endif %}
             {% if session.get('user') %}
               <li><a href="{{ url_for('manage_listings') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Manage Listings</a></li>
-              {% set role = session.get('user', {}).get('role', '') %}
-              {% if role in ['renter', 'admin', 'high_admin'] %}
+              {% if role == 'renter' %}
                 <li><a href="{{ url_for('renter_dashboard') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
+              {% endif %}
+              {% if role in ['renter', 'admin', 'high_admin'] %}
                 <li><a href="{{ url_for('ticket_list_mine') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Tickets</a></li>
               {% endif %}
               {% if role in ['admin', 'high_admin'] %}
@@ -476,6 +525,8 @@
               {% endif %}
               {% if role == 'high_admin' %}
                 <li><a href="{{ url_for('admin_dashboard_combined') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Admin Panel</a></li>
+              {% elif role == 'admin' %}
+                <li><a href="{{ url_for('admin_users') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Admin Panel</a></li>
               {% endif %}
               <li class="flex items-center gap-2 justify-center py-2">
                 {% if session.get('user', {}).get('picture') %}
@@ -539,11 +590,11 @@
       });
     </script>
     <main class="flex-1 bg-neutral-100 text-[#111518] dark:bg-neutral-950 dark:text-white">{% block content %}{% endblock %}</main>
-    <footer class="py-5 text-center bg-gray-100 text-gray-600 dark:bg-neutral-900 dark:text-gray-300">
-      <p class="mb-2">&copy; 2024/26 Somewheria, LLC. All Rights Reserved.</p>
-      <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">Internet Explorer is not supported; please use a current version of Safari, Chrome, Edge, Firefox, or Samsung Internet.</p>
-      <div>
-        <a href="{{ url_for('report_issue_form') }}" class="text-blue-600 dark:text-blue-400 underline text-sm">Report an issue</a>
+    <footer class="sw-footer py-8 text-center">
+      <p class="sw-mono">&copy; 2024&ndash;26 Somewheria, LLC &middot; All rights reserved</p>
+      <p class="mt-3 text-xs" style="color:var(--sw-ink-soft);">Internet Explorer is not supported; please use a current version of Safari, Chrome, Edge, Firefox, or Samsung Internet.</p>
+      <div class="mt-3">
+        <a href="{{ url_for('report_issue_form') }}" class="sw-link text-sm">Report an issue</a>
       </div>
     </footer>
   </div>
@@ -609,8 +660,14 @@
   const setPreference = (theme) => {
     localStorage.setItem(storageKey, theme);
     document.documentElement.setAttribute('data-theme', theme);
-    document.querySelector('#theme-toggle')?.setAttribute('aria-label', theme);
-    
+    // Label describes the action (switching to the other theme), not the
+    // current state, so screen-reader users hear what the button will do.
+    const toggle = document.querySelector('#theme-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+      toggle.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+    }
+
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
     } else {

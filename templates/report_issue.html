@@ -1,27 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-10 max-w-full sm:max-w-2xl mx-auto">
-  <h2 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white text-center">Report an Issue</h2>
+<div class="sw-page sw-page-narrow">
+  <p class="sw-eyebrow">Site feedback</p>
+  <h1 class="sw-title">Report an issue</h1>
+  <p class="sw-sub">Tell us what went wrong on the site and we'll take a look.</p>
+
   {% if confirmation %}
-  <div class="bg-green-100 text-green-800 font-bold px-6 py-5 rounded mb-8 text-center">
-    Thank you {{ name }}, your report has been submitted!
+  <div class="mt-8 sw-alert sw-alert-ok">
+    Thank you {{ name }}, your report has been submitted.
   </div>
-  <div class="text-gray-800 mb-6">
-    <div><strong>Submitted Description:</strong></div>
-    <div class="bg-gray-50 border px-4 py-2 rounded mt-2 mb-4">{{ desc }}</div>
+  <div class="mt-6 sw-panel">
+    <p class="sw-label">Submitted description</p>
+    <p style="color:var(--sw-ink-soft)">{{ desc }}</p>
   </div>
   {% endif %}
-  <form action="{{ url_for('report_issue') }}" method="POST" class="bg-white dark:bg-neutral-900 rounded shadow p-6">
+
+  <form action="{{ url_for('report_issue') }}" method="POST" class="mt-8 sw-panel">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <div class="mb-4">
-      <label for="name" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Your Name</label>
-      <input type="text" id="name" name="name" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+    <div class="sw-field">
+      <label for="name" class="sw-label">Your name</label>
+      <input type="text" id="name" name="name" required class="sw-input" />
     </div>
-    <div class="mb-4">
-      <label for="description" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Issue Description</label>
-      <textarea id="description" name="description" rows="5" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"></textarea>
+    <div class="sw-field">
+      <label for="description" class="sw-label">Issue description</label>
+      <textarea id="description" name="description" rows="5" required class="sw-input"></textarea>
+      <p class="sw-help">Include the page you were on and what you expected to happen.</p>
     </div>
-    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold shadow">Submit Issue</button>
+    <button type="submit" class="sw-btn sw-btn-primary">Send report</button>
   </form>
 </div>
 {% endblock %}

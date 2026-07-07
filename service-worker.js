@@ -1,5 +1,11 @@
 /* Progressive Web App Service Worker for Somewheria */
-const CACHE_VERSION = 'v1.0.0';
+// v1.1.0: stop intercepting cross-origin requests. The old cross-origin
+// handler tried to cache S3 photo responses (opaque, no-cors) and returned an
+// empty 504 whenever caching failed — so listing/gallery images from the
+// somewheriaweb S3 bucket rendered as broken. Bumping the version also purges
+// any broken entries the old worker cached. Cross-origin now passes straight
+// through to the browser's own network stack.
+const CACHE_VERSION = 'v1.1.0';
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline';
 
@@ -98,6 +104,13 @@ self.addEventListener('fetch', event => {
 
   const url = new URL(req.url);
 
+  // Cross-origin (S3 photos, CDN scripts/fonts): do NOT intercept. Let the
+  // browser fetch these directly — routing opaque no-cors responses through
+  // the worker and caching them is what broke the S3 gallery/thumbnail images.
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
   // Same-origin static assets: cache-first
   if (url.origin === self.location.origin) {
     const isStatic = ['style', 'script', 'image', 'font'].includes(req.destination);
@@ -129,20 +142,4 @@ self.addEventListener('fetch', event => {
     })());
     return;
   }
-
-  // Cross-origin (e.g., CDN): network-first with runtime caching fallback
-  event.respondWith((async () => {
-    try {
-      const resp = await fetch(req);
-      // Only cache successful opaque/ok GET responses
-      const clone = resp.clone();
-      const cache = await caches.open(STATIC_CACHE);
-      cache.put(req, clone);
-      return resp;
-    } catch (e) {
-      const cached = await caches.match(req);
-      if (cached) return cached;
-      return new Response('', { status: 504 });
-    }
-  })());
 });

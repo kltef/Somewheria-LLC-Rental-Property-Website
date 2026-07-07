@@ -74,6 +74,44 @@ class AuthServiceTestCase(unittest.TestCase):
 
         self.assertEqual(role, "guest")
 
+    def test_all_user_roles_includes_env_configured_admins(self):
+        # On a fresh deploy user_roles.json is empty, but the .env-configured
+        # admins must still show up on the user-management page.
+        self.storage.get_user_roles.return_value = {}
+
+        result = self.service.all_user_roles()
+
+        by_email = {u["email"]: u for u in result}
+        self.assertEqual(by_email["owner@example.com"]["role"], "high_admin")
+        self.assertEqual(by_email["admin@example.com"]["role"], "admin")
+        self.assertEqual(by_email["renter@example.com"]["role"], "renter")
+        self.assertTrue(all(u["source"] == "config" for u in result))
+        # Sorted by email for a stable table order.
+        self.assertEqual([u["email"] for u in result], sorted(by_email))
+
+    def test_all_user_roles_file_overrides_env_and_marks_source(self):
+        self.storage.get_user_roles.return_value = {"admin@example.com": "high_admin"}
+
+        by_email = {u["email"]: u for u in self.service.all_user_roles()}
+
+        self.assertEqual(by_email["admin@example.com"]["role"], "high_admin")
+        self.assertEqual(by_email["admin@example.com"]["source"], "file")
+
+    def test_all_user_roles_hides_revoked_tombstones(self):
+        self.storage.get_user_roles.return_value = {"owner@example.com": "revoked"}
+
+        emails = {u["email"] for u in self.service.all_user_roles()}
+
+        self.assertNotIn("owner@example.com", emails)
+
+    def test_all_user_roles_includes_ui_assigned_user_not_in_env(self):
+        self.storage.get_user_roles.return_value = {"new@example.com": "renter"}
+
+        by_email = {u["email"]: u for u in self.service.all_user_roles()}
+
+        self.assertEqual(by_email["new@example.com"]["role"], "renter")
+        self.assertEqual(by_email["new@example.com"]["source"], "file")
+
 
 class FileStorageServiceTestCase(unittest.TestCase):
     def setUp(self):
@@ -83,6 +121,7 @@ class FileStorageServiceTestCase(unittest.TestCase):
             renter_profile_file=Path("profiles.json"),
             contracts_file=Path("contracts.json"),
             lead_capture_file=Path("lead_captures.json"),
+            hidden_listings_file=Path("hidden_listings.json"),
         )
         self.service = FileStorageService(self.config)
 
@@ -128,6 +167,35 @@ class FileStorageServiceTestCase(unittest.TestCase):
             )
 
         self.assertEqual(loaded, [{"email": "a@example.com"}])
+
+    def test_set_listing_hidden_appends_new_id(self):
+        with patch.object(self.service, "get_hidden_listing_ids", return_value=["prop-1"]), patch.object(
+            self.service,
+            "save_json_file",
+        ) as save_json_mock:
+            self.service.set_listing_hidden("prop-2", True)
+
+        save_json_mock.assert_called_once_with(self.config.hidden_listings_file, ["prop-1", "prop-2"])
+
+    def test_set_listing_hidden_is_idempotent_for_existing_id(self):
+        with patch.object(self.service, "get_hidden_listing_ids", return_value=["prop-1"]), patch.object(
+            self.service,
+            "save_json_file",
+        ) as save_json_mock:
+            self.service.set_listing_hidden("prop-1", True)
+
+        save_json_mock.assert_called_once_with(self.config.hidden_listings_file, ["prop-1"])
+
+    def test_set_listing_hidden_false_removes_id(self):
+        with patch.object(
+            self.service, "get_hidden_listing_ids", return_value=["prop-1", "prop-2"]
+        ), patch.object(
+            self.service,
+            "save_json_file",
+        ) as save_json_mock:
+            self.service.set_listing_hidden("prop-1", False)
+
+        save_json_mock.assert_called_once_with(self.config.hidden_listings_file, ["prop-2"])
 
     def test_add_pending_registration_appends_and_saves(self):
         with patch.object(self.service, "get_pending_registrations", return_value=[{"email": "keep@example.com"}]), patch.object(
@@ -675,8 +743,64 @@ class PropertyServiceTestCase(unittest.TestCase):
 
         payload = self.service.property_payload_from_form(form)
 
-        self.assertTrue(payload["pets_allowed"])
-        self.assertEqual(payload["included_amenities"], ["Parking", "Laundry", "Garden", "Storage"])
+        self.assertEqual(payload["pets_allowed"], "Yes")
+        # "Laundry" is an alias of the "Washer/Dryer" checkbox label and is
+        # canonicalized at write time so edit-save round-trips can't stack
+        # duplicate variants of the same amenity.
+        self.assertEqual(payload["included_amenities"], ["Parking", "Washer/Dryer", "Garden", "Storage"])
+
+    def test_set_listing_active_false_hides_and_logs(self):
+        self.service.cache = [{"id": "prop-1"}]
+        storage = Mock()
+        self.service.storage = storage
+
+        self.service.set_listing_active("prop-1", active=False, actor_email="admin@example.com")
+
+        storage.set_listing_hidden.assert_called_once_with("prop-1", True)
+        self.notifications.log_site_change.assert_called_once_with(
+            "admin@example.com",
+            "property_deactivated",
+            {"property_id": "prop-1"},
+        )
+
+    def test_set_listing_active_true_unhides_and_logs(self):
+        self.service.cache = [{"id": "prop-1"}]
+        storage = Mock()
+        self.service.storage = storage
+
+        self.service.set_listing_active("prop-1", active=True, actor_email="admin@example.com")
+
+        storage.set_listing_hidden.assert_called_once_with("prop-1", False)
+        self.notifications.log_site_change.assert_called_once_with(
+            "admin@example.com",
+            "property_reactivated",
+            {"property_id": "prop-1"},
+        )
+
+    def test_set_listing_active_missing_property_raises(self):
+        self.service.cache = []
+        self.service.storage = Mock()
+
+        with self.assertRaises(KeyError):
+            self.service.set_listing_active("ghost", active=False, actor_email="admin@example.com")
+
+    def test_get_visible_properties_filters_hidden_ids(self):
+        self.service.cache = [{"id": "prop-1"}, {"id": "prop-2"}]
+        storage = Mock()
+        storage.get_hidden_listing_ids.return_value = ["prop-1"]
+        self.service.storage = storage
+
+        visible = self.service.get_visible_properties()
+
+        self.assertEqual([item["id"] for item in visible], ["prop-2"])
+
+    def test_get_visible_properties_without_storage_returns_all(self):
+        self.service.cache = [{"id": "prop-1"}, {"id": "prop-2"}]
+        self.service.storage = None
+
+        visible = self.service.get_visible_properties()
+
+        self.assertEqual([item["id"] for item in visible], ["prop-1", "prop-2"])
 
     def test_delete_property_updates_cache_and_logs_change(self):
         self.service.cache = [{"id": "prop-1"}, {"id": "prop-2"}]
@@ -968,6 +1092,26 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertEqual(entries[1]["level"], "INFO")
         self.assertIn("[http] GET /admin/status -> 200", entries[1]["message"])
 
+    def test_read_logs_parses_json_lines_with_request_id(self):
+        log_text = (
+            '{"timestamp": "2026-07-06T18:47:42", "level": "ERROR", '
+            '"component": "http", "request_id": "a1b2c3d4", '
+            '"message": "GET /for-rent -> 500"}\n'
+            '{"timestamp": "2026-07-06T18:47:43", "level": "INFO", '
+            '"component": "app", "request_id": "-", "message": "started"}\n'
+        )
+        with patch.object(Path, "exists", return_value=True), patch.object(
+            Path, "open", mock_open(read_data=log_text)
+        ):
+            entries = self.service.read_logs()
+
+        self.assertEqual(len(entries), 2)
+        # Newest-first ordering.
+        self.assertEqual(entries[1]["level"], "ERROR")
+        self.assertEqual(entries[1]["request_id"], "a1b2c3d4")
+        self.assertIn("[http] GET /for-rent -> 500", entries[1]["message"])
+        self.assertEqual(entries[0]["request_id"], "-")
+
     def test_read_logs_caps_returned_entries_to_500(self):
         # A log file with more than 500 entries should still return only the
         # last 500, in newest-first order. The implementation streams the
@@ -1133,14 +1277,16 @@ class PropertyWritePathTestCase(unittest.TestCase):
             return responses[url]
 
         with patch("somewheria_app.services.properties.requests.get", side_effect=fake_get), patch.object(
-            self.service, "get_base64_image_from_url", return_value="data:image/jpeg;base64,xxx"
+            self.service, "get_base64_image_from_url"
         ) as encode_mock:
             record = self.service.fetch_property_record("prop-1")
 
-        # Only the single string URL should reach the encoder.
-        encode_mock.assert_called_once_with("https://example.com/p.jpg")
+        # Photos are kept as S3 URLs (loaded by the browser directly), not
+        # downloaded/base64-encoded here — the encoder is never called, and
+        # non-string entries are dropped.
+        encode_mock.assert_not_called()
         self.assertIsNotNone(record)
-        self.assertEqual(record["photos"], ["data:image/jpeg;base64,xxx"])
+        self.assertEqual(record["photos"], ["https://example.com/p.jpg"])
 
 
 class AnalyticsPruningTestCase(unittest.TestCase):

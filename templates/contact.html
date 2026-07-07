@@ -1,21 +1,49 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-10 md:py-12 max-w-full sm:max-w-2xl mx-auto bg-white dark:bg-neutral-950 rounded shadow">
-  <h2 class="text-2xl font-bold mb-4 text-[#111518] dark:text-white">Contact Us</h2>
-  <form action="mailto:contact@somewheria.com" method="POST" enctype="text/plain" class="mt-4 max-w-md bg-white dark:bg-neutral-900 rounded shadow p-6">
-    <div class="mb-4">
-      <label for="contactName" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Your Name</label>
-      <input type="text" id="contactName" name="name" placeholder="Your Name" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+<div class="sw-page sw-page-narrow">
+  <p class="sw-eyebrow">Contact us</p>
+  <h1 class="sw-title">Ask us anything.</h1>
+  <p class="sw-sub">
+    Questions about a listing, a tour, or your lease go straight to Angela.
+    Call, email, or use the form below.
+  </p>
+
+  <div class="mt-8 sw-parcel">
+    <div class="sw-parcel-num">CONTACT &middot; ANGELA</div>
+    <div class="sw-contact-row" style="margin-top:0.9rem;">
+      <span class="sw-contact-label">TEL</span>
+      <a href="tel:+15702369960">(570) 236-9960</a>
     </div>
-    <div class="mb-4">
-      <label for="contactEmail" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Your Email</label>
-      <input type="email" id="contactEmail" name="email" placeholder="Your Email" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+    <div class="sw-contact-row">
+      <span class="sw-contact-label">MAIL</span>
+      <a href="mailto:angela@somewheria.com">angela@somewheria.com</a>
     </div>
-    <div class="mb-4">
-      <label for="contactMessage" class="block text-sm font-semibold text-[#111518] dark:text-white mb-2">Your Message</label>
-      <textarea id="contactMessage" name="message" placeholder="Your Message" rows="5" required class="w-full p-2 border rounded bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"></textarea>
+  </div>
+
+  {% if sent %}
+    <div class="mt-6 sw-alert sw-alert-ok">
+      Thanks &mdash; your message has been sent. We&rsquo;ll get back to you soon.
     </div>
-    <input type="submit" value="Send Message" class="mt-2 bg-blue-500 dark:bg-blue-400 text-white dark:text-[#111518] px-4 py-2 rounded cursor-pointer hover:bg-blue-600 dark:hover:bg-blue-600 font-bold shadow transition-colors" />
+  {% endif %}
+  {% if error %}
+    <div class="mt-6 sw-alert sw-alert-bad">{{ error }}</div>
+  {% endif %}
+
+  <form action="{{ url_for('contact_submit') }}" method="POST" class="mt-6 sw-panel">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <div class="sw-field">
+      <label for="contactName" class="sw-label">Your name</label>
+      <input type="text" id="contactName" name="name" value="{{ form.name or '' }}" placeholder="First and last name" required class="sw-input" />
+    </div>
+    <div class="sw-field">
+      <label for="contactEmail" class="sw-label">Your email</label>
+      <input type="email" id="contactEmail" name="email" value="{{ form.email or '' }}" placeholder="you@example.com" required class="sw-input" />
+    </div>
+    <div class="sw-field">
+      <label for="contactMessage" class="sw-label">Your message</label>
+      <textarea id="contactMessage" name="message" placeholder="What can we help with?" rows="5" required class="sw-input">{{ form.message or '' }}</textarea>
+    </div>
+    <input type="submit" value="Send message" class="sw-btn sw-btn-primary cursor-pointer" />
   </form>
 </div>
 {% endblock %}

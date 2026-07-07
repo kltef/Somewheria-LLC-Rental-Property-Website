@@ -195,7 +195,7 @@ GET_ROUTE_MATRIX = [
     ("/renter/profile", {"anon": 302, "renter": 200, "admin": 200, "high_admin": 200}),
     ("/add-listing", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
     ("/edit-listing/prop-1", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
-    ("/admin/status", {"anon": 302, "renter": 403, "admin": 403, "high_admin": 200}),
+    ("/admin/status", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
     ("/admin/users", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
     ("/admin/contracts", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
     ("/admin/registrations", {"anon": 302, "renter": 403, "admin": 200, "high_admin": 200}),
@@ -241,25 +241,30 @@ NAV_EXPECTATIONS = {
         "present": ["Manage Listings", "Renter Dashboard", "Logout"],
         "missing": ["Login", "Status", "Admin Panel"],
     },
+    # Renter Dashboard is deliberately absent from admin navs: admins can
+    # still open the URL directly, but the top bar only shows admin links.
+    # Admin Panel is shown to plain admins too (it lands on /admin/users,
+    # which renders the admin sidebar) — without it they had no way into
+    # the admin shell short of typing URLs.
     "admin": {
-        "present": ["Manage Listings", "Renter Dashboard", "Status", "Logout"],
-        "missing": ["Login", "Admin Panel"],
+        "present": ["Manage Listings", "Status", "Admin Panel", "Logout"],
+        "missing": ["Login", "Renter Dashboard"],
     },
     "high_admin": {
-        "present": ["Manage Listings", "Renter Dashboard", "Status", "Admin Panel", "Logout"],
-        "missing": ["Login"],
+        "present": ["Manage Listings", "Status", "Admin Panel", "Logout"],
+        "missing": ["Login", "Renter Dashboard"],
     },
 }
 
 PAGE_SNIPPETS = [
-    ("/", None, b"Welcome to Somewheria, LLC."),
+    ("/", None, b"Find your"),
     ("/about", None, b"About"),
     ("/contact", None, b"Contact"),
     ("/login", None, b"Login"),
     ("/register", None, b"Register"),
     ("/offline", None, b"Offline"),
     ("/report-issue", None, b"Report"),
-    ("/property/prop-1", None, b"Property Details"),
+    ("/property/prop-1", None, b"Request a tour"),
     ("/manage-listings", "admin", b"Manage Listings"),
     ("/admin/status", "high_admin", b"System Status"),
     ("/admin/dashboard", "high_admin", b"Admin Dashboard"),
@@ -299,7 +304,13 @@ PETS_CASES = [
     ({"description": "Pets welcome here"}, "Yes"),
     ({"description": "A quiet home"}, "Unknown"),
     ({"description": "Pet deposit required"}, "Yes"),
-    ({"description": "No pets allowed"}, "Yes"),
+    # Negated wording must infer "No" — the old substring match on "pet"
+    # flipped listings that literally said "No pets allowed" to Yes.
+    ({"description": "No pets allowed"}, "No"),
+    ({"description": "Sorry, pets are not allowed."}, "No"),
+    ({"description": "This is a pet-free building"}, "No"),
+    # Word-boundary matching: "carpet" is not a pet.
+    ({"description": "New carpet throughout"}, "Unknown"),
     ({"included_amenities": ["Laundry"], "description": "Pets considered"}, "Yes"),
     ({"included_amenities": ["Laundry"], "description": ""}, "Unknown"),
     ({"included_amenities": [], "description": "pet-friendly unit"}, "Yes"),
@@ -353,22 +364,26 @@ SERIALIZE_CASES = [
     ({"markers": {"north", "south"}}, ["north", "south"]),
 ]
 
+# pets_allowed is sent upstream as the tri-state string exactly as chosen in
+# the form ("Yes"/"No"/"Unknown") — the old boolean collapse made "Unknown"
+# round-trip back as "No". Amenities are canonicalized (variants like
+# "Laundry"/"Deck" map to their checkbox label) and deduped, preserving order.
 PAYLOAD_CASES = [
-    ({"pets_allowed": "Yes", "custom_amenities": "Garden"}, ["Parking"], True, ["Parking", "Garden"]),
-    ({"pets_allowed": "No", "custom_amenities": "Garden,Storage"}, ["Parking"], False, ["Parking", "Garden", "Storage"]),
-    ({"pets_allowed": "Unknown", "custom_amenities": ""}, ["Parking"], False, ["Parking"]),
-    ({"pets_allowed": "Yes", "custom_amenities": "  "}, ["Parking"], True, ["Parking"]),
-    ({"pets_allowed": "No", "custom_amenities": "Storage "}, ["Laundry"], False, ["Laundry", "Storage"]),
-    ({"pets_allowed": "Yes", "custom_amenities": "Deck, Patio"}, ["Laundry"], True, ["Laundry", "Deck", "Patio"]),
-    ({"pets_allowed": "Unknown", "custom_amenities": "Bike Room"}, [], False, ["Bike Room"]),
-    ({"pets_allowed": "Yes", "custom_amenities": ""}, [], True, []),
-    ({"pets_allowed": "No", "custom_amenities": "Garden"}, [], False, ["Garden"]),
-    ({"pets_allowed": "Yes", "custom_amenities": "Garden, Storage, Deck"}, ["Parking"], True, ["Parking", "Garden", "Storage", "Deck"]),
-    ({"pets_allowed": "No", "custom_amenities": "Roof Deck"}, ["Gym"], False, ["Gym", "Roof Deck"]),
-    ({"pets_allowed": "Yes", "custom_amenities": "Locker"}, ["Pool"], True, ["Pool", "Locker"]),
-    ({"pets_allowed": "Unknown", "custom_amenities": "Mailbox"}, ["Water"], False, ["Water", "Mailbox"]),
-    ({"pets_allowed": "Yes", "custom_amenities": "Garden, Garden"}, ["Parking"], True, ["Parking", "Garden", "Garden"]),
-    ({"pets_allowed": "No", "custom_amenities": "Access Ramp"}, ["Laundry"], False, ["Laundry", "Access Ramp"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "Garden"}, ["Parking"], "Yes", ["Parking", "Garden"]),
+    ({"pets_allowed": "No", "custom_amenities": "Garden,Storage"}, ["Parking"], "No", ["Parking", "Garden", "Storage"]),
+    ({"pets_allowed": "Unknown", "custom_amenities": ""}, ["Parking"], "Unknown", ["Parking"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "  "}, ["Parking"], "Yes", ["Parking"]),
+    ({"pets_allowed": "No", "custom_amenities": "Storage "}, ["Laundry"], "No", ["Washer/Dryer", "Storage"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "Deck, Patio"}, ["Laundry"], "Yes", ["Washer/Dryer", "Balcony/Deck", "Patio"]),
+    ({"pets_allowed": "Unknown", "custom_amenities": "Bike Room"}, [], "Unknown", ["Bike Room"]),
+    ({"pets_allowed": "Yes", "custom_amenities": ""}, [], "Yes", []),
+    ({"pets_allowed": "No", "custom_amenities": "Garden"}, [], "No", ["Garden"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "Garden, Storage, Deck"}, ["Parking"], "Yes", ["Parking", "Garden", "Storage", "Balcony/Deck"]),
+    ({"pets_allowed": "No", "custom_amenities": "Roof Deck"}, ["Gym"], "No", ["Gym", "Roof Deck"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "Locker"}, ["Pool"], "Yes", ["Pool", "Locker"]),
+    ({"pets_allowed": "Unknown", "custom_amenities": "Mailbox"}, ["Water"], "Unknown", ["Water", "Mailbox"]),
+    ({"pets_allowed": "Yes", "custom_amenities": "Garden, Garden"}, ["Parking"], "Yes", ["Parking", "Garden"]),
+    ({"pets_allowed": "No", "custom_amenities": "Access Ramp"}, ["Laundry"], "No", ["Washer/Dryer", "Access Ramp"]),
 ]
 
 AUTH_ROLE_CASES = [

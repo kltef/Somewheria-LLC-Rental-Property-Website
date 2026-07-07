@@ -1,7 +1,8 @@
 {% extends "error_base.html" %}
 {% set error_code = "502" %}
-{% set error_title = "Bad Gateway To The Property Feed" %}
-{% set error_message = "The website reached out to another service for listing information, but the response came back broken or incomplete." %}
-{% set primary_label = "Try Again Later" %}
-{% set secondary_label = "Browse Rentals" %}
-{% set house_note = "This usually means an upstream service needs a moment before the house data can flow normally again." %}
+{% set error_eyebrow = "502 — Bad gateway" %}
+{% set error_title = "The property feed came back garbled." %}
+{% set error_message = "We asked an upstream service for listing data, but its response came back broken or incomplete." %}
+{% set primary_label = "Back to home" %}
+{% set secondary_label = "Browse rentals" %}
+{% set house_note = "This usually clears once the upstream service recovers. Reloading after a minute often works." %}

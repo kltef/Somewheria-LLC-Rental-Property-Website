@@ -38,6 +38,49 @@ class AuthService:
             return "renter"
         return "guest"
 
+    def all_user_roles(self) -> list[dict]:
+        """Every account with a role, from .env AND user_roles.json.
+
+        The user-management page used to read only ``user_roles.json``, so on
+        a fresh deploy — where the admins are configured entirely through the
+        ADMIN_USERS / HIGH_ADMIN_USERS env vars and no role has been changed
+        in the UI yet — the page showed nothing. This merges both sources
+        using the same precedence as :meth:`get_user_role`: a file entry wins
+        over the env default, and a ``revoked`` tombstone hides the account.
+
+        Each item is ``{"email", "role", "source"}`` where source is
+        ``"config"`` (from .env) or ``"file"`` (assigned in the UI).
+        """
+        roles: dict[str, str] = {}
+        # Env defaults first (lowest precedence), strongest role last so it
+        # overwrites a weaker one for the same address.
+        for email in self.config.authorized_users:
+            roles[email.lower()] = "renter"
+        for email in self.config.admin_users:
+            roles[email.lower()] = "admin"
+        for email in self.config.high_admin_users:
+            roles[email.lower()] = "high_admin"
+        env_emails = set(roles)
+
+        file_roles = self.storage.get_user_roles()
+        for email, role in file_roles.items():
+            email = email.lower()
+            if role == "revoked":
+                roles.pop(email, None)  # deleted: hide even if env lists them
+            else:
+                roles[email] = role
+
+        merged = [
+            {
+                "email": email,
+                "role": role,
+                "source": "config" if email in env_emails and email not in file_roles else "file",
+            }
+            for email, role in roles.items()
+        ]
+        merged.sort(key=lambda item: item["email"])
+        return merged
+
     def login_user(self, id_info: dict) -> dict:
         user_email = id_info["email"].lower()
         user = {

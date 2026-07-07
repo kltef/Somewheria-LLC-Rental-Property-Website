@@ -1,75 +1,78 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-6 py-6 max-w-4xl mx-auto">
-  {% set badge = 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100' %}
-  {% if ticket.status == 'open' %}{% set badge = 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200' %}{% endif %}
-  {% if ticket.status == 'in_progress' %}{% set badge = 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' %}{% endif %}
-  {% if ticket.status == 'awaiting_parts' %}{% set badge = 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200' %}{% endif %}
-  {% if ticket.status == 'resolved' %}{% set badge = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' %}{% endif %}
-  {% if ticket.status == 'closed' %}{% set badge = 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300' %}{% endif %}
-  {% set prio = 'text-gray-700 dark:text-gray-300' %}
-  {% if ticket.priority == 'urgent' %}{% set prio = 'text-red-700 dark:text-red-300 font-semibold' %}{% endif %}
-  {% if ticket.priority == 'high' %}{% set prio = 'text-orange-700 dark:text-orange-300 font-semibold' %}{% endif %}
+<div class="sw-page">
+  {% set badge = 'sw-badge' %}
+  {% if ticket.status == 'open' %}{% set badge = 'sw-badge sw-badge-warn' %}{% endif %}
+  {% if ticket.status == 'in_progress' %}{% set badge = 'sw-badge sw-badge-warn' %}{% endif %}
+  {% if ticket.status == 'awaiting_parts' %}{% set badge = 'sw-badge sw-badge-warn' %}{% endif %}
+  {% if ticket.status == 'resolved' %}{% set badge = 'sw-badge sw-badge-ok' %}{% endif %}
+  {% if ticket.status == 'closed' %}{% set badge = 'sw-badge' %}{% endif %}
+  {% set prio = '' %}
+  {% if ticket.priority == 'urgent' %}{% set prio = 'sw-badge sw-badge-bad' %}{% endif %}
+  {% if ticket.priority == 'high' %}{% set prio = 'sw-badge sw-badge-warn' %}{% endif %}
 
   <div class="mb-4">
     <a href="{{ url_for('admin_ticket_list') if is_admin else url_for('ticket_list_mine') }}"
-       class="text-sm text-blue-600 dark:text-blue-400 hover:underline">&larr; Back to {{ 'all tickets' if is_admin else 'my tickets' }}</a>
+       class="sw-link text-sm">&larr; Back to {{ 'all tickets' if is_admin else 'my tickets' }}</a>
   </div>
 
-  <div class="bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6 mb-6">
-    <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
-      <div>
-        <h1 class="text-2xl font-bold text-[#111518] dark:text-white">{{ ticket.title }}</h1>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          Reference <span class="font-mono">{{ ticket.id[:8] }}</span>
-          &middot; Created {{ ticket.created_at[:10] if ticket.created_at else '' }}
-          {% if ticket.updated_at and ticket.updated_at != ticket.created_at %}
-            &middot; Updated {{ ticket.updated_at[:10] }}
-          {% endif %}
-        </p>
-      </div>
-      <span class="inline-block px-2 py-1 rounded text-xs font-medium {{ badge }}">{{ ticket.status.replace('_', ' ') }}</span>
+  <p class="sw-eyebrow">Repair ticket</p>
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="sw-title">{{ ticket.title }}</h1>
+      <p class="text-xs sw-mono mt-2" style="color:var(--sw-ink-soft)">
+        Reference {{ ticket.id[:8] }}
+        &middot; Created {{ ticket.created_at[:10] if ticket.created_at else '' }}
+        {% if ticket.updated_at and ticket.updated_at != ticket.created_at %}
+          &middot; Updated {{ ticket.updated_at[:10] }}
+        {% endif %}
+      </p>
     </div>
+    <span class="{{ badge }} mt-2">{{ ticket.status.replace('_', ' ') }}</span>
+  </div>
 
-    <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm mb-4">
+  <div class="mt-6 sw-parcel">
+    <span class="sw-parcel-num">Ticket {{ ticket.id[:8] }}</span>
+
+    <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm mt-4 mb-4">
       <div>
-        <dt class="text-gray-500 dark:text-gray-400">Priority</dt>
-        <dd class="{{ prio }}">{{ ticket.priority|capitalize }}</dd>
+        <dt class="sw-label mb-1">Severity</dt>
+        <dd><span class="{{ prio }}">{{ ticket.priority|capitalize }}</span></dd>
       </div>
       <div>
-        <dt class="text-gray-500 dark:text-gray-400">Category</dt>
-        <dd class="text-[#111518] dark:text-white">{{ ticket.category|capitalize }}</dd>
+        <dt class="sw-label mb-1">Category</dt>
+        <dd>{{ ticket.category|capitalize }}</dd>
       </div>
       <div>
-        <dt class="text-gray-500 dark:text-gray-400">Property</dt>
-        <dd class="text-[#111518] dark:text-white">{{ ticket.property_name or '—' }}</dd>
+        <dt class="sw-label mb-1">Property</dt>
+        <dd>{{ ticket.property_name or '—' }}</dd>
       </div>
       <div>
-        <dt class="text-gray-500 dark:text-gray-400">Submitted by</dt>
-        <dd class="text-[#111518] dark:text-white">
+        <dt class="sw-label mb-1">Submitted by</dt>
+        <dd>
           {{ ticket.submitter_name or '—' }}
-          {% if ticket.submitted_by %}<span class="text-gray-500 dark:text-gray-400">({{ ticket.submitted_by }})</span>{% endif %}
+          {% if ticket.submitted_by %}<span style="color:var(--sw-ink-soft)">({{ ticket.submitted_by }})</span>{% endif %}
         </dd>
       </div>
       {% if ticket.contact %}
         <div>
-          <dt class="text-gray-500 dark:text-gray-400">Contact</dt>
-          <dd class="text-[#111518] dark:text-white">{{ ticket.contact }}</dd>
+          <dt class="sw-label mb-1">Contact</dt>
+          <dd>{{ ticket.contact }}</dd>
         </div>
       {% endif %}
       {% if ticket.assigned_to %}
         <div>
-          <dt class="text-gray-500 dark:text-gray-400">Assigned to</dt>
-          <dd class="text-[#111518] dark:text-white">{{ ticket.assigned_to }}</dd>
+          <dt class="sw-label mb-1">Assigned to</dt>
+          <dd>{{ ticket.assigned_to }}</dd>
         </div>
       {% endif %}
       {% if ticket.jira_key and jira_base_url %}
         <div>
-          <dt class="text-gray-500 dark:text-gray-400">JIRA issue</dt>
-          <dd class="text-[#111518] dark:text-white">
+          <dt class="sw-label mb-1">JIRA issue</dt>
+          <dd>
             <a href="{{ jira_base_url }}/browse/{{ ticket.jira_key }}"
                target="_blank" rel="noopener noreferrer"
-               class="text-blue-600 dark:text-blue-400 hover:underline font-mono">
+               class="sw-link sw-mono">
               {{ ticket.jira_key }}
             </a>
           </dd>
@@ -78,19 +81,20 @@
     </dl>
 
     <div>
-      <h2 class="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Description</h2>
-      <p class="whitespace-pre-wrap text-[#111518] dark:text-white">{{ ticket.description }}</p>
+      <h2 class="sw-label mb-1">Description</h2>
+      <p class="whitespace-pre-wrap" style="color:var(--sw-ink)">{{ ticket.description }}</p>
     </div>
 
     {% if ticket.photos %}
       <div class="mt-4">
-        <h2 class="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">Photos</h2>
+        <h2 class="sw-label mb-2">Photos</h2>
         <div class="flex flex-wrap gap-2">
           {% for photo in ticket.photos %}
             <a href="{{ photo.url }}" target="_blank" rel="noopener"
-               class="block border border-neutral-200 dark:border-neutral-800 rounded overflow-hidden hover:opacity-90 transition-opacity">
+               class="block rounded overflow-hidden hover:opacity-90 transition-opacity border"
+               style="border-color:var(--sw-line)">
               <img src="{{ photo.url }}" alt="Ticket attachment"
-                   class="h-24 w-24 object-cover bg-neutral-100 dark:bg-neutral-900">
+                   class="h-24 w-24 object-cover" style="background-color:var(--sw-hover)">
             </a>
           {% endfor %}
         </div>
@@ -99,24 +103,24 @@
   </div>
 
   {# Email-update preference: visible to the submitter or any admin. #}
-  <div class="bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800 p-4 mb-6">
+  <div class="mt-6 sw-panel">
     <form method="post" action="{{ url_for('ticket_toggle_email', ticket_id=ticket.id) }}"
           class="flex flex-wrap items-center justify-between gap-3">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="flex items-start gap-2 min-w-0">
         <span class="text-xl leading-none">✉</span>
         <div class="min-w-0">
-          <p class="text-[#111518] dark:text-white font-medium">
+          <p class="font-medium">
             Email status updates
             {% if ticket.email_updates %}
-              <span class="inline-block ml-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">On</span>
+              <span class="sw-badge sw-badge-ok ml-1">On</span>
             {% else %}
-              <span class="inline-block ml-1 px-2 py-0.5 rounded text-xs font-medium bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200">Off</span>
+              <span class="sw-badge ml-1">Off</span>
             {% endif %}
           </p>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+          <p class="sw-help mt-0.5">
             {% if ticket.submitted_by %}
-              Status updates go to <span class="font-mono">{{ ticket.submitted_by }}</span>.
+              Status updates go to <span class="sw-mono">{{ ticket.submitted_by }}</span>.
             {% else %}
               No email on file for this ticket — status updates can't be sent.
             {% endif %}
@@ -126,14 +130,12 @@
       {% if ticket.submitted_by %}
         {% if ticket.email_updates %}
           {# Absent checkbox on submit == off #}
-          <button type="submit"
-                  class="px-3 py-2 text-sm rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">
-            Turn off
+          <button type="submit" class="sw-btn sw-btn-ghost sw-btn-sm">
+            Turn off email updates
           </button>
         {% else %}
-          <button type="submit" name="email_updates" value="1"
-                  class="px-3 py-2 text-sm rounded bg-emerald-600 hover:bg-emerald-700 text-white font-medium transition-colors">
-            Turn on
+          <button type="submit" name="email_updates" value="1" class="sw-btn sw-btn-ghost sw-btn-sm">
+            Turn on email updates
           </button>
         {% endif %}
       {% endif %}
@@ -141,73 +143,69 @@
   </div>
 
   {% if is_admin %}
-    <div class="bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6 mb-6">
-      <h2 class="text-lg font-semibold text-[#111518] dark:text-white mb-3">Manage Ticket</h2>
+    <div class="mt-6 sw-panel">
+      <h2 class="sw-h3 mb-4">Manage ticket</h2>
       <form method="post" action="{{ url_for('admin_ticket_update', ticket_id=ticket.id) }}"
             class="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <label class="flex flex-col">
-          <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Status</span>
-          <select name="status"
-                  class="p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white">
+          <span class="sw-label">Status</span>
+          <select name="status" class="sw-input">
             {% for s in statuses %}
               <option value="{{ s }}" {% if ticket.status == s %}selected{% endif %}>{{ s.replace('_', ' ')|capitalize }}</option>
             {% endfor %}
           </select>
         </label>
         <label class="flex flex-col">
-          <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Priority</span>
-          <select name="priority"
-                  class="p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white">
+          <span class="sw-label">Severity</span>
+          <select name="priority" class="sw-input">
             {% for p in priorities %}
               <option value="{{ p }}" {% if ticket.priority == p %}selected{% endif %}>{{ p|capitalize }}</option>
             {% endfor %}
           </select>
         </label>
         <label class="flex flex-col sm:col-span-1">
-          <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">Assign to (email)</span>
+          <span class="sw-label">Assign to (email)</span>
           <input type="text" name="assigned_to" value="{{ ticket.assigned_to }}" maxlength="254"
                  placeholder="tech@example.com"
-                 class="p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white">
+                 class="sw-input">
         </label>
         <div class="flex items-end">
-          <button type="submit"
-                  class="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors">
-            Save
+          <button type="submit" class="sw-btn sw-btn-primary sw-btn-sm w-full sm:w-auto">
+            Save changes
           </button>
         </div>
       </form>
     </div>
   {% endif %}
 
-  <div class="bg-white dark:bg-neutral-900 rounded shadow border border-neutral-200 dark:border-neutral-800 p-6">
-    <h2 class="text-lg font-semibold text-[#111518] dark:text-white mb-3">Notes</h2>
+  <div class="mt-6 sw-panel">
+    <h2 class="sw-h3 mb-4">Notes</h2>
     {% if ticket.notes %}
       <ul class="space-y-3 mb-4">
         {% for note in ticket.notes %}
-          <li class="border-l-4 border-blue-400 dark:border-blue-500 pl-3">
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              <span class="font-medium text-[#111518] dark:text-white">{{ note.by }}</span>
+          <li class="pl-3" style="border-left:3px solid var(--sw-brass)">
+            <p class="text-xs sw-mono" style="color:var(--sw-ink-soft)">
+              <span class="font-medium" style="color:var(--sw-ink)">{{ note.by }}</span>
               &middot; {{ note.at[:19].replace('T', ' ') if note.at else '' }}
             </p>
-            <p class="text-[#111518] dark:text-white whitespace-pre-wrap mt-1">{{ note.text }}</p>
+            <p class="whitespace-pre-wrap mt-1">{{ note.text }}</p>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">No notes yet.</p>
+      <p class="sw-help mb-4">No notes yet.</p>
     {% endif %}
 
     <form method="post" action="{{ url_for('ticket_add_note', ticket_id=ticket.id) }}" class="space-y-2">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-      <label for="note" class="block text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Add a note</label>
+      <label for="note" class="sw-label">Add a note</label>
       <textarea id="note" name="note" rows="3" required maxlength="2000"
                 placeholder="Add an update, question, or comment…"
-                class="w-full p-2 border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-950 text-[#111518] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                class="sw-input"></textarea>
       <div class="text-right">
-        <button type="submit"
-                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium transition-colors">
-          Post Note
+        <button type="submit" class="sw-btn sw-btn-primary sw-btn-sm">
+          Post note
         </button>
       </div>
     </form>

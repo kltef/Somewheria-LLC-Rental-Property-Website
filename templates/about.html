@@ -1,12 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-10 md:py-12 max-w-full sm:max-w-2xl mx-auto bg-white dark:bg-neutral-950 rounded shadow">
-    <h2 class="text-2xl font-bold mb-4 text-[#111518] dark:text-white">About Somewheria, LLC.</h2>
-    <p class="text-[#111518] dark:text-neutral-200">
-      Email: <a href="mailto:angela@somewheria.com" class="underline text-blue-600 dark:text-blue-400">angela@somewheria.com</a>
-    </p>
-    <p class="mt-1 text-[#111518] dark:text-neutral-200">Contact Person: Angela </p>
-    <p class="text-[#111518] dark:text-neutral-200">Phone: (570) 236-9960</p>
-    <p class="mt-5 text-[#111518] dark:text-neutral-200">We are a next-generation rental company, matching you to your ideal home seamlessly!</p>
+<div class="sw-page sw-page-narrow">
+  <p class="sw-eyebrow">About us</p>
+  <h1 class="sw-title">A small company for good homes.</h1>
+  <p class="sw-sub">
+    Somewheria, LLC is a family-run rental company. We keep a short list of
+    homes, look after them ourselves, and stay reachable &mdash; before, during,
+    and after your lease.
+  </p>
+
+  <div class="mt-8 sw-parcel">
+    <div class="sw-parcel-num">CONTACT &middot; ANGELA</div>
+    <div class="sw-contact-row" style="margin-top:0.9rem;">
+      <span class="sw-contact-label">TEL</span>
+      <a href="tel:+15702369960">(570) 236-9960</a>
+    </div>
+    <div class="sw-contact-row">
+      <span class="sw-contact-label">MAIL</span>
+      <a href="mailto:angela@somewheria.com">angela@somewheria.com</a>
+    </div>
+  </div>
+
+  <div class="mt-8">
+    <a class="sw-btn sw-btn-primary" href="{{ url_for('for_rent') }}">See what&rsquo;s for rent</a>
+  </div>
 </div>
 {% endblock %}

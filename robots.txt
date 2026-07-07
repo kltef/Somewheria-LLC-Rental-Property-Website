@@ -1,0 +1,33 @@
+# Somewheria, LLC — crawler policy.
+# Allowed: the major search engines (so the site is discoverable) and
+# Anthropic's Claude crawler. Every other automated crawler is asked to stay
+# out. Note: this is advisory. Well-behaved crawlers honor it; malicious
+# scanners ignore robots.txt entirely.
+
+Sitemap: https://somewheria.com/sitemap.xml
+
+# --- Search engines (keep the site discoverable) ---
+User-agent: Googlebot
+Allow: /
+
+User-agent: Googlebot-Image
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+# --- Anthropic / Claude ---
+User-agent: ClaudeBot
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+# --- Everyone else: stay out ---
+User-agent: *
+Disallow: /

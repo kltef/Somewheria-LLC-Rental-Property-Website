@@ -2,91 +2,102 @@
 {% block content %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-10 md:py-12 bg-white dark:bg-neutral-950 rounded shadow">
-    <h2 class="text-2xl font-bold mb-6">Available Properties</h2>
+<div class="sw-page">
+    <p class="sw-eyebrow">For rent</p>
+    <h1 class="sw-title">What&rsquo;s open right now</h1>
+    <p class="sw-sub">Every available home, straight from our records. Filter to fit, then look closer.</p>
 
     {% if properties %}
-    <div id="filterBar" class="mb-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 p-4 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900">
-      <label class="flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-        Min bedrooms
-        <input id="filterBedrooms" type="number" min="0" step="1" class="mt-1 border rounded p-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+    <div id="filterBar" class="mt-8 mb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 sw-panel" style="padding:1.1rem 1.2rem;">
+      <label class="flex flex-col">
+        <span class="sw-label" style="margin-bottom:0.35rem;">Min bedrooms</span>
+        <input id="filterBedrooms" type="number" min="0" step="1" class="sw-input" style="padding:0.45rem 0.6rem;" />
       </label>
-      <label class="flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-        Min bathrooms
-        <input id="filterBathrooms" type="number" min="0" step="0.5" class="mt-1 border rounded p-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+      <label class="flex flex-col">
+        <span class="sw-label" style="margin-bottom:0.35rem;">Min bathrooms</span>
+        <input id="filterBathrooms" type="number" min="0" step="0.5" class="sw-input" style="padding:0.45rem 0.6rem;" />
       </label>
-      <label class="flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-        Max rent ($)
-        <input id="filterMaxRent" type="number" min="0" step="50" class="mt-1 border rounded p-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" />
+      <label class="flex flex-col">
+        <span class="sw-label" style="margin-bottom:0.35rem;">Max rent ($)</span>
+        <input id="filterMaxRent" type="number" min="0" step="50" class="sw-input" style="padding:0.45rem 0.6rem;" />
       </label>
-      <label class="flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-        Pets allowed
-        <select id="filterPets" class="mt-1 border rounded p-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
+      <label class="flex flex-col">
+        <span class="sw-label" style="margin-bottom:0.35rem;">Pets allowed</span>
+        <select id="filterPets" class="sw-input" style="padding:0.45rem 0.6rem;">
           <option value="">Any</option>
           <option value="yes">Yes</option>
+          <option value="no">No</option>
         </select>
       </label>
-      <label class="flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-        ADA accessible
-        <select id="filterAda" class="mt-1 border rounded p-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800">
+      <label class="flex flex-col">
+        <span class="sw-label" style="margin-bottom:0.35rem;">ADA accessible</span>
+        <select id="filterAda" class="sw-input" style="padding:0.45rem 0.6rem;">
           <option value="">Any</option>
           <option value="yes">Yes</option>
         </select>
       </label>
       <div class="flex items-end">
-        <button type="button" id="filterReset" class="w-full border rounded p-1 text-xs font-semibold bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800">Reset filters</button>
+        <button type="button" id="filterReset" class="sw-btn sw-btn-ghost sw-btn-sm w-full">Reset filters</button>
       </div>
     </div>
-    <div id="filterCount" class="mb-4 text-sm text-gray-600 dark:text-gray-300" aria-live="polite"></div>
+    <div id="filterCount" class="mb-4 sw-mono text-xs" style="color:var(--sw-ink-soft); letter-spacing:0.08em;" aria-live="polite"></div>
     {% endif %}
 
     {% if not properties %}
-        <div class="text-center text-gray-500 py-10">Loading properties, please try again in a moment.</div>
+        <div class="sw-empty mt-8">
+          <span class="sw-parcel-num">SURVEY IN PROGRESS</span>
+          Listings are loading. Give it a moment and refresh.
+        </div>
     {% else %}
-    <div id="propertyGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+    <div id="propertyGrid" class="sw-prop-grid" style="margin-top:0.5rem;">
     {% for prop in properties %}
-        <div class="property-card rounded shadow p-4 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"
+        <div class="property-card sw-prop-card"
              data-bedrooms="{{ prop.bedrooms }}"
              data-bathrooms="{{ prop.bathrooms }}"
              data-rent="{{ prop.rent }}"
              data-pets="{{ prop.pets_allowed }}"
              data-ada="{{ prop.ada_accessible }}">
-            <a href="{{ url_for('property_details', uuid=prop.id) }}">
-                <img src="{{ prop.thumbnail }}" alt="Property Image" class="rounded mb-3 w-full h-48 object-cover bg-neutral-100 dark:bg-neutral-950" />
-                <div class="font-bold text-lg text-[#111518] dark:text-white">{{ prop.name }}</div>
-                <div class="text-gray-600 dark:text-gray-300">{{ prop.address }}</div>
-                <div class="mt-2 text-blue-800 dark:text-blue-400 font-semibold">${{ prop.rent }}/mo</div>
+            <a href="{{ url_for('property_details', uuid=prop.id) }}" class="flex flex-col flex-1">
+                <img src="{{ prop.thumbnail }}" alt="Photo of {{ prop.name }}" loading="lazy" />
+                <div class="sw-prop-body">
+                  <div class="sw-prop-name">{{ prop.name }}</div>
+                  <div class="sw-prop-addr">{{ prop.address }}</div>
+                  <div class="sw-prop-rent">${{ prop.rent }} <span class="sw-per">/ month</span></div>
+                </div>
             </a>
-            <div class="mt-3">
-                <a href="{{ url_for('property_details', uuid=prop.id) }}"
-                class="underline text-blue-600 dark:text-blue-400">Details</a>
+            <div class="mt-1 px-1.5 pb-1">
+                <a href="{{ url_for('property_details', uuid=prop.id) }}" class="sw-link text-sm">See details</a>
             </div>
         </div>
     {% endfor %}
     </div>
-    <div id="filterEmpty" class="hidden text-center text-gray-500 py-10">No properties match your filters.</div>
+    <div id="filterEmpty" class="hidden sw-empty mt-6">
+      <span class="sw-parcel-num">NO MATCHES ON THE PLAT</span>
+      No homes fit those filters. Loosen one and try again.
+    </div>
 
-    <h3 class="text-xl font-bold mt-10 mb-3 text-[#111518] dark:text-white">Map view</h3>
-    <div id="propertyMap" style="height: 360px;" class="rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900"></div>
-    <div id="mapStatus" class="mt-2 text-xs text-gray-500" aria-live="polite"></div>
+    <p class="sw-eyebrow mt-14">Map view</p>
+    <h2 class="sw-h3 mt-3 mb-4">Where these homes sit</h2>
+    <div id="propertyMap" style="height: 360px; border:1px solid var(--sw-line); border-radius:4px; background:var(--sw-card);"></div>
+    <div id="mapNote" class="mt-2 sw-mono text-xs" style="color:var(--sw-ink-soft);" aria-live="polite"></div>
     {% endif %}
 
     <!-- Lead capture: Notify me -->
-    <div class="mt-12 p-6 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900">
-      <h3 class="text-lg font-bold text-[#111518] dark:text-white mb-2">Notify me when a new property is listed</h3>
-      <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Drop your email and we'll let you know when something new becomes available.</p>
-      <form id="leadCaptureForm" class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-end">
+    <div id="notify" class="mt-14 sw-parcel">
+      <div class="sw-parcel-num">STAY ON THE LIST</div>
+      <h3>Hear about new homes first</h3>
+      <p>Leave your email and we&rsquo;ll tell you when something new is listed. Nothing else, no spam.</p>
+      <form id="leadCaptureForm" class="mt-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <label class="flex-1 flex flex-col text-xs font-semibold text-[#111518] dark:text-white">
-          Your email
-          <input type="email" id="leadEmail" name="email" required maxlength="254" class="mt-1 border rounded p-2 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"/>
+        <label class="flex-1 flex flex-col">
+          <span class="sw-label" style="margin-bottom:0.35rem;">Your email</span>
+          <input type="email" id="leadEmail" name="email" required maxlength="254" class="sw-input"/>
         </label>
-        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Notify me</button>
+        <button type="submit" class="sw-btn sw-btn-primary">Notify me</button>
       </form>
       <div id="leadFeedback" class="mt-3 text-sm" aria-live="polite"></div>
     </div>
 </div>
-{% endblock %}
 <script>
 // --- §3.1 Client-side search/filter against rendered cards ---
 (function() {
@@ -117,6 +128,7 @@
     const minBath = parseFloat(bathEl.value);
     const maxRent = parseFloat(rentEl.value);
     const petsRequired = petsEl.value === 'yes';
+    const petsExcluded = petsEl.value === 'no';
     const adaRequired = adaEl.value === 'yes';
     let visible = 0;
     cards.forEach(card => {
@@ -130,6 +142,7 @@
       if (!isNaN(minBath) && (isNaN(bath) || bath < minBath)) show = false;
       if (!isNaN(maxRent) && (isNaN(rent) || rent > maxRent)) show = false;
       if (petsRequired && !pets) show = false;
+      if (petsExcluded && pets) show = false;
       if (adaRequired && !ada) show = false;
       card.style.display = show ? '' : 'none';
       if (show) visible++;
@@ -195,7 +208,7 @@
 (function() {
   const mapEl = document.getElementById('propertyMap');
   if (!mapEl || typeof L === 'undefined') return;
-  const statusEl = document.getElementById('mapStatus');
+  const statusEl = document.getElementById('mapNote');
   // eslint-disable-next-line
   const ids = {{ properties|map(attribute='id')|list|tojson }};
   // eslint-disable-next-line
@@ -209,7 +222,9 @@
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
 
-  const CACHE_KEY = 'geocode_cache_v1';
+  // v2: bumped when the fallback-geocoding logic landed so browsers that
+  // cached a failed full-address lookup as null under v1 re-resolve.
+  const CACHE_KEY = 'geocode_cache_v2';
   function loadCache() {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch { return {}; }
   }
@@ -221,13 +236,18 @@
   let pending = mapProperties.length;
   let success = 0;
 
-  function addPin(prop, lat, lon) {
-    const marker = L.marker([lat, lon]).addTo(map);
-    const safeName = String(prop.name || 'Property').replace(/[<>&"']/g, c => ({
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[<>&"']/g, c => ({
       '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":"&#39;"
     })[c]);
+  }
+  function addPin(prop, lat, lon, approximate) {
+    const marker = L.marker([lat, lon]).addTo(map);
     const url = '/property/' + encodeURIComponent(prop.id);
-    marker.bindPopup('<a href="' + url + '">' + safeName + '</a>');
+    let html = '<a href="' + url + '">' + esc(prop.name || 'Property') + '</a>';
+    if (prop.address) html += '<br><span style="font-size:0.85em;color:#555">' + esc(prop.address) + '</span>';
+    if (approximate) html += '<br><span style="font-size:0.8em;color:#8a6b1b">Approximate location</span>';
+    marker.bindPopup(html);
     bounds.push([lat, lon]);
     success++;
   }
@@ -239,6 +259,33 @@
     }
   }
 
+  // Progressively broader queries so a pin still appears when the exact
+  // street address isn't in OpenStreetMap: full address -> the part after
+  // the street -> "city ST zip" tail -> ZIP centroid. Everything past the
+  // first (full-address) candidate is flagged approximate in the popup.
+  function candidatesFor(addr) {
+    const list = [addr];
+    const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length > 1) list.push(parts.slice(1).join(', '));
+    const words = addr.replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+    if (words.length > 3) list.push(words.slice(-3).join(' '));
+    const zip = (addr.match(/\b\d{5}\b/) || [])[0];
+    if (zip) list.push(zip + ', USA');
+    return list.filter((v, idx) => v && list.indexOf(v) === idx);
+  }
+  function geocode(query) {
+    return fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(query))
+      .then(r => r.ok ? r.json() : [])
+      .then(results => {
+        if (Array.isArray(results) && results.length > 0) {
+          const lat = parseFloat(results[0].lat), lon = parseFloat(results[0].lon);
+          if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+        }
+        return null;
+      })
+      .catch(() => null);
+  }
+
   // Sequential geocoding — Nominatim asks for max 1 req/sec.
   let i = 0;
   function next() {
@@ -248,36 +295,36 @@
     if (!addr || addr === 'N/A') { tick(); next(); return; }
     if (cache[addr] !== undefined) {
       const c = cache[addr];
-      if (c && c.lat != null && c.lon != null) addPin(prop, c.lat, c.lon);
+      if (c && c.lat != null && c.lon != null) addPin(prop, c.lat, c.lon, !!c.approx);
       tick();
       next();
       return;
     }
-    fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(addr))
-      .then(r => r.ok ? r.json() : [])
-      .then(results => {
-        if (Array.isArray(results) && results.length > 0) {
-          const lat = parseFloat(results[0].lat);
-          const lon = parseFloat(results[0].lon);
-          if (!isNaN(lat) && !isNaN(lon)) {
-            cache[addr] = { lat, lon };
-            saveCache(cache);
-            addPin(prop, lat, lon);
-          } else {
-            cache[addr] = null;
-            saveCache(cache);
-          }
-        } else {
-          cache[addr] = null;
-          saveCache(cache);
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
+    const cands = candidatesFor(addr);
+    let ci = 0;
+    function tryNext() {
+      if (ci >= cands.length) {
+        cache[addr] = null;
+        saveCache(cache);
         tick();
-        // 1.1s pacing per Nominatim's usage policy.
         setTimeout(next, 1100);
+        return;
+      }
+      const approximate = ci > 0;
+      geocode(cands[ci++]).then(res => {
+        if (res) {
+          cache[addr] = { lat: res.lat, lon: res.lon, approx: approximate };
+          saveCache(cache);
+          addPin(prop, res.lat, res.lon, approximate);
+          tick();
+          setTimeout(next, 1100);
+        } else {
+          // Try the next, broader candidate (still paced for Nominatim).
+          setTimeout(tryNext, 1100);
+        }
       });
+    }
+    tryNext();
   }
   if (mapProperties.length === 0) {
     if (statusEl) statusEl.textContent = 'No properties to map.';
@@ -361,3 +408,4 @@
     });
 })();
 </script>
+{% endblock %}

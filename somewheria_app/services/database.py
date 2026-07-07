@@ -18,6 +18,8 @@ Schema overview
 - ``tickets(id TEXT PRIMARY KEY, payload TEXT NOT NULL,
    updated_at TEXT, created_at TEXT)``
 - ``lead_captures(email TEXT PRIMARY KEY, payload TEXT NOT NULL)``
+- ``hidden_listings(property_id TEXT PRIMARY KEY)`` — listings deactivated by
+  an admin (hidden from the public site, kept upstream).
 
 Tickets and registrations keep their full dict in a JSON ``payload`` column to
 match the existing flexible shape; promotion to typed columns can come later
@@ -73,6 +75,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     CREATE TABLE IF NOT EXISTS lead_captures (
         email   TEXT PRIMARY KEY,
         payload TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hidden_listings (
+        property_id TEXT PRIMARY KEY
     )
     """,
 )

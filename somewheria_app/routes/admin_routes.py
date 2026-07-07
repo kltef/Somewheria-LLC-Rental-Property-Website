@@ -1,9 +1,14 @@
 import csv
 import datetime
 import io
+import os
+import re
+import time
 import uuid as uuid_lib
 
-from flask import Response, abort, current_app, jsonify, redirect, render_template, request, send_file, url_for
+import requests
+
+from flask import Response, abort, current_app, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from ..services.auth import (
     admin_required,
@@ -28,6 +33,24 @@ MAX_CONTRACT_PDF_BYTES = 16 * 1024 * 1024
 PDF_MAGIC = b"%PDF-"
 
 
+def _lazy_file_status(label: str, path) -> dict:
+    """Status row for a file that is created on first write.
+
+    The appointments log, change log, and user-roles file don't exist until
+    the first booking / site change / role assignment. Their absence on a
+    fresh deploy is normal, so report it as healthy ("Not created yet")
+    rather than a red "Missing"; only flag a real fault when the directory
+    itself isn't writable, which would actually block the first write.
+    """
+    if path.exists():
+        return {"label": label, "detail": "Present", "ok": True}
+    parent = path.parent
+    writable = parent.is_dir() and os.access(parent, os.W_OK)
+    if writable:
+        return {"label": label, "detail": "Not created yet", "ok": True}
+    return {"label": label, "detail": "Missing (directory not writable)", "ok": False}
+
+
 def _zillow_status_detail(zillow) -> str:
     snapshot = zillow.status_snapshot()
     if not snapshot["configured"]:
@@ -46,10 +69,19 @@ def _current_role() -> str:
 
 
 def _can_act_on(actor_role: str, target_role: str) -> bool:
-    # Admins may only act on users whose rank is strictly lower than their own,
-    # and may only assign roles strictly below their own rank. Only high_admin
-    # may promote to admin or high_admin.
+    # Admins may only act on users whose rank is strictly lower than their own.
     return role_rank(actor_role) > role_rank(target_role)
+
+
+def _can_assign(actor_role: str, new_role: str) -> bool:
+    # High admins may assign any role, INCLUDING high_admin — with a strict
+    # rank comparison here the top role was unassignable by anyone, so no
+    # user could ever be promoted to high_admin through the UI (only via
+    # .env). Everyone below high_admin may still only assign roles strictly
+    # under their own rank (an admin can hand out renter, not admin).
+    if actor_role == "high_admin":
+        return True
+    return role_rank(actor_role) > role_rank(new_role)
 
 
 @admin_required
@@ -88,6 +120,31 @@ def save_edit(id):
         return redirect(url_for("manage_listings"))
     except KeyError:
         return "Property not found", 404
+    # Distinguish "couldn't reach the property service" from "the service
+    # rejected the change" — collapsing every failure into one opaque 500
+    # made add-listing outages (DNS, bad API key, upstream 4xx) untriageable.
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        body = (exc.response.text or "")[:500] if exc.response is not None else ""
+        services.notifications.log_and_notify_error(
+            "Save Edit Error",
+            f"Upstream rejected save for {id}: HTTP {status} {body}",
+        )
+        return (
+            f"The property service rejected the change (HTTP {status}). "
+            "Check the listing fields and try again.",
+            502,
+        )
+    except requests.RequestException as exc:
+        services.notifications.log_and_notify_error(
+            "Save Edit Error",
+            f"Could not reach the property service saving {id}: {exc}",
+        )
+        return (
+            "Could not reach the property service (network/DNS). "
+            "The listing was NOT saved — try again once connectivity is restored.",
+            503,
+        )
     except Exception as exc:
         services.notifications.log_and_notify_error("Save Edit Error", f"Error saving edits for {id}: {exc}")
         return "Failed to save changes. Please try again.", 500
@@ -238,7 +295,10 @@ def analytics_dashboard():
     )
 
 
-@high_admin_required
+# Admin-level, matching the other operational tools (users, registrations,
+# contracts, tickets). Only Dashboard and Analytics remain high_admin-only;
+# gating Status at high_admin left plain admins with a nav link that 403'd.
+@admin_required
 def admin_status():
     services = get_services()
     config = services.config
@@ -331,27 +391,18 @@ def admin_status():
     ]
 
     # Do not disclose absolute paths to the UI; report only presence/absence.
+    # The application log is written at startup, so its absence IS an anomaly;
+    # the other three are created lazily on first write, so "not created yet"
+    # is a healthy state rather than a fault.
     file_status = [
         {
             "label": "Application Log",
             "detail": "Present" if config.log_file.exists() else "Missing",
             "ok": config.log_file.exists(),
         },
-        {
-            "label": "Change Log",
-            "detail": "Present" if config.change_log_file.exists() else "Missing",
-            "ok": config.change_log_file.exists(),
-        },
-        {
-            "label": "Appointments File",
-            "detail": "Present" if config.property_appointments_file.exists() else "Missing",
-            "ok": config.property_appointments_file.exists(),
-        },
-        {
-            "label": "User Roles File",
-            "detail": "Present" if config.user_roles_file.exists() else "Missing",
-            "ok": config.user_roles_file.exists(),
-        },
+        _lazy_file_status("Change Log", config.change_log_file),
+        _lazy_file_status("Appointments File", config.property_appointments_file),
+        _lazy_file_status("User Roles File", config.user_roles_file),
     ]
 
     website_status = [
@@ -438,7 +489,11 @@ def admin_dashboard_combined():
             if not _can_act_on(actor_role, target_role):
                 error = "You cannot modify a user at or above your own role."
             elif services.storage.delete_user_role(email):
-                success = f"User {email} removed."
+                success = (
+                    f"Deactivated {email} — their access is revoked, but their "
+                    "contracts, profile, and tickets are kept. Re-add the email "
+                    "to restore access."
+                )
                 services.notifications.log_site_change(actor_email, "user_deleted", {"email": email})
             else:
                 error = "User not found."
@@ -447,7 +502,7 @@ def admin_dashboard_combined():
             target_role = services.auth.get_user_role(email)
             if new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
-            elif not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
+            elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
             else:
                 services.storage.set_user_role(email, new_role)
@@ -471,7 +526,7 @@ def admin_dashboard_combined():
                 error = "User already exists."
             elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
-            elif not _can_act_on(actor_role, new_role):
+            elif not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
             else:
                 services.storage.set_user_role(email, new_role)
@@ -500,6 +555,14 @@ def admin_dashboard_combined():
     )
 
 
+# Registration spam heuristics. Real applicants don't paste links, punycode
+# domains, or the comment-spam "hs=" tracking marker into a rental
+# application; bots also fill the honeypot field and submit faster than a
+# person can read the form.
+_REGISTRATION_SPAM = re.compile(r"https?://|www\.|://|xn--|\bhs=", re.IGNORECASE)
+_MIN_REGISTER_SECONDS = 3
+
+
 @rate_limit(limit=3, window_seconds=600)
 def register():
     services = get_services()
@@ -509,6 +572,28 @@ def register():
         reason = request.form.get("reason", "").strip()[:2000]
         if not name or not is_valid_email(email):
             return render_template("register.html", error="Name and a valid email are required.")
+        # The timestamp is set when the form is rendered; a POST with no
+        # prior GET (or one arriving inhumanly fast) is a bot. Skipped under
+        # TESTING so the route tests can POST directly.
+        rendered_at = session.get("register_form_ts")
+        too_fast = (
+            rendered_at is None or time.time() - rendered_at < _MIN_REGISTER_SECONDS
+        ) and not current_app.config.get("TESTING")
+        if request.form.get("website") or too_fast or _REGISTRATION_SPAM.search(f"{name} {reason}"):
+            # Serve the normal success page without storing anything so the
+            # bot can't tell which check it tripped.
+            return render_template("register.html", success=True)
+        session.pop("register_form_ts", None)
+        # Someone who already holds a role doesn't need to register again.
+        # Without this check an approved user could re-file (approval removes
+        # them from the pending list, so the pending-list dedupe below no
+        # longer sees them), producing a redundant pending row, another admin
+        # email, and a path to accidentally re-approving them. Serve the same
+        # success page so the form doesn't leak who is already a member.
+        # Revoked users resolve to "guest" and may re-request; an admin
+        # decides whether to re-approve.
+        if services.auth.get_user_role(email) != "guest":
+            return render_template("register.html", success=True)
         # Storage de-duplicates by email and reports whether a new row was
         # stored, so we only notify on a genuinely new request — a duplicate
         # (even one racing past a separate pre-check) can't trigger a second
@@ -522,6 +607,7 @@ def register():
                 f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
             )
         return render_template("register.html", success=True)
+    session["register_form_ts"] = time.time()
     return render_template("register.html")
 
 
@@ -540,7 +626,12 @@ def admin_registrations():
                 error="No email provided.",
             )
         if action == "approve":
-            services.storage.set_user_role(email, "renter")
+            # Only write a file role when it's an upgrade. A file entry wins
+            # over the .env lists in get_user_role, so blindly writing
+            # "renter" here would silently demote an env-configured admin
+            # who somehow landed in the pending list.
+            if role_rank(services.auth.get_user_role(email)) < role_rank("renter"):
+                services.storage.set_user_role(email, "renter")
             services.storage.remove_pending_registration(email)
             services.notifications.send_email(
                 "Registration Approved",
@@ -613,7 +704,7 @@ def admin_users():
     services = get_services()
     error = None
     success = None
-    users = list(services.storage.get_user_roles().items())
+    users = services.auth.all_user_roles()
     actor_email = (get_current_user() or {}).get("email", "").lower()
     actor_role = _current_role()
     if request.method == "POST":
@@ -629,7 +720,11 @@ def admin_users():
             if not _can_act_on(actor_role, target_role):
                 error = "You cannot modify a user at or above your own role."
             elif services.storage.delete_user_role(email):
-                success = f"User {email} removed."
+                success = (
+                    f"Deactivated {email} — their access is revoked, but their "
+                    "contracts, profile, and tickets are kept. Re-add the email "
+                    "to restore access."
+                )
                 # Mirror the audit trail emitted by the user-management form on
                 # /admin/dashboard so role mutations made through THIS page
                 # don't silently disappear from site_changes.log — without it
@@ -646,7 +741,7 @@ def admin_users():
             # can still clean up legacy entries that predate this check.
             if not is_valid_email(email):
                 error = "A valid email is required."
-            elif not _can_act_on(actor_role, target_role) or not _can_act_on(actor_role, new_role):
+            elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
             else:
                 services.storage.set_user_role(email, new_role)
@@ -658,7 +753,7 @@ def admin_users():
                 )
         else:
             error = "Invalid role."
-        users = list(services.storage.get_user_roles().items())
+        users = services.auth.all_user_roles()
     return render_template("admin_users.html", users=users, error=error, success=success, title="User Management")
 
 
@@ -685,8 +780,13 @@ def renter_profile():
             }
             profile["name"] = request.form.get("name", "").strip()[:120]
             profile["contact"] = request.form.get("contact", "").strip()[:200]
-            profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
-            profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
+            # Notification preferences are renter-only. Admins can reach this
+            # page (renter_required admits them), but the ticket-update
+            # subscription is for tenants — ignore the fields for any other
+            # role even on a hand-crafted POST, preserving whatever is stored.
+            if _current_role() == "renter":
+                profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
+                profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
             profiles[email] = profile
             services.storage.save_renter_profiles(profiles)
         success = "Profile updated."
@@ -970,6 +1070,27 @@ def toggle_sale(id):
         return "Operation failed. Please try again.", 500
 
 
+@admin_required
+def toggle_active(id):
+    # Reversible unpublish — the counterpart to the permanent delete. Hides
+    # the listing from the public site (or shows it again) while keeping the
+    # upstream record intact.
+    services = get_services()
+    actor_email = (get_current_user() or {}).get("email", "anonymous") if is_logged_in() else "anonymous"
+    try:
+        make_active = services.properties.is_listing_hidden(id)
+        services.properties.set_listing_active(id, active=make_active, actor_email=actor_email)
+        return redirect(url_for("manage_listings"))
+    except KeyError:
+        return "Property not found", 404
+    except Exception as exc:
+        services.notifications.log_and_notify_error(
+            "Toggle Active Error",
+            f"Failed to toggle active for {id}: {exc}",
+        )
+        return "Operation failed. Please try again.", 500
+
+
 def _csv_filename(prefix: str) -> str:
     today = datetime.date.today().isoformat()
     return f"{prefix}-{today}.csv"
@@ -1170,3 +1291,4 @@ def register_admin_routes(app) -> None:
         methods=["POST"],
     )
     app.add_url_rule("/toggle-sale/<id>", endpoint="toggle_sale", view_func=toggle_sale, methods=["POST"])
+    app.add_url_rule("/toggle-active/<id>", endpoint="toggle_active", view_func=toggle_active, methods=["POST"])

@@ -1,102 +1,85 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-40 flex flex-1 justify-center py-5">
-  <div class="layout-content-container flex flex-col max-w-[960px] flex-1">
-    <div class="flex flex-wrap justify-between gap-3 p-4">
-      <div>
-        <p class="text-[#171212] tracking-light text-[32px] font-bold leading-tight min-w-72">Manage Listings</p>
-        {% if user %}
-        <p class="text-[#82686a] text-sm mt-1">Welcome, {{ user.name }} ({{ user.email }})</p>
-        {% endif %}
-      </div>
-      <div class="flex items-center gap-3">
-        <a href="{{ url_for('add_listing') }}" class="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 font-bold shadow">Add Property</a>
-      </div>
+<div class="sw-page">
+  <p class="sw-eyebrow">Property management</p>
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="sw-title">Manage listings</h1>
+      {% if user %}
+      <p class="sw-sub">Signed in as {{ user.name }} ({{ user.email }}). Edit, remove, or re-list the properties on the books.</p>
+      {% endif %}
     </div>
-    <div class="px-4 py-3">
-      <label class="flex flex-col min-w-40 h-12 w-full">
-        <div class="flex w-full flex-1 items-stretch rounded-xl h-full">
-          <div
-            class="text-[#82686a] flex border-none bg-[#f4f1f1] items-center justify-center pl-4 rounded-l-xl border-r-0"
-            data-icon="MagnifyingGlass"
-            data-size="24px"
-            data-weight="regular"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" fill="currentColor" viewBox="0 0 256 256">
-              <path
-                d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"
-              ></path>
-            </svg>
-          </div>
-          <input
-            placeholder="Search by address, ID, or other criteria"
-            class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-xl text-[#171212] focus:outline-0 focus:ring-0 border-none bg-[#f4f1f1] focus:border-none h-full placeholder:text-[#82686a] px-4 rounded-l-none border-l-0 pl-2 text-base font-normal leading-normal"
-            value=""
-          />
-        </div>
-      </label>
-    </div>
-    <div class="px-4 py-3 @container">
-      <div class="flex overflow-hidden rounded-xl border border-[#e4dddd] bg-white">
-        <table class="flex-1">
-          <thead>
-            <tr class="bg-white">
-              <th class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-56 px-4 py-3 text-left text-[#171212] w-14 text-sm font-medium leading-normal">Property</th>
-              <th class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-176 px-4 py-3 text-left text-[#171212] w-[400px] text-sm font-medium leading-normal">Status</th>
-              <th class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-296 px-4 py-3 text-left text-[#171212] w-[400px] text-sm font-medium leading-normal">
-                Location
-              </th>
-              <!-- Type column removed -->
-              <th class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-536 px-4 py-3 text-left text-[#171212] w-[400px] text-sm font-medium leading-normal">Price</th>
-              <th class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-656 px-4 py-3 text-left text-[#82686a] text-sm font-medium leading-normal">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for prop in properties %}
-            <tr class="border-t border-t-[#e4dddd]">
-              <td class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-56 h-[72px] px-4 py-2 w-14 text-sm font-normal leading-normal">
-                <div
-                  class="bg-center bg-no-repeat aspect-square bg-cover rounded-full w-10"
-                  style='background-image: url("{% if prop.thumbnail %}{{ prop.thumbnail }}{% elif prop.photos|length > 0 %}{{ prop.photos[0] }}{% else %}https://via.placeholder.com/40{% endif %}");'
-                ></div>
-              </td>
-              <td class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-176 h-[72px] px-4 py-2 w-[400px] text-[#171212] text-sm font-normal leading-normal">{{ prop.status or "Active" }}</td>
-              <td class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-296 h-[72px] px-4 py-2 w-[400px] text-[#82686a] text-sm font-normal leading-normal">
-                {{ prop.address or "Unknown" }}
-              </td>
-              <!-- Type cell removed -->
-              <td class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-536 h-[72px] px-4 py-2 w-[400px] text-[#82686a] text-sm font-normal leading-normal">
-                {{ prop.rent or prop.price or "$N/A" }}
-              </td>
-              <td class="table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-656 h-[72px] px-4 py-2 w-60 text-[#82686a] text-sm font-bold leading-normal tracking-[0.015em]">
-                <a href="{{ url_for('edit_listing', property_id=prop.id) }}" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 font-bold shadow w-full block text-center mb-1">Edit</a>
-                <form action="{{ url_for('delete_listing', id=prop.id) }}" method="post" onsubmit="return confirm('Delete this listing?');">
-                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 font-bold shadow w-full block text-center">Delete</button>
-                </form>
-                <form action="{{ url_for('toggle_sale', id=prop.id) }}" method="post" class="mt-1">
-                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 font-bold shadow w-full block text-center">
-                    {% if prop.for_sale %}List for Rent{% else %}List for Sale{% endif %}
-                  </button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <style>
-        @container(max-width:56px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-56{display: none;}}
-        @container(max-width:176px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-176{display: none;}}
-        @container(max-width:296px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-296{display: none;}}
-        @container(max-width:416px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-416{display: none;}}
-        @container(max-width:536px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-536{display: none;}}
-        @container(max-width:656px){.table-58fa7d47-c22a-4aac-8800-0bc86c74b851-column-656{display: none;}}
-      </style>
-    </div>
+    <a href="{{ url_for('add_listing') }}" class="sw-btn sw-btn-primary sw-btn-sm">Add a property</a>
+  </div>
+
+  <div class="mt-8 sw-field">
+    <input
+      placeholder="Search by address, ID, or other criteria"
+      class="sw-input"
+      value=""
+    />
+  </div>
+
+  <div class="sw-table-wrap">
+    <table class="sw-table">
+      <thead>
+        <tr>
+          <th class="w-14">Property</th>
+          <th>Status</th>
+          <th>Location</th>
+          <!-- Type column removed -->
+          <th>Price</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prop in properties %}
+        {% set is_hidden = prop.id|string in (hidden_ids or []) %}
+        <tr>
+          <td class="w-14">
+            <div
+              class="bg-center bg-no-repeat aspect-square bg-cover rounded-full w-10"
+              style='background-image: url("{% if prop.thumbnail %}{{ prop.thumbnail }}{% elif prop.photos|length > 0 %}{{ prop.photos[0] }}{% else %}https://via.placeholder.com/40{% endif %}");'
+            ></div>
+          </td>
+          <td>
+            {% if is_hidden %}
+              <span class="sw-badge sw-badge-warn" title="Hidden from the public site — reactivate to publish it again">Deactivated</span>
+            {% else %}
+              <span class="sw-badge{% if (prop.status or 'Active')|lower == 'active' %} sw-badge-ok{% endif %}">{{ prop.status or "Active" }}</span>
+            {% endif %}
+          </td>
+          <td class="text-sm" style="color:var(--sw-ink-soft)">
+            {{ prop.address or "Unknown" }}
+          </td>
+          <!-- Type cell removed -->
+          <td class="text-sm sw-mono">
+            {{ prop.rent or prop.price or "$N/A" }}
+          </td>
+          <td class="min-w-[11rem]">
+            <a href="{{ url_for('edit_listing', property_id=prop.id) }}" class="sw-btn sw-btn-ghost sw-btn-sm w-full mb-1">Edit listing</a>
+            <form action="{{ url_for('toggle_active', id=prop.id) }}" method="post"
+                  {% if not is_hidden %}onsubmit="return confirm('Deactivate this listing? It will be hidden from the public site but kept on the books — you can reactivate it any time.');"{% endif %}>
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="sw-btn sw-btn-ghost sw-btn-sm w-full">
+                {% if is_hidden %}Reactivate{% else %}Deactivate{% endif %}
+              </button>
+            </form>
+            <form action="{{ url_for('toggle_sale', id=prop.id) }}" method="post" class="mt-1">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="sw-btn sw-btn-ghost sw-btn-sm w-full">
+                {% if prop.for_sale %}List for rent{% else %}List for sale{% endif %}
+              </button>
+            </form>
+            <form action="{{ url_for('delete_listing', id=prop.id) }}" method="post" class="mt-1" onsubmit="return confirm('Permanently delete this listing? This removes it from the property database and CANNOT be undone. To take it off the market temporarily, use Deactivate instead.');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="sw-btn sw-btn-danger sw-btn-sm w-full">Delete permanently</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endblock %}

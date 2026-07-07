@@ -62,6 +62,13 @@ def google_login():
         prompt="select_account",
     )
     session["oauth_state"] = state
+    # google_auth_oauthlib >= 1.0 enables PKCE: authorization_url() above sent
+    # a code_challenge, and the token exchange must present the matching
+    # code_verifier. The callback builds a fresh Flow (this one dies with the
+    # request), so the verifier has to ride along in the session like state.
+    # getattr: older google_auth_oauthlib (and the tests' FlowMock) have no
+    # code_verifier attribute — those flows don't do PKCE, so None is correct.
+    session["oauth_code_verifier"] = getattr(flow, "code_verifier", None)
     return redirect(authorization_url)
 
 
@@ -72,6 +79,7 @@ def google_callback():
         return oauth_not_configured_response()
 
     expected_state = session.pop("oauth_state", None)
+    code_verifier = session.pop("oauth_code_verifier", None)
     returned_state = request.args.get("state", "")
     if not expected_state or expected_state != returned_state:
         logger.warning("OAuth state mismatch (expected=%r got=%r)", bool(expected_state), bool(returned_state))
@@ -97,6 +105,10 @@ def google_callback():
                 "https://www.googleapis.com/auth/userinfo.profile",
                 "https://www.googleapis.com/auth/userinfo.email",
             ],
+            # Reuse the PKCE verifier from the login leg; a fresh Flow would
+            # otherwise autogenerate a new one and Google rejects the exchange
+            # with (invalid_grant) Missing code verifier.
+            code_verifier=code_verifier,
         )
         flow.redirect_uri = config.google_redirect_uri
         flow.fetch_token(authorization_response=request.url)
@@ -108,19 +120,27 @@ def google_callback():
             config.google_client_id,
         )
         user_email = id_info["email"].lower()
-        if not user_email.endswith(("@ekbergproperties.com", "@somewheria.com")):
+        role = services.auth.get_user_role(user_email)
+        # Two ways in: a company-domain account, OR an account that has been
+        # explicitly approved — a renter admitted through the registration
+        # flow (their role is stored as "renter"), or anyone named in the
+        # AUTHORIZED_USERS / ADMIN_USERS / HIGH_ADMIN_USERS env lists. This is
+        # what lets an approved Gmail/Outlook applicant actually sign in; the
+        # domain check alone used to turn them away before this point.
+        domain_ok = user_email.endswith(("@ekbergproperties.com", "@somewheria.com"))
+        approved = role != "guest" or user_email in config.authorized_users
+        if not domain_ok and not approved:
             return (
                 render_template(
                     "login.html",
                     title="Login",
-                    error="Only ekbergproperties.com or somewheria.com accounts are allowed.",
+                    error=(
+                        "Access denied. Sign in with a Somewheria account, or request "
+                        "an account and an admin will approve your email."
+                    ),
                 ),
                 401,
             )
-        # Default-deny: if the whitelist is configured, user must be on it.
-        # If it is not configured, the ekbergproperties.com / somewheria.com domain gate above
-        # is the sole gate — admin/high_admin env lists still grant access.
-        role = services.auth.get_user_role(user_email)
         if config.authorized_users and user_email not in config.authorized_users and role == "guest":
             services.notifications.log_and_notify_error(
                 "Unauthorized Login Attempt",

@@ -151,7 +151,26 @@ class NotificationService:
                 line = raw_line.strip()
                 if not line:
                     continue
-                if "|" in line:
+                request_id = "-"
+                # Current format: one JSON object per line. Fall back to the
+                # older pipe / colon text formats so entries written before the
+                # structured-logging upgrade still render during the transition.
+                if line.startswith("{"):
+                    try:
+                        obj = json.loads(line)
+                    except (ValueError, TypeError):
+                        obj = None
+                    if isinstance(obj, dict):
+                        timestamp = obj.get("timestamp", "")
+                        level = obj.get("level", "")
+                        message = obj.get("message", "")
+                        component = obj.get("component", "")
+                        request_id = obj.get("request_id", "-") or "-"
+                        if component:
+                            message = f"[{component}] {message}"
+                    else:
+                        timestamp, level, message = "", "", line
+                elif "|" in line:
                     pipe_parts = line.split("|", 3)
                     if len(pipe_parts) == 4:
                         timestamp, level, component, message = pipe_parts
@@ -172,6 +191,7 @@ class NotificationService:
                     {
                         "timestamp": timestamp or "Unknown",
                         "level": level,
+                        "request_id": request_id,
                         "message": ansi_escape.sub("", message),
                     }
                 )

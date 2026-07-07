@@ -1,24 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="px-4 sm:px-8 md:px-16 lg:px-24 py-10 max-w-full sm:max-w-md mx-auto">
-  <h2 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white text-center">Login</h2>
-  
+<div class="sw-page sw-page-narrow" style="max-width:28rem;">
+  <p class="sw-eyebrow">Sign in</p>
+  <h1 class="sw-title">Welcome back.</h1>
+  <p class="sw-sub">Sign in to reach your renter dashboard, lease, and requests.</p>
+
   {% if whitelist_configured %}
-  <div class="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded mb-4">
-    <div class="font-semibold">🔒 Restricted Access</div>
-    <div class="text-sm">Only authorized users can access this application.</div>
+  <div class="sw-alert sw-alert-warn mt-6">
+    <div class="font-semibold">Restricted access</div>
+    <div class="text-sm mt-1">Only authorized users can sign in to this site. If you rent with us and can&rsquo;t get in, <a class="sw-link" href="{{ url_for('register') }}">request an account</a>.</div>
   </div>
   {% endif %}
-  
+
   {% if error %}
-  <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+  <div class="sw-alert sw-alert-bad mt-6">
     {{ error }}
   </div>
   {% endif %}
-  
-  <div class="bg-white dark:bg-neutral-900 rounded shadow p-6 flex flex-col gap-4">
+
+  <div class="sw-panel mt-6 flex flex-col gap-4">
     <!-- Google Sign-In Button -->
-    <a href="{{ url_for('google_login') }}" 
+    <a href="{{ url_for('google_login') }}"
        class="flex items-center justify-center gap-3 bg-white text-gray-700 px-4 py-3 rounded border border-gray-300 hover:bg-gray-50 font-medium shadow-sm transition-colors">
       <svg class="w-5 h-5" viewBox="0 0 24 24">
         <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -28,12 +30,10 @@
       </svg>
       Sign in with Google
     </a>
-    
+  </div>
 
-  </div>
-  
-  <div class="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
-    <p>By signing in, you agree to our terms of service and privacy policy.</p>
-  </div>
+  <p class="sw-help mt-5 text-center">
+    By signing in, you agree to our terms of service and privacy policy.
+  </p>
 </div>
 {% endblock %}

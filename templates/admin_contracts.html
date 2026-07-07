@@ -1,89 +1,97 @@
 {% extends "admin_base.html" %}
 {% block admin_content %}
-{% set status_styles = {
-  'Active': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  'Pending': 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-  'Expired': 'bg-gray-100 text-gray-700 dark:bg-neutral-800 dark:text-neutral-300',
-  'Terminated': 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+{% set status_badges = {
+  'Active': 'sw-badge sw-badge-ok',
+  'Pending': 'sw-badge sw-badge-warn',
+  'Expired': 'sw-badge',
+  'Terminated': 'sw-badge sw-badge-bad'
 } %}
-<div class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-  <div class="flex items-center justify-between gap-4 flex-wrap mb-6">
-    <h1 class="text-2xl font-bold text-[#111518] dark:text-white">Contract Management</h1>
-    <a href="{{ url_for('admin_contracts_export_csv') }}"
-       class="px-3 py-2 text-sm rounded-md border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[#111518] dark:text-white transition-colors">
+<div class="sw-page">
+  <div class="flex items-end justify-between gap-4 flex-wrap">
+    <div>
+      <p class="sw-eyebrow">Admin &middot; Operations</p>
+      <h1 class="sw-title">Contracts</h1>
+      <p class="sw-sub">Add lease contracts, attach signed PDFs, and manage what each renter sees.</p>
+    </div>
+    <a href="{{ url_for('admin_contracts_export_csv') }}" class="sw-btn sw-btn-ghost sw-btn-sm">
       Download CSV
     </a>
   </div>
 
   {% if error %}
-    <div class="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded mb-4">{{ error }}</div>
+    <div class="mt-6 sw-alert sw-alert-bad">{{ error }}</div>
   {% endif %}
   {% if success %}
-    <div class="bg-green-100 dark:bg-green-900 border border-green-400 dark:border-green-700 text-green-700 dark:text-green-200 px-4 py-3 rounded mb-4">{{ success }}</div>
+    <div class="mt-6 sw-alert sw-alert-ok">{{ success }}</div>
   {% endif %}
 
   <!-- Add New Contract -->
-  <div class="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-800 shadow-sm p-6 mb-6">
-    <h2 class="text-lg font-semibold mb-4 text-[#111518] dark:text-white">Add New Contract</h2>
+  <div class="mt-8 sw-panel">
+    <h2 class="sw-h3 mb-4">Add a contract</h2>
     <form method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add">
-      <label class="text-sm font-medium text-[#111518] dark:text-white">Renter Email
-        <input type="email" name="renter_email" class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+      <label class="block">
+        <span class="sw-label">Renter email</span>
+        <input type="email" name="renter_email" class="sw-input" required>
       </label>
-      <label class="text-sm font-medium text-[#111518] dark:text-white">Property Name
-        <input type="text" name="property_name" class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+      <label class="block">
+        <span class="sw-label">Property name</span>
+        <input type="text" name="property_name" class="sw-input" required>
       </label>
-      <label class="text-sm font-medium text-[#111518] dark:text-white">Start Date
-        <input type="date" name="start_date" class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+      <label class="block">
+        <span class="sw-label">Start date</span>
+        <input type="date" name="start_date" class="sw-input" required>
       </label>
-      <label class="text-sm font-medium text-[#111518] dark:text-white">End Date
-        <input type="date" name="end_date" class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+      <label class="block">
+        <span class="sw-label">End date</span>
+        <input type="date" name="end_date" class="sw-input" required>
       </label>
-      <label class="text-sm font-medium text-[#111518] dark:text-white">Status
-        <select name="status" class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <label class="block">
+        <span class="sw-label">Status</span>
+        <select name="status" class="sw-input">
           <option value="Active">Active</option>
           <option value="Pending">Pending</option>
           <option value="Expired">Expired</option>
           <option value="Terminated">Terminated</option>
         </select>
       </label>
-      <label class="text-sm font-medium text-[#111518] dark:text-white md:col-span-2">Signed Contract PDF (optional, ≤ 16 MB)
-        <input type="file" name="contract_pdf" accept="application/pdf,.pdf"
-               class="w-full border rounded-md p-2 mt-1 bg-white dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-300 dark:border-neutral-700">
-        <span class="block text-xs text-gray-500 dark:text-neutral-400 mt-1">
+      <label class="block md:col-span-2">
+        <span class="sw-label">Signed contract PDF (optional, &le; 16 MB)</span>
+        <input type="file" name="contract_pdf" accept="application/pdf,.pdf" class="sw-input">
+        <span class="sw-help block">
           Stored privately and exposed to the renter via the contract detail page.
         </span>
       </label>
       <div class="md:col-span-2">
-        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md font-medium hover:bg-blue-700 transition-colors">Add Contract</button>
+        <button type="submit" class="sw-btn sw-btn-primary">Add contract</button>
       </div>
     </form>
   </div>
 
   <!-- Existing Contracts -->
-  <div class="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-800 shadow-sm p-6">
-    <h2 class="text-lg font-semibold mb-4 text-[#111518] dark:text-white">Existing Contracts</h2>
+  <div class="mt-6 sw-panel">
+    <h2 class="sw-h3 mb-4">Existing contracts</h2>
     {% if contracts %}
       <div class="space-y-6">
         {% for email, contract_list in contracts.items() %}
           <div>
-            <h3 class="text-sm font-semibold text-gray-500 dark:text-neutral-400 uppercase tracking-wide mb-2">{{ email }}</h3>
+            <h3 class="sw-parcel-num mb-2">{{ email }}</h3>
             <div class="space-y-2">
               {% for contract in contract_list %}
-                <div class="border border-neutral-200 dark:border-neutral-800 rounded-md p-3 flex justify-between items-center gap-4 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors">
+                <div class="rounded-sm p-3 flex justify-between items-center gap-4" style="border: 1px dashed var(--sw-line-faint);">
                   <div class="min-w-0">
-                    <div class="font-medium text-[#111518] dark:text-white">
+                    <div class="font-medium">
                       {% if contract.id %}
-                        <a href="{{ url_for('contract_detail', contract_id=contract.id) }}" class="text-blue-600 dark:text-blue-400 hover:underline">{{ contract.property_name }}</a>
+                        <a href="{{ url_for('contract_detail', contract_id=contract.id) }}" class="sw-link">{{ contract.property_name }}</a>
                       {% else %}
                         {{ contract.property_name }}
                       {% endif %}
                     </div>
-                    <div class="text-sm text-gray-500 dark:text-neutral-400 mt-1 flex items-center gap-2 flex-wrap">
-                      <span>{{ contract.start_date }} – {{ contract.end_date }}</span>
-                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {{ status_styles.get(contract.status, 'bg-gray-100 text-gray-700 dark:bg-neutral-800 dark:text-neutral-300') }}">{{ contract.status }}</span>
-                      {% if contract.pdf_filename %}<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">PDF on file</span>{% endif %}
+                    <div class="text-sm mt-1 flex items-center gap-2 flex-wrap" style="color: var(--sw-ink-soft);">
+                      <span class="sw-mono text-xs">{{ contract.start_date }} – {{ contract.end_date }}</span>
+                      <span class="{{ status_badges.get(contract.status, 'sw-badge') }}">{{ contract.status }}</span>
+                      {% if contract.pdf_filename %}<span class="sw-badge sw-badge-ok">PDF on file</span>{% endif %}
                     </div>
                   </div>
                   <form method="post" onsubmit="return confirm('Delete this contract?');" class="shrink-0">
@@ -91,7 +99,7 @@
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="renter_email" value="{{ email }}">
                     <input type="hidden" name="contract_index" value="{{ loop.index0 }}">
-                    <button type="submit" class="bg-white dark:bg-neutral-900 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 px-3 py-1.5 rounded-md text-sm font-medium hover:bg-red-50 dark:hover:bg-red-950 transition-colors">Delete</button>
+                    <button type="submit" class="sw-btn sw-btn-danger sw-btn-sm">Delete contract</button>
                   </form>
                 </div>
               {% endfor %}
@@ -100,7 +108,10 @@
         {% endfor %}
       </div>
     {% else %}
-      <div class="text-gray-500 dark:text-neutral-400">No contracts found.</div>
+      <div class="sw-empty">
+        <span class="sw-parcel-num">No contracts on file</span>
+        <p>Add the first contract with the form above.</p>
+      </div>
     {% endif %}
   </div>
 </div>

@@ -1,45 +1,45 @@
 {% extends "admin_base.html" %}
 {% block admin_content %}
-<div class="max-w-3xl mx-auto py-10 px-4 bg-white dark:bg-neutral-950 rounded shadow">
-  <h1 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white">Site Analytics</h1>
-  <div class="mb-6 text-gray-700 dark:text-gray-300">
-    Welcome, {{ user.name or user.email }}! (High-Level Admin)
+<div class="sw-page">
+  <p class="sw-eyebrow">Admin &middot; Overview</p>
+  <h1 class="sw-title">Site analytics</h1>
+  <p class="sw-sub">Welcome, {{ user.name or user.email }}. Traffic, logins, and errors over the last 7 days.</p>
+
+  <div class="mt-8 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+    <div class="sw-stat">
+      <p class="sw-stat-label">Site visits</p>
+      <p class="sw-stat-num">{{ metrics.site_visits }}</p>
+    </div>
+    <div class="sw-stat">
+      <p class="sw-stat-label">Unique users</p>
+      <p class="sw-stat-num">{{ metrics.unique_users }}</p>
+    </div>
+    <div class="sw-stat">
+      <p class="sw-stat-label">Properties listed</p>
+      <p class="sw-stat-num">{{ metrics.properties_listed }}</p>
+    </div>
+    <div class="sw-stat">
+      <p class="sw-stat-label">Logins today</p>
+      <p class="sw-stat-num">{{ metrics.logins_today }}</p>
+    </div>
+    <div class="sw-stat">
+      <p class="sw-stat-label">Errors (24h)</p>
+      <p class="sw-stat-num" style="color: var(--sw-bad);">{{ metrics.errors_last_24h }}</p>
+    </div>
   </div>
-  <div class="grid grid-cols-2 gap-6 mb-8">
-    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
-      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.site_visits }}</div>
-      <div class="text-gray-500 dark:text-gray-400">Site Visits</div>
-    </div>
-    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
-      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.unique_users }}</div>
-      <div class="text-gray-500 dark:text-gray-400">Unique Users</div>
-    </div>
-    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
-      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.properties_listed }}</div>
-      <div class="text-gray-500 dark:text-gray-400">Properties Listed</div>
-    </div>
-    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
-      <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ metrics.logins_today }}</div>
-      <div class="text-gray-500 dark:text-gray-400">Logins Today</div>
-    </div>
-    <div class="bg-white dark:bg-neutral-900 rounded shadow p-5">
-      <div class="text-3xl font-bold text-red-600 dark:text-red-400">{{ metrics.errors_last_24h }}</div>
-      <div class="text-gray-500 dark:text-gray-400">Errors (24h)</div>
-    </div>
-  </div>
-  <div class="bg-white dark:bg-neutral-900 rounded shadow p-6">
-    <h2 class="text-lg font-semibold mb-4">Traffic & Usage Charts</h2>
+  <div class="sw-panel">
+    <h2 class="sw-h3 mb-4">Traffic and usage charts</h2>
     <div id="analytics-charts" class="space-y-8">
       <div>
-        <div class="font-semibold mb-2">Site Visits (7 days)</div>
+        <div class="sw-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] mb-2" style="color: var(--sw-brass-ink);">Site visits (7 days)</div>
         <div id="visits-chart" style="height:300px;"></div>
       </div>
       <div>
-        <div class="font-semibold mb-2">Logins & Unique Users (7 days)</div>
+        <div class="sw-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] mb-2" style="color: var(--sw-brass-ink);">Logins &amp; unique users (7 days)</div>
         <div id="logins-users-chart" style="height:300px;"></div>
       </div>
       <div>
-        <div class="font-semibold mb-2">Errors (7 days)</div>
+        <div class="sw-mono text-[0.7rem] font-semibold uppercase tracking-[0.14em] mb-2" style="color: var(--sw-brass-ink);">Errors (7 days)</div>
         <div id="errors-chart" style="height:300px;"></div>
       </div>
     </div>

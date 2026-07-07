@@ -103,6 +103,14 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"authenticated": False, "user": None})
 
+    def test_response_carries_request_id_header(self):
+        response = self.client.get("/")
+        self.assertTrue(response.headers.get("X-Request-Id"))
+
+    def test_inbound_request_id_is_honored(self):
+        response = self.client.get("/", headers={"X-Request-Id": "trace-me-123"})
+        self.assertEqual(response.headers.get("X-Request-Id"), "trace-me-123")
+
     def test_auth_status_returns_authenticated_payload(self):
         self.login_as("renter", email="renter@example.com", name="Renter User")
 
@@ -203,14 +211,40 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Maple House", response.data)
-        self.assertIn(b"ADA Accessible", response.data)
+        self.assertIn(b"ADA accessible", response.data)
         self.assertIn(b"Yes", response.data)
 
     def test_property_details_returns_404_when_property_missing(self):
-        response = self.client.get("/property/missing-prop")
+        # Not in cache AND the direct fetch finds nothing -> 404.
+        with patch.object(self.services.properties, "fetch_property_record", return_value=None):
+            response = self.client.get("/property/missing-prop")
 
         self.assertEqual(response.status_code, 404)
         self.assertIn(b"Property not found", response.data)
+
+    def test_property_details_falls_back_to_direct_fetch_on_cold_cache(self):
+        # Cache empty (e.g. right after a restart), but a direct fetch finds
+        # the listing — the page must render, not 404, so crawlers/shared
+        # links hitting the URL directly still work.
+        record = {
+            "id": "prop-9",
+            "name": "Cold Cache Cottage",
+            "address": "9 Restart Rd",
+            "rent": "1200",
+            "bedrooms": "1",
+            "bathrooms": "1",
+            "sqft": "600",
+            "lease_length": "12 months",
+            "pets_allowed": "No",
+        }
+        with patch.object(self.services.properties, "get_property", return_value=None), patch.object(
+            self.services.properties, "fetch_property_record", return_value=record
+        ) as fetch_mock, patch.object(self.services.appointments, "load", return_value={}):
+            response = self.client.get("/property/prop-9")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Cold Cache Cottage", response.data)
+        fetch_mock.assert_called_once_with("prop-9")
 
     def test_schedule_appointment_rejects_invalid_date(self):
         response = self.client.post(
@@ -430,6 +464,47 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         )
         send_email_mock.assert_called_once()
 
+    def test_register_honeypot_drops_submission_silently(self):
+        # A filled honeypot field means a bot; the route must show the normal
+        # success page while storing and notifying nothing.
+        with patch.object(self.services.storage, "add_pending_registration") as add_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock:
+            response = self.client.post(
+                "/register",
+                data={
+                    "name": "Jamie",
+                    "email": "jamie@example.com",
+                    "reason": "Need access",
+                    "website": "http://spam.example",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Request received", response.data)
+        add_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+
+    def test_register_drops_link_spam_silently(self):
+        # URLs, punycode hosts, and the comment-spam "hs=" marker in the name
+        # or reason mark the submission as spam.
+        for spam_reason in (
+            "Confirm your transaction https://xn--example.xn--p1ai/?x",
+            "hs=483e1cf023c07655365eb0529961c86b",
+            "visit www.spam.example now",
+        ):
+            with patch.object(self.services.storage, "add_pending_registration") as add_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as send_email_mock:
+                response = self.client.post(
+                    "/register",
+                    data={"name": "Jamie", "email": "jamie@example.com", "reason": spam_reason},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Request received", response.data)
+            add_mock.assert_not_called()
+            send_email_mock.assert_not_called()
+
     def test_register_duplicate_does_not_send_email(self):
         # When storage reports the email is already pending (returns False),
         # the route must not fire a second admin notification.
@@ -627,7 +702,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"removed", response.data)
+        self.assertIn(b"Deactivated", response.data)
         log_mock.assert_called_once_with(
             "admin@example.com",
             "user_deleted",
@@ -675,6 +750,89 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         set_user_role_mock.assert_not_called()
         log_mock.assert_not_called()
 
+    def test_admin_users_high_admin_can_promote_to_high_admin(self):
+        # The strict rank comparison used to make high_admin unassignable by
+        # ANYONE through the UI (3 > 3 is false even for a high_admin actor),
+        # so the top role could only ever be granted via .env. High admins
+        # must be able to promote a lower-ranked user to their own rank.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.storage, "set_user_role") as set_user_role_mock, patch.object(
+            self.services.auth, "get_user_role", return_value="admin"
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"tester@example.com": "admin"},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "tester@example.com", "role": "high_admin", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"updated to high_admin", response.data)
+        set_user_role_mock.assert_called_once_with("tester@example.com", "high_admin")
+        log_mock.assert_called_once_with(
+            "owner@example.com",
+            "user_role_updated",
+            {"email": "tester@example.com", "role": "high_admin"},
+        )
+
+    def test_toggle_active_deactivates_listing_and_redirects(self):
+        self.login_as("admin", email="admin@example.com")
+        self.seed_property("prop-1")
+        with patch.object(self.services.properties, "is_listing_hidden", return_value=False), patch.object(
+            self.services.properties, "set_listing_active"
+        ) as set_active_mock:
+            response = self.client.post("/toggle-active/prop-1")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/manage-listings", response.headers["Location"])
+        set_active_mock.assert_called_once_with("prop-1", active=False, actor_email="admin@example.com")
+
+    def test_toggle_active_reactivates_hidden_listing(self):
+        self.login_as("admin", email="admin@example.com")
+        self.seed_property("prop-1")
+        with patch.object(self.services.properties, "is_listing_hidden", return_value=True), patch.object(
+            self.services.properties, "set_listing_active"
+        ) as set_active_mock:
+            response = self.client.post("/toggle-active/prop-1")
+
+        self.assertEqual(response.status_code, 302)
+        set_active_mock.assert_called_once_with("prop-1", active=True, actor_email="admin@example.com")
+
+    def test_toggle_active_rejected_for_renter(self):
+        self.login_as("renter")
+        response = self.client.post("/toggle-active/prop-1")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_for_rent_excludes_deactivated_listings(self):
+        self.seed_property("prop-1")
+        with patch.object(self.services.properties, "refresh_cache"), patch.object(
+            self.services.properties, "hidden_listing_ids", return_value={"prop-1"}
+        ):
+            response = self.client.get("/for-rent")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"Maple House", response.data)
+
+    def test_property_details_hidden_returns_404_for_public(self):
+        self.seed_property("prop-1")
+        with patch.object(self.services.properties, "is_listing_hidden", return_value=True):
+            response = self.client.get("/property/prop-1")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_property_details_hidden_still_visible_to_admin(self):
+        self.login_as("admin")
+        self.seed_property("prop-1")
+        with patch.object(self.services.properties, "is_listing_hidden", return_value=True), patch.object(
+            self.services.appointments, "load", return_value={}
+        ):
+            response = self.client.get("/property/prop-1")
+
+        self.assertEqual(response.status_code, 200)
+
     def test_admin_users_rejects_malformed_email_on_role_assignment(self):
         # Defense-in-depth check: an admin pasting a typo'd value like "not-an-email"
         # should be rejected at the route boundary before user_roles storage is
@@ -701,7 +859,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.get("/admin/dashboard")
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Front Door Locked", response.data)
+        self.assertIn(b"Access restricted", response.data)
 
     def test_admin_dashboard_loads_for_high_admin(self):
         self.login_as("high_admin", email="owner@example.com")
@@ -942,7 +1100,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.get("/admin/analytics")
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Front Door Locked", response.data)
+        self.assertIn(b"Access restricted", response.data)
 
     def test_analytics_dashboard_loads_for_high_admin(self):
         self.login_as("high_admin")
@@ -1142,6 +1300,72 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Cache-Control"), "no-cache")
 
+    def test_robots_txt_allows_search_engines_and_claude(self):
+        response = self.client.get("/robots.txt")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/plain", response.content_type)
+        body = response.data.decode()
+        # Search engines + Claude explicitly allowed; everything else blocked.
+        for agent in ("Googlebot", "Bingbot", "ClaudeBot"):
+            self.assertIn(f"User-agent: {agent}", body)
+        self.assertIn("User-agent: *", body)
+        self.assertIn("Disallow: /", body)
+
+    def test_google_site_verification_file_is_served_at_root(self):
+        response = self.client.get("/google425c45881532a134.html")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"google-site-verification: google425c45881532a134.html", response.data)
+
+    def test_home_has_meta_description(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'<meta name="description" content="', response.data)
+        self.assertIn(b"family-run", response.data)
+
+    def test_home_has_open_graph_and_favicon(self):
+        response = self.client.get("/")
+
+        body = response.data
+        self.assertIn(b'<meta property="og:title"', body)
+        self.assertIn(b'<meta property="og:image"', body)
+        self.assertIn(b'<meta name="twitter:card" content="summary_large_image"', body)
+        self.assertIn(b'rel="icon"', body)
+
+    def test_favicon_ico_is_served(self):
+        response = self.client.get("/favicon.ico")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/png", response.content_type)
+
+    def test_for_rent_includes_map_and_lead_capture_scripts(self):
+        # Regression: the script block was previously outside {% block content %}
+        # so Jinja discarded it, breaking the map and the notify-me form.
+        self.seed_property()
+        with patch.object(self.services.properties, "refresh_cache"):
+            response = self.client.get("/for-rent")
+
+        body = response.data
+        self.assertIn(b"leadCaptureForm", body)
+        self.assertIn(b"propertyMap", body)
+        # The inline initializer (not just the Leaflet <script src>) is present.
+        self.assertIn(b"L.tileLayer", body)
+
+    def test_sitemap_lists_public_pages_and_properties(self):
+        self.seed_property()
+        with patch.object(self.services.properties, "refresh_cache"):
+            response = self.client.get("/sitemap.xml")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/xml", response.content_type)
+        body = response.data.decode()
+        self.assertIn("<urlset", body)
+        self.assertIn("/for-rent", body)
+        # The seeded property's detail URL is present.
+        self.assertIn("/property/prop-1", body)
+
     def test_property_details_omits_tour_embed_when_url_blank(self):
         self.seed_property(tour_url="")
         with patch.object(self.services.appointments, "load", return_value={}):
@@ -1187,8 +1411,8 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/admin/dashboard")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Tickets by Status", response.data)
-        self.assertIn(b"Listings by Month", response.data)
+        self.assertIn(b"Tickets by status", response.data)
+        self.assertIn(b"Listings by month", response.data)
 
     def test_admin_dashboard_forbids_renter_for_chart_view(self):
         self.login_as("renter")
@@ -1910,6 +2134,45 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
                     tickets_file.unlink()
                 except OSError:
                     pass
+
+
+class LazyFileStatusTestCase(unittest.TestCase):
+    def test_existing_file_reports_present(self):
+        import tempfile
+        from pathlib import Path
+
+        from somewheria_app.routes.admin_routes import _lazy_file_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "roles.json"
+            path.write_text("{}")
+            status = _lazy_file_status("User Roles File", path)
+            self.assertTrue(status["ok"])
+            self.assertEqual(status["detail"], "Present")
+
+    def test_absent_file_in_writable_dir_is_healthy(self):
+        # A lazily-created file that doesn't exist yet is a normal state on a
+        # fresh deploy, not a fault.
+        import tempfile
+        from pathlib import Path
+
+        from somewheria_app.routes.admin_routes import _lazy_file_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status = _lazy_file_status("User Roles File", Path(tmp) / "roles.json")
+            self.assertTrue(status["ok"])
+            self.assertEqual(status["detail"], "Not created yet")
+
+    def test_absent_file_in_nonexistent_dir_is_flagged(self):
+        from pathlib import Path
+
+        from somewheria_app.routes.admin_routes import _lazy_file_status
+
+        status = _lazy_file_status(
+            "User Roles File", Path("/no/such/dir/really/roles.json")
+        )
+        self.assertFalse(status["ok"])
+        self.assertIn("not writable", status["detail"])
 
 
 if __name__ == "__main__":

@@ -681,16 +681,17 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         with patch(
             "somewheria_app.services.properties.requests.get",
             side_effect=[details_response, photo_response, thumb_response],
-        ), patch.object(
-            self.service,
-            "get_base64_image_from_url",
-            side_effect=["encoded-a", None],
         ):
             property_info = self.service.fetch_property_record("prop-1")
 
         self.assertEqual(property_info["id"], "prop-1")
-        self.assertEqual(property_info["photos"], ["encoded-a"])
-        self.assertEqual(property_info["thumbnail"], "encoded-a")
+        # Photos are kept as S3 URLs; with no thumbnail from upstream the first
+        # photo URL is used as the thumbnail.
+        self.assertEqual(
+            property_info["photos"],
+            ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+        )
+        self.assertEqual(property_info["thumbnail"], "https://example.com/a.jpg")
 
     def test_fetch_property_record_returns_none_on_failure(self):
         with patch("somewheria_app.services.properties.requests.get", side_effect=RuntimeError("boom")), patch.object(
@@ -982,6 +983,25 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertIsNone(encoded)
         warning_mock.assert_called_once()
 
+    def test_get_base64_image_downscales_large_landscape_instead_of_dropping(self):
+        # Regression: a full-res landscape photo (within the per-side cap) used
+        # to letterbox past MAX_IMAGE_PIXELS and get dropped. It must now be
+        # downscaled and returned as a data URI instead.
+        buffer = io.BytesIO()
+        Image.new("RGB", (6000, 4000), color="white").save(buffer, format="JPEG")
+        payload = buffer.getvalue()
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Content-Length": str(len(payload))}
+        response.raise_for_status.return_value = None
+        response.iter_content.return_value = iter([payload])
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            encoded = self.service.get_base64_image_from_url("https://example.com/big.jpg")
+
+        self.assertIsNotNone(encoded)
+        self.assertTrue(encoded.startswith("data:image/jpeg;base64,"))
+
     def test_upload_image_logs_association_failure(self):
         file_bytes = io.BytesIO()
         Image.new("RGB", (16, 9), color="yellow").save(file_bytes, format="PNG")
@@ -1035,7 +1055,7 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         warning_mock.assert_called_once()
         message = warning_mock.call_args.args[0]
-        self.assertIn("Failed to associate uploaded image", message)
+        self.assertIn("Failed to upload image", message)
 
 
 class CoverageInfrastructureTestCase(unittest.TestCase):
@@ -1231,6 +1251,10 @@ class CoverageInfrastructureTestCase(unittest.TestCase):
 
 
 class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
+    # A realistic browser UA so analytics count these as human visits (an
+    # empty/bot UA is now filtered out).
+    BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+
     def setUp(self):
         self.analytics = AnalyticsTracker(3)
         self.app = Flask(__name__, static_folder="static")
@@ -1245,7 +1269,7 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         self.app.after_request(self.analytics.after_request)
 
     def test_before_request_tracks_visits_and_unique_users(self):
-        with self.app.test_request_context("/hello"):
+        with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
             from flask import session
 
             session["user"] = {"email": "user@example.com"}
@@ -1253,6 +1277,46 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
 
         self.assertEqual(sum(self.analytics.site_visits.values()), 1)
         self.assertEqual(len(next(iter(self.analytics.unique_users.values()))), 1)
+
+    def test_repeat_page_views_count_as_one_visit(self):
+        # Browsing several pages within the session window is ONE visit,
+        # not one per page view.
+        for _ in range(5):
+            with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+                from flask import session
+
+                session["user"] = {"email": "user@example.com"}
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+
+    def test_distinct_visitors_count_as_separate_visits(self):
+        for email in ("a@example.com", "b@example.com"):
+            with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+                from flask import session
+
+                session["user"] = {"email": email}
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 2)
+
+    def test_visit_counts_again_after_session_gap(self):
+        from somewheria_app.services.analytics import VISIT_SESSION_GAP_SECONDS
+
+        with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+            from flask import session
+
+            session["user"] = {"email": "user@example.com"}
+            with patch("somewheria_app.services.analytics.time.monotonic", return_value=1000.0):
+                self.analytics.before_request()
+            # Same visitor returning after the session window: a new visit.
+            with patch(
+                "somewheria_app.services.analytics.time.monotonic",
+                return_value=1000.0 + VISIT_SESSION_GAP_SECONDS,
+            ):
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 2)
 
     def test_after_request_logs_duration(self):
         with self.app.test_request_context("/hello"):
@@ -1398,6 +1462,35 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
 
         self.assertEqual(sum(self.analytics.site_visits.values()), 0)
 
+    def test_before_request_skips_bot_user_agents(self):
+        # Real page (matched endpoint) but an automated client — not a visit.
+        for headers in (
+            {"User-Agent": "Mozilla/5.0 (l9scan/2.0; +https://leakix.net)"},
+            {"User-Agent": "Mozilla/5.0 (compatible; GPTBot/1.4; +https://openai.com/gptbot)"},
+            {"User-Agent": "python-requests/2.31.0"},
+            {},  # no User-Agent header at all
+        ):
+            with self.app.test_request_context("/hello", headers=headers):
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 0)
+        self.assertEqual(sum(len(s) for s in self.analytics.unique_users.values()), 0)
+
+    def test_before_request_skips_unmatched_route_probes(self):
+        # Scanner probing a path with no route (would 404) — not a visit,
+        # even with a browser-looking User-Agent.
+        for path in ("/.env", "/wp-login.php"):
+            with self.app.test_request_context(path, headers={"User-Agent": self.BROWSER_UA}):
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 0)
+
+    def test_before_request_counts_real_browser_on_real_page(self):
+        with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+            self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+
     def test_normalize_property_resets_non_list_photos(self):
         notifications = Mock()
         service = PropertyService(
@@ -1458,18 +1551,38 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         with self.client.session_transaction() as sess:
             sess["oauth_state"] = state
 
-    def test_google_callback_rejects_non_company_email(self):
+    def test_google_callback_rejects_unapproved_external_email(self):
+        # A random Gmail with no assigned role and not in any list is denied.
         self.configure_google()
         self._set_oauth_state()
+        self.services.config.authorized_users = []
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
-            return_value={"email": "user@gmail.com"},
-        ):
+            return_value={"email": "stranger@gmail.com"},
+        ), patch.object(self.services.auth, "get_user_role", return_value="guest"):
             response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 401)
-        self.assertIn(b"Only ekbergproperties.com or somewheria.com accounts are allowed.", response.data)
+        self.assertIn(b"Access denied", response.data)
+
+    def test_google_callback_allows_approved_external_email(self):
+        # An approved applicant (Gmail/Outlook) whose role was set to "renter"
+        # through the registration flow must be able to sign in.
+        self.configure_google()
+        self._set_oauth_state()
+        self.services.config.authorized_users = []
+        flow = self.make_flow()
+        with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
+            "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
+            return_value={"sub": "9", "email": "approved@gmail.com", "name": "Approved"},
+        ), patch.object(self.services.auth, "get_user_role", return_value="renter"), patch.object(
+            self.services.auth, "login_user", return_value={"email": "approved@gmail.com"}
+        ) as login_mock, patch.object(self.services.analytics, "record_login"):
+            response = self.client.get("/google/callback?state=test-state", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        login_mock.assert_called_once()
 
     def test_google_callback_rejects_unauthorized_company_user(self):
         self.configure_google()
@@ -1571,7 +1684,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
             )
             missing_email = self.client.post("/admin/dashboard", data={"action": "add", "email": "", "role": "admin"})
 
-        self.assertIn(b"removed", delete_ok.data)
+        self.assertIn(b"Deactivated", delete_ok.data)
         self.assertIn(b"User not found.", delete_missing.data)
         self.assertIn(b"Invalid role.", invalid_update.data)
         self.assertIn(b"User already exists.", existing_add.data)
@@ -1620,7 +1733,7 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
                 data={"email": "user@example.com", "action": "update", "role": "bad-role"},
             )
 
-        self.assertIn(b"removed", delete_response.data)
+        self.assertIn(b"Deactivated", delete_response.data)
         self.assertIn(b"Invalid role.", invalid_response.data)
         set_role_mock.assert_not_called()
 

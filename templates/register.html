@@ -1,29 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="max-w-md mx-auto py-10 px-4 bg-white dark:bg-neutral-950 rounded shadow">
-  <h1 class="text-2xl font-bold mb-6 text-[#111518] dark:text-white">Request Account</h1>
+<div class="sw-page sw-page-narrow" style="max-width:30rem;">
+  <p class="sw-eyebrow">Register</p>
+  <h1 class="sw-title">Request an account.</h1>
+  <p class="sw-sub">
+    Accounts are for current and incoming renters. Tell us who you are and
+    an admin will review your request.
+  </p>
+
   {% if success %}
-    <div class="bg-green-100 dark:bg-green-900 border border-green-400 dark:border-green-700 text-green-700 dark:text-green-200 px-4 py-3 rounded mb-4">
-      Registration request submitted! An admin will review your request soon.
+    <div class="sw-alert sw-alert-ok mt-6">
+      Request received. An admin will review it and you&rsquo;ll hear back by email.
     </div>
   {% endif %}
   {% if error %}
-    <div class="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded mb-4">
+    <div class="sw-alert sw-alert-bad mt-6">
       {{ error }}
     </div>
   {% endif %}
-  <form method="post" class="bg-white dark:bg-neutral-900 rounded shadow p-6 flex flex-col gap-4">
+
+  <form method="post" class="sw-panel mt-6">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <label class="font-semibold">Name
-      <input type="text" name="name" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" required>
-    </label>
-    <label class="font-semibold">Email
-      <input type="email" name="email" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800" required>
-    </label>
-    <label class="font-semibold">Why do you want to register?
-      <textarea name="reason" rows="3" class="w-full border rounded p-2 mt-1 bg-neutral-100 dark:bg-neutral-950 text-[#111518] dark:text-white border-neutral-200 dark:border-neutral-800"></textarea>
-    </label>
-    <button type="submit" class="bg-blue-600 dark:bg-blue-400 text-white dark:text-[#111518] px-4 py-2 rounded hover:bg-blue-700 dark:hover:bg-blue-600 font-bold transition-colors">Request Access</button>
+    {# Honeypot: hidden from people, filled in by spam bots; the server
+       silently drops any submission where it has a value. #}
+    <div style="position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden;" aria-hidden="true">
+      <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+    </div>
+    <div class="sw-field">
+      <label class="sw-label" for="regName">Name</label>
+      <input type="text" id="regName" name="name" class="sw-input" required>
+    </div>
+    <div class="sw-field">
+      <label class="sw-label" for="regEmail">Email</label>
+      <input type="email" id="regEmail" name="email" class="sw-input" required>
+    </div>
+    <div class="sw-field">
+      <label class="sw-label" for="regReason">Why do you want to register?</label>
+      <textarea id="regReason" name="reason" rows="3" class="sw-input"></textarea>
+      <p class="sw-help">For example: the home you&rsquo;re renting or about to move into.</p>
+    </div>
+    <button type="submit" class="sw-btn sw-btn-primary">Request access</button>
   </form>
 </div>
 {% endblock %}

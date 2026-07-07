@@ -2,9 +2,10 @@ import os
 import threading
 import time
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from flask import Flask, render_template, request
+from flask import Flask, g, render_template, request, session
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -92,7 +93,7 @@ def create_app() -> Flask:
     appointments = AppointmentService(config)
     auth = AuthService(config, storage)
     zillow = ZillowPublisher(config, notifications)
-    properties = PropertyService(config, notifications, zillow=zillow)
+    properties = PropertyService(config, notifications, zillow=zillow, storage=storage)
     jira = JiraClient(config, notifications)
     tickets = TicketService(config, storage, notifications, jira=jira)
 
@@ -112,8 +113,55 @@ def create_app() -> Flask:
         ),
     )
 
+    # Assign a short id to every request FIRST, before any other
+    # before_request handler runs, so each log line that request emits carries
+    # the same request_id and can be traced end to end. An inbound
+    # X-Request-Id (e.g. from a future load balancer) is honored when present.
+    @app.before_request
+    def _assign_request_id():
+        incoming = request.headers.get("X-Request-Id", "")
+        g.request_id = (incoming[:64] or uuid.uuid4().hex[:8])
+
+    # The role is resolved once at login and cached in the session cookie, so
+    # without this hook a promotion/demotion/revocation made in the admin UI
+    # (or an .env change + restart) has no effect until the user logs out and
+    # back in — a demoted admin keeps admin access for up to 8 hours.
+    # Re-resolve on every request so role changes are effective immediately;
+    # the session copy is rewritten so templates reading
+    # session['user']['role'] agree with what the decorators enforce.
+    @app.before_request
+    def _refresh_session_role():
+        # Skipped under TESTING: route tests inject session users with
+        # arbitrary roles that exist in no role list, and re-resolving would
+        # demote them all to guest. Mirrors the register-form timing check.
+        if app.config.get("TESTING"):
+            return
+        user = session.get("user")
+        if user and user.get("email"):
+            role = auth.get_user_role(user["email"])
+            if user.get("role") != role:
+                user["role"] = role
+                session["user"] = user
+
+    # Surface a dead email pipeline at startup instead of only as a per-send
+    # WARNING: with EMAIL_APP_PASSWORD unset every notification (registration,
+    # tickets, crash alerts) is silently skipped.
+    if not os.getenv("EMAIL_APP_PASSWORD"):
+        notifications.console.warning(
+            "EMAIL_APP_PASSWORD is not set — ALL outbound email (registrations, "
+            "tickets, contact form, crash alerts) will be skipped until it is "
+            "configured in .env and the app is restarted."
+        )
+
     app.before_request(analytics.before_request)
     app.after_request(analytics.after_request)
+
+    @app.after_request
+    def _tag_response_request_id(response):
+        request_id = getattr(g, "request_id", None)
+        if request_id:
+            response.headers.setdefault("X-Request-Id", request_id)
+        return response
 
     register_csrf(app)
     register_security_headers(app)

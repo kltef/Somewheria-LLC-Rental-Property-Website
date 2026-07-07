@@ -166,6 +166,28 @@ class FileStorageService:
             ]
             self.save_json_file(self.config.lead_capture_file, leads)
 
+    # ---------------------------------------------------- hidden listings
+    #
+    # Property data lives upstream, but the upstream table has no
+    # active/inactive column — "deactivated" (hidden from the public site,
+    # kept on the books) is state this site owns, so it persists here like
+    # the other JSON-backed state.
+
+    def get_hidden_listing_ids(self) -> list[str]:
+        ids = self.load_json_file(self.config.hidden_listings_file, [], expected_type=list)
+        return [str(item) for item in ids]
+
+    def set_listing_hidden(self, property_id: str, hidden: bool) -> None:
+        property_id = str(property_id)
+        with self.file_lock:
+            ids = self.get_hidden_listing_ids()
+            if hidden:
+                if property_id not in ids:
+                    ids.append(property_id)
+            else:
+                ids = [item for item in ids if item != property_id]
+            self.save_json_file(self.config.hidden_listings_file, ids)
+
     def get_renter_contracts(self) -> dict:
         return self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
 

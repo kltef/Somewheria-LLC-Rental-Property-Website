@@ -22,7 +22,7 @@ class SiteRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"<title>Home</title>", response.data)
-        self.assertIn(b"Welcome to Somewheria, LLC.", response.data)
+        self.assertIn(b"Find your", response.data)
 
     def test_missing_page_returns_404(self):
         response = self.client.get("/this-page-does-not-exist")
@@ -47,7 +47,7 @@ class SiteRoutesTestCase(unittest.TestCase):
         response = self.client.get("/admin/users")
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Front Door Locked", response.data)
+        self.assertIn(b"Access restricted", response.data)
 
     def test_admin_status_redirects_when_logged_out(self):
         response = self.client.get("/admin/status", follow_redirects=False)
@@ -67,7 +67,7 @@ class SiteRoutesTestCase(unittest.TestCase):
         response = self.client.get("/admin/status")
 
         self.assertEqual(response.status_code, 403)
-        self.assertIn(b"Front Door Locked", response.data)
+        self.assertIn(b"Access restricted", response.data)
 
     def test_admin_status_loads_for_admin(self):
         with self.client.session_transaction() as session:
@@ -82,7 +82,7 @@ class SiteRoutesTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"System Status", response.data)
-        self.assertIn(b"Website Sections", response.data)
+        self.assertIn(b"Website sections", response.data)
         self.assertIn(b"Public Pages", response.data)
         self.assertIn(b"Admin Tools", response.data)
 
@@ -98,7 +98,7 @@ class SiteRoutesTestCase(unittest.TestCase):
             response = self.client.get("/google/login")
 
             self.assertEqual(response.status_code, 503)
-            self.assertIn(b"Google Sign-In Isn&#39;t Ready Yet", response.data)
+            self.assertIn(b"Google sign-in isn&#39;t set up on this server", response.data)
             self.assertIn(b"Google OAuth is not configured on this server right now", response.data)
         finally:
             services.config.google_client_id = original_client_id

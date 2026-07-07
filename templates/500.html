@@ -1,8 +1,9 @@
 {% extends "error_base.html" %}
 {% set error_code = "500" %}
-{% set error_title = "Maintenance In Progress" %}
-{% set error_message = "Something inside the rental house needs attention right now. Our side of the system hit an internal problem while preparing this page." %}
-{% set primary_label = "Return Home" %}
-{% set secondary_label = "View Logs" %}
+{% set error_eyebrow = "500 — Server error" %}
+{% set error_title = "Something broke on our side of the line." %}
+{% set error_message = "The server hit an internal problem while preparing this page. Nothing you did caused it, and reloading in a moment may work." %}
+{% set primary_label = "Back to home" %}
+{% set secondary_label = "View logs" %}
 {% set secondary_href = url_for('view_logs') %}
-{% set house_note = "If this keeps happening, check the admin status and logs pages for clues about what needs repair." %}
+{% set house_note = "If this keeps happening, the admin status and logs pages usually show what needs repair." %}

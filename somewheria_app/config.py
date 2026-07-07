@@ -39,6 +39,9 @@ class AppConfig:
             "https://7pdnexz05a.execute-api.us-east-1.amazonaws.com/test",
         ).rstrip("/")
     )
+    # Write endpoints (POST/PUT/DELETE) on the properties API require this
+    # x-api-key; reads are public. Unset means upstream rejects writes (403).
+    api_key: str = field(default_factory=lambda: os.getenv("PROPERTIES_API_KEY", ""))
     # ``int()`` alone would raise ValueError at startup on a mistyped env value
     # (``CACHE_REFRESH_INTERVAL=sixty``) and refuse to boot. ``_int_env``
     # matches the ``TRUSTED_PROXY_COUNT`` contract: blank / non-numeric /
@@ -47,8 +50,16 @@ class AppConfig:
         default_factory=lambda: _int_env("CACHE_REFRESH_INTERVAL", 60)
     )
     analytics_days: int = 7
-    email_sender: str = "anthony.j.ekberg@gmail.com"
-    email_recipient: str = "anthony@ekbergproperties.com"
+    # Gmail account the app sends from (must match EMAIL_APP_PASSWORD) and
+    # the default inbox notifications land in. Env-overridable so the
+    # recipient can be repointed (e.g. to the property manager) without a
+    # code change.
+    email_sender: str = field(
+        default_factory=lambda: os.getenv("EMAIL_SENDER", "anthony.j.ekberg@gmail.com")
+    )
+    email_recipient: str = field(
+        default_factory=lambda: os.getenv("EMAIL_RECIPIENT", "anthony@ekbergproperties.com")
+    )
     console_log_level: str = field(default_factory=lambda: os.getenv("CONSOLE_LOG_LEVEL", "INFO"))
     disable_background_threads: bool = field(
         default_factory=lambda: os.getenv("DISABLE_BACKGROUND_THREADS") == "1"
@@ -105,6 +116,11 @@ class AppConfig:
         self.tickets_file = self.base_dir / "tickets.json"
         self.sqlite_file = self.base_dir / "somewheria.sqlite3"
         self.lead_capture_file = self.base_dir / "pending_lead_captures.json"
+        # Listing ids an admin has deactivated (hidden from the public site
+        # but kept upstream). Stored locally because the upstream properties
+        # table has no active/status column — deactivation is a presentation
+        # concern of this site, not upstream data.
+        self.hidden_listings_file = self.base_dir / "hidden_listings.json"
 
     def ensure_directories(self) -> None:
         self.static_dir.mkdir(parents=True, exist_ok=True)

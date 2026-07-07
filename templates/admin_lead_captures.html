@@ -1,25 +1,26 @@
 {% extends "admin_base.html" %}
 {% block admin_content %}
-<div class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-  <div class="mb-6">
-    <h1 class="text-2xl font-bold text-[#111518] dark:text-white">Pending Lead Captures</h1>
-    <p class="text-sm text-gray-500 dark:text-neutral-400 mt-1">
+<div class="sw-page">
+  <div>
+    <p class="sw-eyebrow">Admin &middot; People</p>
+    <h1 class="sw-title">Pending lead captures</h1>
+    <p class="sw-sub">
       {{ pending|length }} lead{{ '' if pending|length == 1 else 's' }} waiting for review
     </p>
   </div>
 
   {% if error %}
-    <div class="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-200 px-4 py-3 rounded mb-4">{{ error }}</div>
+    <div class="mt-6 sw-alert sw-alert-bad">{{ error }}</div>
   {% endif %}
 
   {% if pending and pending|length > 0 %}
-    <div class="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-800 shadow-sm divide-y divide-neutral-200 dark:divide-neutral-800">
+    <div class="mt-8 sw-panel divide-y">
       {% for req in pending %}
-        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors">
+        <div class="py-4 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" style="border-color: var(--sw-line-faint);">
           <div class="min-w-0">
-            <div class="font-medium text-[#111518] dark:text-white truncate">{{ req.email }}</div>
+            <div class="font-medium truncate">{{ req.email }}</div>
             {% if req.submitted_at %}
-              <div class="text-sm text-gray-500 dark:text-neutral-400 mt-1">Submitted {{ req.submitted_at }}</div>
+              <div class="sw-mono text-xs mt-1" style="color: var(--sw-ink-soft);">Submitted {{ req.submitted_at }}</div>
             {% endif %}
           </div>
           <div class="flex gap-2 shrink-0">
@@ -27,21 +28,22 @@
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="email" value="{{ req.email }}">
               <input type="hidden" name="action" value="approve">
-              <button class="bg-green-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-green-700 transition-colors">Approve</button>
+              <button class="sw-btn sw-btn-primary sw-btn-sm">Approve lead</button>
             </form>
             <form method="post" onsubmit="return confirm('Reject {{ req.email }}?');">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="email" value="{{ req.email }}">
               <input type="hidden" name="action" value="reject">
-              <button class="bg-white dark:bg-neutral-900 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 px-3 py-1.5 rounded-md text-sm font-medium hover:bg-red-50 dark:hover:bg-red-950 transition-colors">Reject</button>
+              <button class="sw-btn sw-btn-danger sw-btn-sm">Reject lead</button>
             </form>
           </div>
         </div>
       {% endfor %}
     </div>
   {% else %}
-    <div class="bg-white dark:bg-neutral-900 rounded-lg border border-neutral-200 dark:border-neutral-800 px-6 py-10 text-center text-gray-500 dark:text-neutral-400">
-      No pending lead captures.
+    <div class="mt-8 sw-empty">
+      <span class="sw-parcel-num">No leads awaiting review</span>
+      <p>New lead captures will appear here as they come in.</p>
     </div>
   {% endif %}
 </div>
