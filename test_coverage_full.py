@@ -1,4 +1,5 @@
 import base64
+import copy
 import importlib
 import io
 import os
@@ -391,6 +392,32 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(change_log["old_count"], 2)
         self.assertEqual(change_log["new_count"], 2)
         self.assertEqual(change_log["changed"][0]["id"], "prop-1")
+
+    def test_build_change_log_does_not_mutate_its_inputs(self):
+        # ``_refresh_with_change_log`` hands the live cache directly to
+        # ``_build_change_log`` (no defensive deep-copy) so it can avoid
+        # copying tens of MB of base64 photo data on every admin-triggered
+        # refresh. That optimization is only safe if the diff routine is
+        # strictly read-only on its inputs -- lock that contract in a test
+        # so a future change can't silently regress the assumption and
+        # corrupt the live cache mid-swap.
+        current = [
+            {"id": "prop-1", "name": "Old", "photos": ["data:image/jpeg;base64,AAA="]},
+            {"id": "prop-2", "rent": "1000"},
+        ]
+        latest = [
+            {"id": "prop-1", "name": "New", "photos": ["data:image/jpeg;base64,BBB="]},
+            {"id": "prop-3", "rent": "1200"},
+        ]
+        # Deep-copy so ``assertEqual`` compares against the pre-call shape
+        # even if the routine mutated something in place.
+        current_before = copy.deepcopy(current)
+        latest_before = copy.deepcopy(latest)
+
+        self.service._build_change_log(current, latest)
+
+        self.assertEqual(current, current_before)
+        self.assertEqual(latest, latest_before)
 
     def test_fetch_all_properties_filters_out_missing_records(self):
         with patch.object(self.service, "_fetch_property_ids", return_value=["prop-1", "prop-2"]), patch.object(

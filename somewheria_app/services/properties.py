@@ -385,11 +385,15 @@ class PropertyService:
                         if self.cache == latest_properties:
                             self.logger.info("Refresh completed with no property changes")
                             return
-                        # Snapshot the pre-write cache for the change-log diff.
-                        # Deep-copied so ``_build_change_log`` doesn't see the
-                        # post-assignment cache state via aliasing.
-                        current_snapshot = copy.deepcopy(self.cache)
-                        log_details = self._build_change_log(current_snapshot, latest_properties)
+                        # Build the diff BEFORE reassigning ``self.cache``.
+                        # ``_build_change_log`` only reads ids/keys/values from
+                        # its inputs (never mutates them), so passing the live
+                        # cache list directly is safe and avoids deep-copying
+                        # tens of MB of base64 photo data on every admin
+                        # refresh. Same class of fix as commit 29e7f87 (drop
+                        # the JSON re-serialize) and cc20983 (drop the
+                        # deep-copy in property_count).
+                        log_details = self._build_change_log(self.cache, latest_properties)
                         self.cache = latest_properties
                     self.notifications.log_site_change(actor_email, "properties_cache_updated", log_details)
                     self.logger.info(
