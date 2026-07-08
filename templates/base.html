@@ -8,9 +8,11 @@
   <title>{{ title or 'Somewheria, LLC.' }}</title>
   <meta name="description" content="{{ _desc }}">
 
-  <!-- Favicons -->
-  <link rel="icon" type="image/png" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
-  <link rel="shortcut icon" href="{{ url_for('static', filename='web_light_rd_SI@1x.png') }}">
+  <!-- Favicons: logo-light for the light theme, logo-dark for dark.
+       The href is swapped by the theme JS (applyTheme) so the tab icon
+       follows the active site theme, including manual toggles. -->
+  <link rel="icon" id="favicon" href="{{ url_for('static', filename='logo-light.ico') }}">
+  <link rel="shortcut icon" id="favicon-shortcut" href="{{ url_for('static', filename='logo-light.ico') }}">
 
   <!-- Open Graph / social share cards (iMessage, Facebook, LinkedIn, Slack) -->
   <meta property="og:type" content="website">
@@ -43,6 +45,15 @@
         document.documentElement.classList.add('dark');
       } else {
         document.documentElement.classList.remove('dark');
+      }
+      // Swap the favicon here too (the links above are already parsed) so a
+      // dark-theme load doesn't flash the light icon before the footer
+      // script runs.
+      if (theme === 'dark') {
+        ['favicon', 'favicon-shortcut'].forEach(function (id) {
+          const link = document.getElementById(id);
+          if (link) link.setAttribute('href', '/static/logo-dark.ico');
+        });
       }
     })();
   </script>
@@ -704,6 +715,12 @@
     if (themeColorMeta) {
       themeColorMeta.setAttribute('content', theme === 'dark' ? '#121c15' : '#223a2c');
     }
+    // Tab icon follows the theme: logo-light.ico / logo-dark.ico.
+    const faviconHref = '/static/' + (theme === 'dark' ? 'logo-dark.ico' : 'logo-light.ico');
+    ['favicon', 'favicon-shortcut'].forEach((id) => {
+      const link = document.getElementById(id);
+      if (link) link.setAttribute('href', faviconHref);
+    });
   };
 
   const setPreference = (theme) => {
