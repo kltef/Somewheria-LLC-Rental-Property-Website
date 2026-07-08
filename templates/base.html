@@ -366,6 +366,35 @@
       border: 0;
     }
     
+    /* Native UI (scrollbars, form controls, pickers) must follow the SITE
+       theme, not the OS theme — without this a dark page gets light
+       scrollbars whenever the OS is in light mode, and vice versa. */
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="dark"] { color-scheme: dark; }
+
+    /* Theme-switch cross-fade (fallback path for browsers without the View
+       Transitions API). The class is added by the toggle JS only for the
+       ~350ms of the switch — scoping it to that moment keeps hovers and
+       normal page interactions snappy, which a blanket `* {transition}`
+       would ruin. */
+    html.theme-switching,
+    html.theme-switching *,
+    html.theme-switching *::before,
+    html.theme-switching *::after {
+      transition: background-color 300ms ease, color 300ms ease,
+                  border-color 300ms ease, fill 300ms ease,
+                  stroke 300ms ease, box-shadow 300ms ease !important;
+    }
+
+    /* View Transitions circular reveal: disable the default cross-fade so
+       the clip-path animation (driven from the toggle JS) is the only
+       effect — the new theme sweeps out as a circle from the toggle button. */
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+      animation: none;
+      mix-blend-mode: normal;
+    }
+
     /* Force override browser dark mode settings */
     html[data-theme="light"] {
       background-color: #f1f3ed !important;
@@ -646,20 +675,25 @@
     });
   }
 </script>
-<!-- Fixed Theme Toggle JavaScript -->
+<!-- Theme toggle: circular-reveal switch (View Transitions API) with a
+     scoped cross-fade fallback. -->
 <script>
   const storageKey = 'theme-preference';
-  
+
   const getColorPreference = () => {
     if (localStorage.getItem(storageKey)) {
       return localStorage.getItem(storageKey);
     }
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   };
-  
-  const setPreference = (theme) => {
-    localStorage.setItem(storageKey, theme);
+
+  // Paints the theme onto the page WITHOUT persisting it. Persisting is
+  // click-only (setPreference): the old code wrote localStorage during init,
+  // which pinned the very first visit's OS theme forever and silently broke
+  // the "follow system changes" listener below.
+  const applyTheme = (theme) => {
     document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     // Label describes the action (switching to the other theme), not the
     // current state, so screen-reader users hear what the button will do.
     const toggle = document.querySelector('#theme-toggle');
@@ -667,24 +701,73 @@
       toggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
       toggle.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
     }
-
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    // Keep mobile browser / installed-PWA chrome in step with the page.
+    // Light keeps the spruce brand color; dark matches the dark paper.
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', theme === 'dark' ? '#121c15' : '#223a2c');
     }
   };
-  
-  const onClick = () => {
+
+  const setPreference = (theme) => {
+    localStorage.setItem(storageKey, theme);
+    applyTheme(theme);
+  };
+
+  // Swap themes with a circular reveal expanding from the toggle button.
+  // Falls back to a 300ms cross-fade (html.theme-switching) where the View
+  // Transitions API is missing, and to an instant swap under reduced motion.
+  const switchTheme = (theme, origin) => {
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) {
+      setPreference(theme);
+      return;
+    }
+    if (!document.startViewTransition) {
+      document.documentElement.classList.add('theme-switching');
+      setPreference(theme);
+      window.setTimeout(() => {
+        document.documentElement.classList.remove('theme-switching');
+      }, 350);
+      return;
+    }
+    const transition = document.startViewTransition(() => setPreference(theme));
+    transition.ready.then(() => {
+      const endRadius = Math.hypot(
+        Math.max(origin.x, window.innerWidth - origin.x),
+        Math.max(origin.y, window.innerHeight - origin.y)
+      );
+      document.documentElement.animate(
+        {
+          clipPath: [
+            `circle(0px at ${origin.x}px ${origin.y}px)`,
+            `circle(${endRadius}px at ${origin.x}px ${origin.y}px)`
+          ]
+        },
+        {
+          duration: 450,
+          easing: 'ease-in-out',
+          pseudoElement: '::view-transition-new(root)'
+        }
+      );
+    }).catch(() => { /* transition skipped (e.g. rapid double-click) — theme is applied either way */ });
+  };
+
+  const onClick = (event) => {
     const currentTheme = document.documentElement.getAttribute('data-theme');
     const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-    setPreference(newTheme);
+    // Anchor the reveal to the button's center (not the pointer position) so
+    // keyboard activation gets the same origin as a mouse click.
+    const rect = event.currentTarget.getBoundingClientRect();
+    switchTheme(newTheme, {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    });
   };
-  
-  // Initialize theme
-  const initialTheme = getColorPreference();
-  setPreference(initialTheme);
-  
+
+  // Initialize: reflect the current preference onto the page (no persist).
+  applyTheme(getColorPreference());
+
   // Add click listener
   document.addEventListener('DOMContentLoaded', () => {
     const toggleBtn = document.querySelector('#theme-toggle');
@@ -692,11 +775,11 @@
       toggleBtn.addEventListener('click', onClick);
     }
   });
-  
-  // Listen for system theme changes
+
+  // Follow OS theme changes for visitors who never chose explicitly.
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ({matches: isDark}) => {
     if (!localStorage.getItem(storageKey)) {
-      setPreference(isDark ? 'dark' : 'light');
+      applyTheme(isDark ? 'dark' : 'light');
     }
   });
 </script>
