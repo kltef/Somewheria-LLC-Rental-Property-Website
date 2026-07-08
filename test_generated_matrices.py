@@ -241,18 +241,16 @@ NAV_EXPECTATIONS = {
         "present": ["Manage Listings", "Renter Dashboard", "Logout"],
         "missing": ["Login", "Status", "Admin Panel"],
     },
-    # Renter Dashboard is deliberately absent from admin navs: admins can
-    # still open the URL directly, but the top bar only shows admin links.
-    # Admin Panel is shown to plain admins too (it lands on /admin/users,
-    # which renders the admin sidebar) — without it they had no way into
-    # the admin shell short of typing URLs.
+    # Admins get exactly ONE entry point in the public top bar — Admin
+    # Panel — and reach Manage Listings / Tickets / Status through the
+    # panel's sidebar instead of scattered public-nav links.
     "admin": {
-        "present": ["Manage Listings", "Status", "Admin Panel", "Logout"],
-        "missing": ["Login", "Renter Dashboard"],
+        "present": ["Admin Panel", "Logout"],
+        "missing": ["Login", "Manage Listings", "Status", "Renter Dashboard"],
     },
     "high_admin": {
-        "present": ["Manage Listings", "Status", "Admin Panel", "Logout"],
-        "missing": ["Login", "Renter Dashboard"],
+        "present": ["Admin Panel", "Logout"],
+        "missing": ["Login", "Manage Listings", "Status", "Renter Dashboard"],
     },
 }
 

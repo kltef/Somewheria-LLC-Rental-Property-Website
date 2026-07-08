@@ -476,15 +476,15 @@
             <li><a href="{{ url_for('register') }}" class="sw-nav-link">Register</a></li>
           {% endif %}
           {% if session.get('user') %}
-            <li><a href="{{ url_for('manage_listings') }}" class="sw-nav-link">Manage Listings</a></li>
+            {# Admin tools live in the admin panel's sidebar — the top bar
+               gives admins ONE entry point instead of scattering Manage
+               Listings / Tickets / Status across the public nav. #}
+            {% if role not in ['admin', 'high_admin'] %}
+              <li><a href="{{ url_for('manage_listings') }}" class="sw-nav-link">Manage Listings</a></li>
+            {% endif %}
             {% if role == 'renter' %}
               <li><a href="{{ url_for('renter_dashboard') }}" class="sw-nav-link">Renter Dashboard</a></li>
-            {% endif %}
-            {% if role in ['renter', 'admin', 'high_admin'] %}
               <li><a href="{{ url_for('ticket_list_mine') }}" class="sw-nav-link">Tickets</a></li>
-            {% endif %}
-            {% if role in ['admin', 'high_admin'] %}
-              <li><a href="{{ url_for('admin_status') }}" class="sw-nav-link">Status</a></li>
             {% endif %}
             {% if role == 'high_admin' %}
               <li><a href="{{ url_for('admin_dashboard_combined') }}" class="sw-nav-link">Admin Panel</a></li>
@@ -542,15 +542,12 @@
               <li><a href="{{ url_for('register') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Register</a></li>
             {% endif %}
             {% if session.get('user') %}
-              <li><a href="{{ url_for('manage_listings') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Manage Listings</a></li>
+              {% if role not in ['admin', 'high_admin'] %}
+                <li><a href="{{ url_for('manage_listings') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Manage Listings</a></li>
+              {% endif %}
               {% if role == 'renter' %}
                 <li><a href="{{ url_for('renter_dashboard') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Renter Dashboard</a></li>
-              {% endif %}
-              {% if role in ['renter', 'admin', 'high_admin'] %}
                 <li><a href="{{ url_for('ticket_list_mine') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Tickets</a></li>
-              {% endif %}
-              {% if role in ['admin', 'high_admin'] %}
-                <li><a href="{{ url_for('admin_status') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Status</a></li>
               {% endif %}
               {% if role == 'high_admin' %}
                 <li><a href="{{ url_for('admin_dashboard_combined') }}" onclick="closeMobileMenu()" class="text-[#111518] dark:text-white">Admin Panel</a></li>

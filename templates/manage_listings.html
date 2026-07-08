@@ -1,12 +1,12 @@
-{% extends "base.html" %}
-{% block content %}
+{% extends "admin_base.html" %}
+{% block admin_content %}
 <div class="sw-page">
   <p class="sw-eyebrow">Property management</p>
   <div class="flex flex-wrap items-end justify-between gap-4">
     <div>
       <h1 class="sw-title">Manage listings</h1>
       {% if user %}
-      <p class="sw-sub">Signed in as {{ user.name }} ({{ user.email }}). Edit, remove, or re-list the properties on the books.</p>
+      <p class="sw-sub">Signed in as {{ user.name }} ({{ user.email }}). Edit, list, or remove the properties on the books.</p>
       {% endif %}
     </div>
     <a href="{{ url_for('add_listing') }}" class="sw-btn sw-btn-primary sw-btn-sm">Add a property</a>
@@ -14,9 +14,11 @@
 
   <div class="mt-8 sw-field">
     <input
-      placeholder="Search by address, ID, or other criteria"
+      id="listing-search"
+      type="search"
+      placeholder="Search by name, address, ID, or status"
+      autocomplete="off"
       class="sw-input"
-      value=""
     />
   </div>
 
@@ -26,8 +28,7 @@
         <tr>
           <th class="w-14">Property</th>
           <th>Status</th>
-          <th>Location</th>
-          <!-- Type column removed -->
+          <th>Listing</th>
           <th>Price</th>
           <th>Actions</th>
         </tr>
@@ -35,7 +36,8 @@
       <tbody>
         {% for prop in properties %}
         {% set is_hidden = prop.id|string in (hidden_ids or []) %}
-        <tr>
+        <tr data-listing-row
+            data-search="{{ (prop.name ~ ' ' ~ prop.address ~ ' ' ~ prop.id ~ ' ' ~ ('not listed' if is_hidden else 'for rent')) | lower }}">
           <td class="w-14">
             <div
               class="bg-center bg-no-repeat aspect-square bg-cover rounded-full w-10"
@@ -44,34 +46,28 @@
           </td>
           <td>
             {% if is_hidden %}
-              <span class="sw-badge sw-badge-warn" title="Hidden from the public site — reactivate to publish it again">Deactivated</span>
+              <span class="sw-badge sw-badge-warn" title="Hidden from the public site — use List For Rent to publish it again">Not listed</span>
             {% else %}
-              <span class="sw-badge{% if (prop.status or 'Active')|lower == 'active' %} sw-badge-ok{% endif %}">{{ prop.status or "Active" }}</span>
+              <span class="sw-badge sw-badge-ok">For Rent</span>
             {% endif %}
           </td>
-          <td class="text-sm" style="color:var(--sw-ink-soft)">
-            {{ prop.address or "Unknown" }}
+          <td>
+            <div class="font-medium">{{ prop.name or "Unnamed property" }}</div>
+            <div class="text-sm" style="color:var(--sw-ink-soft)">{{ prop.address or "Unknown" }}</div>
           </td>
-          <!-- Type cell removed -->
           <td class="text-sm sw-mono">
             {{ prop.rent or prop.price or "$N/A" }}
           </td>
           <td class="min-w-[11rem]">
             <a href="{{ url_for('edit_listing', property_id=prop.id) }}" class="sw-btn sw-btn-ghost sw-btn-sm w-full mb-1">Edit listing</a>
             <form action="{{ url_for('toggle_active', id=prop.id) }}" method="post"
-                  {% if not is_hidden %}onsubmit="return confirm('Deactivate this listing? It will be hidden from the public site but kept on the books — you can reactivate it any time.');"{% endif %}>
+                  {% if not is_hidden %}onsubmit="return confirm('Take this listing off For Rent? It will be hidden from the public site but kept on the books — you can list it again any time.');"{% endif %}>
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="sw-btn sw-btn-ghost sw-btn-sm w-full">
-                {% if is_hidden %}Reactivate{% else %}Deactivate{% endif %}
+                {% if is_hidden %}List For Rent{% else %}Remove from For Rent{% endif %}
               </button>
             </form>
-            <form action="{{ url_for('toggle_sale', id=prop.id) }}" method="post" class="mt-1">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              <button type="submit" class="sw-btn sw-btn-ghost sw-btn-sm w-full">
-                {% if prop.for_sale %}List for rent{% else %}List for sale{% endif %}
-              </button>
-            </form>
-            <form action="{{ url_for('delete_listing', id=prop.id) }}" method="post" class="mt-1" onsubmit="return confirm('Permanently delete this listing? This removes it from the property database and CANNOT be undone. To take it off the market temporarily, use Deactivate instead.');">
+            <form action="{{ url_for('delete_listing', id=prop.id) }}" method="post" class="mt-1" onsubmit="return confirm('Permanently delete this listing? This removes it from the property database and CANNOT be undone. To take it off the market temporarily, use Remove from For Rent instead.');">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="sw-btn sw-btn-danger sw-btn-sm w-full">Delete permanently</button>
             </form>
@@ -80,6 +76,26 @@
         {% endfor %}
       </tbody>
     </table>
+    <div id="listing-no-results" class="hidden px-6 py-8 text-center text-sm" style="color: var(--sw-ink-soft);">No listings match that search.</div>
   </div>
 </div>
+
+<script>
+  (function () {
+    var input = document.getElementById('listing-search');
+    if (!input) return;
+    var rows = document.querySelectorAll('[data-listing-row]');
+    var empty = document.getElementById('listing-no-results');
+    input.addEventListener('input', function () {
+      var q = this.value.trim().toLowerCase();
+      var shown = 0;
+      rows.forEach(function (row) {
+        var match = row.getAttribute('data-search').indexOf(q) !== -1;
+        row.style.display = match ? '' : 'none';
+        if (match) shown++;
+      });
+      if (empty) empty.classList.toggle('hidden', shown !== 0);
+    });
+  })();
+</script>
 {% endblock %}

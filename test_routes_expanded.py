@@ -1340,15 +1340,14 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("image/png", response.content_type)
 
-    def test_for_rent_includes_map_and_lead_capture_scripts(self):
+    def test_for_rent_includes_map_scripts(self):
         # Regression: the script block was previously outside {% block content %}
-        # so Jinja discarded it, breaking the map and the notify-me form.
+        # so Jinja discarded it, breaking the map view.
         self.seed_property()
         with patch.object(self.services.properties, "refresh_cache"):
             response = self.client.get("/for-rent")
 
         body = response.data
-        self.assertIn(b"leadCaptureForm", body)
         self.assertIn(b"propertyMap", body)
         # The inline initializer (not just the Leaflet <script src>) is present.
         self.assertIn(b"L.tileLayer", body)
@@ -1594,144 +1593,12 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn("open", data_line)
 
 
-    # --- §3.3 Lead capture tests ---
-
-    def test_submit_lead_capture_requires_valid_email(self):
-        response = self.client.post("/lead-captures", data={"email": "not-an-email"})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn(b"valid email", response.data)
-
-    def test_submit_lead_capture_rejects_malformed_emails(self):
-        # Catches the cases the previous "@ in value" check let through.
-        for garbage in ("@", "a@", "@b.com", "a@b", "user @example.com"):
-            with patch.object(self.services.storage, "add_pending_lead_capture") as add_mock, patch.object(
-                self.services.notifications, "send_email"
-            ) as send_email_mock:
-                response = self.client.post("/lead-captures", data={"email": garbage})
-            self.assertEqual(response.status_code, 400, garbage)
-            add_mock.assert_not_called()
-            send_email_mock.assert_not_called()
-
-    def test_submit_lead_capture_saves_and_emails(self):
-        with patch.object(
-            self.services.storage, "add_pending_lead_capture", return_value=True
-        ) as add_mock, patch.object(
-            self.services.notifications, "send_email"
-        ) as send_email_mock:
-            response = self.client.post(
-                "/lead-captures", data={"email": "lead@example.com"}
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.is_json)
-        self.assertTrue(response.get_json().get("success"))
-        add_mock.assert_called_once()
-        called_with = add_mock.call_args[0][0]
-        self.assertEqual(called_with["email"], "lead@example.com")
-        self.assertIn("submitted_at", called_with)
-        send_email_mock.assert_called_once()
-
-    def test_submit_lead_capture_duplicate_does_not_reemail_admins(self):
-        # A repeat POST for an already-pending email must not send a second
-        # "New Lead Capture" notification — otherwise an attacker can spam the
-        # admin inbox at the rate-limit ceiling just by replaying the form.
-        # The user-facing response is still success=True so the dedup state
-        # isn't leaked to unauthenticated callers.
-        with patch.object(
-            self.services.storage, "add_pending_lead_capture", return_value=False
-        ) as add_mock, patch.object(
-            self.services.notifications, "send_email"
-        ) as send_email_mock:
-            response = self.client.post(
-                "/lead-captures", data={"email": "dup@example.com"}
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json().get("success"))
-        add_mock.assert_called_once()
-        send_email_mock.assert_not_called()
-
-    def test_admin_lead_captures_page_loads_for_admin(self):
-        self.login_as("admin")
-        with patch.object(self.services.storage, "get_pending_lead_captures", return_value=[]):
-            response = self.client.get("/admin/lead-captures")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Pending Lead Captures", response.data)
-
-    def test_admin_lead_captures_requires_login(self):
-        response = self.client.get("/admin/lead-captures", follow_redirects=False)
-        self.assertEqual(response.status_code, 302)
-
-    def test_admin_lead_captures_requires_email_on_post(self):
-        self.login_as("admin")
-        with patch.object(self.services.storage, "get_pending_lead_captures", return_value=[]), patch.object(
-            self.services.storage, "remove_pending_lead_capture"
-        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
-            response = self.client.post(
-                "/admin/lead-captures", data={"action": "approve", "email": ""}
-            )
-        self.assertEqual(response.status_code, 200)
-        remove_mock.assert_not_called()
-        send_email_mock.assert_not_called()
-
-    def test_admin_lead_captures_approve_removes_and_emails(self):
-        self.login_as("admin")
-        with patch.object(
-            self.services.storage,
-            "get_pending_lead_captures",
-            side_effect=[[{"email": "lead@example.com"}], []],
-        ), patch.object(
-            self.services.storage, "remove_pending_lead_capture"
-        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
-            response = self.client.post(
-                "/admin/lead-captures",
-                data={"action": "approve", "email": "lead@example.com"},
-            )
-        self.assertEqual(response.status_code, 200)
-        remove_mock.assert_called_once_with("lead@example.com")
-        send_email_mock.assert_called_once()
-        # The thank-you email must go to the lead, not the admin inbox.
-        self.assertEqual(send_email_mock.call_args.kwargs.get("to"), "lead@example.com")
-
-    def test_admin_lead_captures_reject_removes_silently(self):
-        self.login_as("admin")
-        with patch.object(
-            self.services.storage,
-            "get_pending_lead_captures",
-            side_effect=[[{"email": "lead@example.com"}], []],
-        ), patch.object(
-            self.services.storage, "remove_pending_lead_capture"
-        ) as remove_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
-            response = self.client.post(
-                "/admin/lead-captures",
-                data={"action": "reject", "email": "lead@example.com"},
-            )
-        self.assertEqual(response.status_code, 200)
-        remove_mock.assert_called_once_with("lead@example.com")
-        send_email_mock.assert_not_called()
-
-    def test_admin_lead_captures_invalid_action(self):
-        self.login_as("admin")
-        with patch.object(
-            self.services.storage,
-            "get_pending_lead_captures",
-            return_value=[{"email": "lead@example.com"}],
-        ), patch.object(
-            self.services.storage, "remove_pending_lead_capture"
-        ) as remove_mock:
-            response = self.client.post(
-                "/admin/lead-captures",
-                data={"action": "wat", "email": "lead@example.com"},
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Invalid action.", response.data)
-        remove_mock.assert_not_called()
-
-    def test_for_rent_renders_filter_bar_and_lead_form(self):
+    def test_for_rent_renders_filter_bar_and_map(self):
         self.seed_property()
         with patch.object(self.services.properties, "refresh_cache"):
             response = self.client.get("/for-rent")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"filterBar", response.data)
-        self.assertIn(b"leadCaptureForm", response.data)
         self.assertIn(b"propertyMap", response.data)
         # CSP should permit Leaflet from unpkg.com and tiles from
         # *.tile.openstreetmap.org for the §3.4 map view.

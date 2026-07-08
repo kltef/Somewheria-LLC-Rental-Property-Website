@@ -20,12 +20,24 @@ def oauth_not_configured_response():
     )
 
 
+def _landing_redirect():
+    """Where a logged-in user starts: admins land in the admin panel, not on
+    a public page. The Dashboard is high_admin-only, so plain admins land on
+    Users (any admin page renders the panel sidebar)."""
+    role = (session.get("user") or {}).get("role", "")
+    if role == "high_admin":
+        return redirect(url_for("admin_dashboard_combined"))
+    if role == "admin":
+        return redirect(url_for("admin_users"))
+    return redirect(url_for("manage_listings"))
+
+
 def login():
     services = get_services()
     if is_logged_in():
-        return redirect(url_for("manage_listings"))
+        return _landing_redirect()
     if request.method == "POST":
-        return redirect(url_for("manage_listings"))
+        return _landing_redirect()
     return render_template(
         "login.html",
         title="Login",
@@ -166,7 +178,7 @@ def google_callback():
         user = services.auth.login_user(id_info)
         services.analytics.record_login(user["email"].lower())
         logger.info("Successful login for %s", user_email)
-        return redirect(url_for("manage_listings"))
+        return _landing_redirect()
     except Exception as exc:
         services.notifications.log_and_notify_error(
             "Google OAuth Error",

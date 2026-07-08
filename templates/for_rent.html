@@ -82,21 +82,6 @@
     <div id="mapNote" class="mt-2 sw-mono text-xs" style="color:var(--sw-ink-soft);" aria-live="polite"></div>
     {% endif %}
 
-    <!-- Lead capture: Notify me -->
-    <div id="notify" class="mt-14 sw-parcel">
-      <div class="sw-parcel-num">STAY ON THE LIST</div>
-      <h3>Hear about new homes first</h3>
-      <p>Leave your email and we&rsquo;ll tell you when something new is listed. Nothing else, no spam.</p>
-      <form id="leadCaptureForm" class="mt-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <label class="flex-1 flex flex-col">
-          <span class="sw-label" style="margin-bottom:0.35rem;">Your email</span>
-          <input type="email" id="leadEmail" name="email" required maxlength="254" class="sw-input"/>
-        </label>
-        <button type="submit" class="sw-btn sw-btn-primary">Notify me</button>
-      </form>
-      <div id="leadFeedback" class="mt-3 text-sm" aria-live="polite"></div>
-    </div>
 </div>
 <script>
 // --- §3.1 Client-side search/filter against rendered cards ---
@@ -160,48 +145,6 @@
     applyFilters();
   });
   applyFilters();
-})();
-
-// --- §3.3 Lead-capture form ---
-(function() {
-  const form = document.getElementById('leadCaptureForm');
-  if (!form) return;
-  const feedback = document.getElementById('leadFeedback');
-  const emailInput = document.getElementById('leadEmail');
-  const csrfInput = form.querySelector('input[name="_csrf_token"]');
-  form.addEventListener('submit', function(e) {
-    e.preventDefault();
-    feedback.textContent = '';
-    feedback.className = 'mt-3 text-sm';
-    const email = (emailInput.value || '').trim();
-    if (!email || email.indexOf('@') === -1) {
-      feedback.textContent = 'Please enter a valid email.';
-      feedback.className = 'mt-3 text-sm text-red-500';
-      return;
-    }
-    const body = new FormData();
-    body.append('email', email);
-    body.append('_csrf_token', csrfInput ? csrfInput.value : '');
-    fetch('/lead-captures', { method: 'POST', body: body })
-      .then(resp => resp.json().catch(() => ({})).then(data => ({status: resp.status, data})))
-      .then(({status, data}) => {
-        if (status === 200 && data && data.success) {
-          feedback.textContent = "Thanks! We'll be in touch when something new is listed.";
-          feedback.className = 'mt-3 text-sm text-green-500';
-          form.reset();
-        } else if (status === 429) {
-          feedback.textContent = 'Too many requests. Please slow down and try again later.';
-          feedback.className = 'mt-3 text-sm text-red-500';
-        } else {
-          feedback.textContent = (data && data.error) || 'Could not submit. Please try again later.';
-          feedback.className = 'mt-3 text-sm text-red-500';
-        }
-      })
-      .catch(() => {
-        feedback.textContent = 'Network error. Please try again.';
-        feedback.className = 'mt-3 text-sm text-red-500';
-      });
-  });
 })();
 
 // --- §3.4 Map view (Leaflet + Nominatim, cached in localStorage) ---

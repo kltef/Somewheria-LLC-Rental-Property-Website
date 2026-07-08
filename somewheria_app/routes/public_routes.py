@@ -320,30 +320,6 @@ def report_issue():
     )
 
 
-@rate_limit(limit=3, window_seconds=600)
-def submit_lead_capture():
-    services = get_services()
-    email = (request.form.get("email") or "").strip().lower()[:254]
-    if not is_valid_email(email):
-        return jsonify(success=False, error="A valid email is required."), 400
-    added = services.storage.add_pending_lead_capture(
-        {
-            "email": email,
-            "submitted_at": utcnow_iso(),
-        }
-    )
-    # Only notify admins on a genuinely new lead. Repeated submissions of an
-    # already-pending address are accepted silently so a hostile client can't
-    # spam the admin inbox by replaying the same email — mirrors the dedup
-    # guard /register has had since the registration flow was introduced.
-    if added:
-        services.notifications.send_email(
-            "New Lead Capture",
-            f"New 'notify me' lead from {email}. Approve at /admin/lead-captures",
-        )
-    return jsonify(success=True)
-
-
 def sitemap():
     """XML sitemap of the public, indexable pages plus every live listing.
 
@@ -407,9 +383,3 @@ def register_public_routes(app) -> None:
     app.add_url_rule("/logs", endpoint="view_logs", view_func=view_logs)
     app.add_url_rule("/report-issue", endpoint="report_issue_form", view_func=report_issue_form, methods=["GET"])
     app.add_url_rule("/report-issue", endpoint="report_issue", view_func=report_issue, methods=["POST"])
-    app.add_url_rule(
-        "/lead-captures",
-        endpoint="submit_lead_capture",
-        view_func=submit_lead_capture,
-        methods=["POST"],
-    )
