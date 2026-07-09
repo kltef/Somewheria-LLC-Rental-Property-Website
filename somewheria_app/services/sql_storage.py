@@ -58,22 +58,27 @@ class SqlStorageService:
 
     # ---------------------------------------------------------------- helpers
 
+    # (config attribute name, routing key). ``getattr`` with a ``None``
+    # default means a config missing one of these attributes reports an
+    # unknown path (falls back to the caller's default / no-op) rather
+    # than raising AttributeError halfway through the check — matching
+    # the contract exercised by ``PathShimUnknownPathTestCase``.
+    _PATH_KEY_ATTRS = (
+        ("registration_file", "pending_registrations"),
+        ("user_roles_file", "user_roles"),
+        ("renter_profile_file", "renter_profiles"),
+        ("contracts_file", "renter_contracts"),
+        ("tickets_file", "tickets"),
+        ("lead_capture_file", "lead_captures"),
+        ("hidden_listings_file", "hidden_listings"),
+    )
+
     def _path_key(self, path: Path) -> str:
         path = Path(path)
-        if path == self.config.registration_file:
-            return "pending_registrations"
-        if path == self.config.user_roles_file:
-            return "user_roles"
-        if path == self.config.renter_profile_file:
-            return "renter_profiles"
-        if path == self.config.contracts_file:
-            return "renter_contracts"
-        if path == self.config.tickets_file:
-            return "tickets"
-        if path == self.config.lead_capture_file:
-            return "lead_captures"
-        if path == self.config.hidden_listings_file:
-            return "hidden_listings"
+        for attr, key in self._PATH_KEY_ATTRS:
+            configured = getattr(self.config, attr, None)
+            if configured is not None and path == configured:
+                return key
         return ""
 
     # ---------------- Generic JSON shim used by TicketService et al --------

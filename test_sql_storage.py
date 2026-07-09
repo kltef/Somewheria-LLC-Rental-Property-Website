@@ -236,6 +236,26 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # Must not raise; the warning is logged but the request flow continues.
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
 
+    def test_missing_config_attribute_is_treated_as_unknown_path(self):
+        # If a config forgets one of the known file attributes (e.g. an
+        # older AppConfig deployed against a newer sql_storage), the path
+        # shim must fall through to the "unknown path" branch rather than
+        # raising AttributeError halfway through the checks. That would
+        # abort load/save for every path — including the ones the config
+        # DID configure correctly. The stock ``_make_config`` doesn't set
+        # ``hidden_listings_file`` at all, so the shim already needs to
+        # tolerate the missing attribute; if it doesn't, an unknown-path
+        # load raises AttributeError instead of returning the default.
+        self.assertFalse(hasattr(self.config, "hidden_listings_file"))
+        self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
+        self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
+        # A path that IS configured must still route correctly.
+        self.storage.set_user_role("still-works@example.com", "renter")
+        self.assertEqual(
+            self.storage.get_user_roles(),
+            {"still-works@example.com": "renter"},
+        )
+
 
 class AtomicTestCase(SqlStorageBaseTestCase):
     """``atomic()`` must serialize route-level read-modify-write sequences.
