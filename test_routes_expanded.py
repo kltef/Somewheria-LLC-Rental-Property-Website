@@ -1730,6 +1730,85 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/contract-xyz")
         self.assertEqual(response.status_code, 404)
 
+    def test_backfill_contract_ids_does_not_persist_status_class(self):
+        """``status_class`` is derived from today's date and the contract's
+        start/end dates, so persisting it lets a "pending" contract keep
+        rendering as pending long after start_date has passed. The backfill
+        must add ids to disk without leaking the derived field.
+        """
+        from somewheria_app.routes.admin_routes import _backfill_contract_ids
+
+        # Contracts missing ``id`` — triggers the backfill save.
+        contracts = [
+            {
+                "property_name": "Maple House",
+                "start_date": "2024-01-01",
+                "end_date": "2025-01-01",
+                "status": "unrecognized-freeform",
+            }
+        ]
+        # Snapshot the payload AT SAVE TIME (deep copy) because the function
+        # mutates the same dict in place after the save call to attach the
+        # derived ``status_class`` — a plain Mock only records references.
+        saved_snapshots: list[dict] = []
+
+        def _snapshot_save(payload):
+            saved_snapshots.append(copy.deepcopy(payload))
+
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={"renter@example.com": contracts}
+        ), patch.object(
+            self.services.storage, "save_renter_contracts", side_effect=_snapshot_save
+        ):
+            _backfill_contract_ids(self.services, contracts, "renter@example.com")
+
+        self.assertEqual(len(saved_snapshots), 1)
+        saved_payload = saved_snapshots[0]
+        for saved_contract in saved_payload["renter@example.com"]:
+            self.assertNotIn(
+                "status_class",
+                saved_contract,
+                "status_class is derived from today's date; persisting it stales the badge",
+            )
+            self.assertIn("id", saved_contract, "id should have been backfilled")
+        # In-memory, the returned contracts still carry the derived field
+        # so callers (dashboard render) can use it without an extra call.
+        self.assertIn("status_class", contracts[0])
+
+    def test_contract_detail_recomputes_stale_status_class(self):
+        """A ``status_class`` persisted by an earlier backfill (before the
+        fix) can become stale as dates advance; the detail route must
+        recompute it rather than trust the stored value.
+        """
+        self.login_as("renter", email="renter@example.com")
+        # start_date is in the past — the fresh classification is "active".
+        # The persisted value is deliberately stale ("pending"), matching
+        # what a pre-fix backfill would have written to disk.
+        yesterday = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+        future = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": "stale-status",
+                    "property_name": "Maple House",
+                    "start_date": yesterday,
+                    "end_date": future,
+                    "status": "unrecognized-freeform",
+                    "status_class": "pending",  # stale, persisted from before the fix
+                    "pdf_filename": "",
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get("/contracts/stale-status")
+        self.assertEqual(response.status_code, 200)
+        # The active badge picks up ``sw-badge-ok``; a stale pending would
+        # render ``sw-badge-warn`` per the template's mapping.
+        self.assertIn(b"sw-badge-ok", response.data)
+        self.assertNotIn(b"sw-badge-warn", response.data)
+
     def test_contract_download_serves_pdf(self):
         self.login_as("renter", email="renter@example.com")
         contract_id = "contract-dl"
