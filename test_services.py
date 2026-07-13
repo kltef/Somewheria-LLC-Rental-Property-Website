@@ -540,6 +540,21 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
         self.assertEqual(loaded["prop-2"], {"2030-05-01"})
 
+    def test_load_does_not_emit_info_logs(self):
+        # Regression: /property/<uuid> calls load() on every page view,
+        # including bot crawlers. Emitting INFO logs on each read fills
+        # the rotating application.log with duplicate lines and shortens
+        # the useful log retention window. Routine reads must stay at
+        # DEBUG so INFO retains signal for mutations and errors.
+        self.service.save({"prop-1": {"2030-05-01"}})
+        with patch.object(self.service.logger, "info") as info_mock:
+            self.service.load()
+            # Also cover the missing-file branch, which had its own INFO
+            # line.
+            self.appointments_path.unlink()
+            self.service.load()
+        info_mock.assert_not_called()
+
 
 class PropertyServiceTestCase(unittest.TestCase):
     def setUp(self):
