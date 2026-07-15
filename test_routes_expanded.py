@@ -924,6 +924,55 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Maple House", response.data)
 
+    def test_renter_dashboard_backfill_preserves_concurrent_contract_writes(self):
+        """The id-backfill path must not overwrite a newer version of the
+        renter's contract list that an admin write installed between the
+        initial (unlocked) read and the persist-inside-``atomic()`` call.
+
+        Regression guard: prior code saved the pre-lock snapshot back,
+        silently dropping any contract added or removed in between.
+        """
+        self.login_as("renter", email="renter@example.com")
+        # Pre-lock snapshot: one contract without an ``id`` so the backfill
+        # actually persists a write.
+        original_snapshot = {
+            "renter@example.com": [{"property_name": "Old House"}],
+        }
+        # Fresh state observed inside the storage lock: the same renter now
+        # also has a brand-new contract added concurrently by an admin.
+        fresh_state = {
+            "renter@example.com": [
+                {"property_name": "Old House"},
+                {"property_name": "New House", "id": "existing-id"},
+            ],
+        }
+        # ``get_renter_contracts`` is called twice — first pre-lock, then
+        # again inside the atomic() to re-read the fresh list. Return the
+        # stale snapshot first and the fresh state second.
+        calls = {"n": 0}
+
+        def _get_contracts():
+            calls["n"] += 1
+            return original_snapshot if calls["n"] == 1 else fresh_state
+
+        with patch.object(
+            self.services.storage,
+            "get_renter_contracts",
+            side_effect=_get_contracts,
+        ), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_mock:
+            response = self.client.get("/renter-dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        # The concurrent contract must have survived the backfill.
+        save_mock.assert_called_once()
+        saved = save_mock.call_args[0][0]
+        saved_names = [c.get("property_name") for c in saved.get("renter@example.com", [])]
+        self.assertIn("Old House", saved_names)
+        self.assertIn("New House", saved_names)
+
     def test_renter_profile_loads_existing_profile(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(

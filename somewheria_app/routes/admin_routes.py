@@ -234,27 +234,38 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
     one in (and persist the back-fill) so renter links can target them."""
     if not contracts_for_email:
         return contracts_for_email
-    needs_save = False
-    for contract in contracts_for_email:
-        if not contract.get("id"):
-            contract["id"] = uuid_lib.uuid4().hex
-            needs_save = True
-        contract.setdefault("pdf_filename", "")
-        # Annotate a normalized status for templates without mutating the
-        # canonical free-form ``status`` field admins set in the form.
-        contract["status_class"] = _classify_contract_status(contract)
-    if needs_save:
-        # Hold the storage lock across load+modify+save so a concurrent
-        # admin add/delete on the same renter can't race the backfill and
-        # silently lose one side's write. Mirrors the lost-update fix in
-        # commit e062313 for tickets and pending registrations.
-        try:
-            with services.storage.atomic():
-                all_contracts = services.storage.get_renter_contracts()
+    needs_save = any(not contract.get("id") for contract in contracts_for_email)
+    if not needs_save:
+        for contract in contracts_for_email:
+            contract.setdefault("pdf_filename", "")
+            # Annotate a normalized status for templates without mutating the
+            # canonical free-form ``status`` field admins set in the form.
+            contract["status_class"] = _classify_contract_status(contract)
+        return contracts_for_email
+    # Hold the storage lock across load+modify+save so a concurrent
+    # admin add/delete on the same renter can't race the backfill and
+    # silently lose one side's write. Re-read the fresh list inside the
+    # lock (the caller's snapshot pre-dates any concurrent modification);
+    # writing back the stale snapshot would clobber those changes. Mirrors
+    # the lost-update fix in commit e062313 for tickets and pending
+    # registrations.
+    try:
+        with services.storage.atomic():
+            all_contracts = services.storage.get_renter_contracts()
+            contracts_for_email = all_contracts.get(email, [])
+            fresh_changed = False
+            for contract in contracts_for_email:
+                if not contract.get("id"):
+                    contract["id"] = uuid_lib.uuid4().hex
+                    fresh_changed = True
+            if fresh_changed:
                 all_contracts[email] = contracts_for_email
                 services.storage.save_renter_contracts(all_contracts)
-        except Exception:
-            pass
+    except Exception:
+        pass
+    for contract in contracts_for_email:
+        contract.setdefault("pdf_filename", "")
+        contract["status_class"] = _classify_contract_status(contract)
     return contracts_for_email
 
 
