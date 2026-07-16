@@ -1434,13 +1434,9 @@ class VisitorLastSeenPruneTestCase(unittest.TestCase):
     def test_before_request_reuses_map_when_all_visitors_fresh(self):
         """End-to-end version of the above: drive ``before_request`` past the
         threshold and confirm no reallocation happens when nothing is stale."""
-        from unittest.mock import patch
         from flask import Flask
 
-        from somewheria_app.services.analytics import (
-            AnalyticsTracker,
-            _LAST_SEEN_PRUNE_THRESHOLD,
-        )
+        from somewheria_app.services.analytics import _LAST_SEEN_PRUNE_THRESHOLD
 
         tracker = self._make_tracker(_LAST_SEEN_PRUNE_THRESHOLD + 1)
         original_map = tracker._visitor_last_seen
