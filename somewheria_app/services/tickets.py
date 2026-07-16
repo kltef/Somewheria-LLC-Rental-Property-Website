@@ -328,6 +328,12 @@ class TicketService:
         return None
 
     def set_email_updates(self, ticket_id: str, enabled: bool, actor_email: str) -> dict | None:
+        # Hold the storage lock only across load+modify+save. The change-log
+        # write runs outside the lock so a slow site_changes.log append
+        # (contended by a large properties_cache_updated entry, disk pressure)
+        # can't stall other ticket operations — same pattern as update_ticket
+        # / add_note / add_photo.
+        target: dict | None = None
         with self.storage.atomic():
             tickets = self._load()
             for ticket in tickets:
@@ -336,16 +342,19 @@ class TicketService:
                 ticket["email_updates"] = bool(enabled)
                 ticket["updated_at"] = _now_iso()
                 self._save(tickets)
-                try:
-                    self.notifications.log_site_change(
-                        actor_email or "unknown",
-                        "ticket_email_updates_toggled",
-                        {"ticket_id": ticket_id, "enabled": bool(enabled)},
-                    )
-                except Exception:
-                    pass
-                return ticket
+                target = ticket
+                break
+        if target is None:
             return None
+        try:
+            self.notifications.log_site_change(
+                actor_email or "unknown",
+                "ticket_email_updates_toggled",
+                {"ticket_id": ticket_id, "enabled": bool(enabled)},
+            )
+        except Exception:
+            pass
+        return target
 
     # Send the email when ``email_updates`` is on AND we actually have a
     # reachable submitter address. The NotificationService itself will no-op

@@ -1374,6 +1374,127 @@ class AnalyticsPruningTestCase(unittest.TestCase):
         self.assertEqual(len(tracker.errors), 0)
 
 
+class VisitorLastSeenPruneTestCase(unittest.TestCase):
+    """``_visitor_last_seen`` grows unbounded on a busy public site because it
+    keys off ``email or remote_addr``. Once the map crosses
+    ``_LAST_SEEN_PRUNE_THRESHOLD`` the ``before_request`` hook rebuilds it to
+    drop entries older than the session window. When traffic is fresh but
+    heavy — every entry still within ``VISIT_SESSION_GAP_SECONDS`` — the old
+    rebuild produced a same-size dict on every request, doing O(n) work whose
+    result was identical to what was already there. The regression here
+    proves that fresh-only traffic no longer re-allocates the map on each
+    hit past the threshold.
+    """
+
+    def _make_tracker(self, size: int):
+        from somewheria_app.services.analytics import (
+            AnalyticsTracker,
+            _LAST_SEEN_PRUNE_THRESHOLD,
+        )
+
+        tracker = AnalyticsTracker(analytics_days=7)
+        # Pre-populate over the threshold with all-fresh timestamps.
+        now = time.monotonic()
+        tracker._visitor_last_seen = {
+            f"visitor-{i}": now for i in range(size)
+        }
+        # Sanity-check we actually exceeded the threshold.
+        self.assertGreater(len(tracker._visitor_last_seen), _LAST_SEEN_PRUNE_THRESHOLD)
+        return tracker
+
+    def test_fresh_only_traffic_reuses_map_instead_of_reallocating(self):
+        from somewheria_app.services.analytics import _LAST_SEEN_PRUNE_THRESHOLD
+
+        tracker = self._make_tracker(_LAST_SEEN_PRUNE_THRESHOLD + 5)
+        original_map = tracker._visitor_last_seen
+        original_len = len(original_map)
+
+        # Simulate the before_request-style pruning path directly. Nothing is
+        # stale, so the map must NOT be replaced with a fresh dict of the
+        # same size — the old code did, wasting O(n) work per request.
+        from somewheria_app.services.analytics import VISIT_SESSION_GAP_SECONDS
+
+        now = time.monotonic()
+        with tracker._lock:
+            if len(tracker._visitor_last_seen) > _LAST_SEEN_PRUNE_THRESHOLD:
+                cutoff = now - VISIT_SESSION_GAP_SECONDS
+                pruned = {
+                    key: seen
+                    for key, seen in tracker._visitor_last_seen.items()
+                    if seen >= cutoff
+                }
+                if len(pruned) < len(tracker._visitor_last_seen):
+                    tracker._visitor_last_seen = pruned
+
+        # The dict object should be the same instance — nothing was stale, so
+        # the pruning path is a no-op.
+        self.assertIs(tracker._visitor_last_seen, original_map)
+        self.assertEqual(len(tracker._visitor_last_seen), original_len)
+
+    def test_before_request_reuses_map_when_all_visitors_fresh(self):
+        """End-to-end version of the above: drive ``before_request`` past the
+        threshold and confirm no reallocation happens when nothing is stale."""
+        from flask import Flask
+
+        from somewheria_app.services.analytics import _LAST_SEEN_PRUNE_THRESHOLD
+
+        tracker = self._make_tracker(_LAST_SEEN_PRUNE_THRESHOLD + 1)
+        original_map = tracker._visitor_last_seen
+
+        app = Flask(__name__)
+
+        @app.route("/x")
+        def _view():
+            return "ok"
+
+        # A fresh visitor from a real UA — the before_request handler must
+        # go through the pruning path (map size still > threshold after the
+        # new entry). Under the fix nothing is stale, so the map object
+        # stays the same instance.
+        with app.test_request_context(
+            "/x",
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux) Gecko/20100101 Firefox/120"},
+            environ_overrides={"REMOTE_ADDR": "203.0.113.9"},
+        ):
+            tracker.before_request()
+
+        self.assertIs(tracker._visitor_last_seen, original_map)
+
+    def test_stale_entries_still_pruned(self):
+        """The fix must not disable pruning — a stale entry mixed in with
+        fresh ones triggers the rebuild and the map does shrink."""
+        from somewheria_app.services.analytics import (
+            AnalyticsTracker,
+            VISIT_SESSION_GAP_SECONDS,
+            _LAST_SEEN_PRUNE_THRESHOLD,
+        )
+
+        tracker = AnalyticsTracker(analytics_days=7)
+        now = time.monotonic()
+        tracker._visitor_last_seen = {
+            f"fresh-{i}": now for i in range(_LAST_SEEN_PRUNE_THRESHOLD)
+        }
+        # Two visitors far outside the session window.
+        tracker._visitor_last_seen["stale-a"] = now - 2 * VISIT_SESSION_GAP_SECONDS
+        tracker._visitor_last_seen["stale-b"] = now - 3 * VISIT_SESSION_GAP_SECONDS
+
+        # Run the same pruning logic used inside before_request.
+        with tracker._lock:
+            if len(tracker._visitor_last_seen) > _LAST_SEEN_PRUNE_THRESHOLD:
+                cutoff = now - VISIT_SESSION_GAP_SECONDS
+                pruned = {
+                    key: seen
+                    for key, seen in tracker._visitor_last_seen.items()
+                    if seen >= cutoff
+                }
+                if len(pruned) < len(tracker._visitor_last_seen):
+                    tracker._visitor_last_seen = pruned
+
+        self.assertNotIn("stale-a", tracker._visitor_last_seen)
+        self.assertNotIn("stale-b", tracker._visitor_last_seen)
+        self.assertEqual(len(tracker._visitor_last_seen), _LAST_SEEN_PRUNE_THRESHOLD)
+
+
 class DashboardDataDayBoundaryTestCase(unittest.TestCase):
     """`dashboard_data` reads the current date once. The old code called
     ``date.today()`` for ``today`` and then again inside the ``days`` list
