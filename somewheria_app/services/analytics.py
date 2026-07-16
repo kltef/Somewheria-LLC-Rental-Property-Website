@@ -107,11 +107,18 @@ class AnalyticsTracker:
                 self.site_visits[today] += 1
             self._visitor_last_seen[visitor] = now
             if len(self._visitor_last_seen) > _LAST_SEEN_PRUNE_THRESHOLD:
-                self._visitor_last_seen = {
+                cutoff = now - VISIT_SESSION_GAP_SECONDS
+                pruned = {
                     key: seen
                     for key, seen in self._visitor_last_seen.items()
-                    if now - seen < VISIT_SESSION_GAP_SECONDS
+                    if seen >= cutoff
                 }
+                # Only replace when the pruned map is actually smaller.
+                # Otherwise every request past the threshold re-runs an O(n)
+                # dict rebuild whose result is identical to what we already
+                # have — wasted work when traffic is fresh but heavy.
+                if len(pruned) < len(self._visitor_last_seen):
+                    self._visitor_last_seen = pruned
             self.unique_users[today].add(visitor)
 
     def after_request(self, response):

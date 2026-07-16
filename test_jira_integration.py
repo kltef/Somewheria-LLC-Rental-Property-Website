@@ -159,6 +159,70 @@ class TicketServiceJiraWiringTestCase(unittest.TestCase):
         )
         self.assertIn("id", ticket)
 
+    def test_set_email_updates_flips_flag_and_logs_outside_lock(self):
+        # Regression: set_email_updates used to call log_site_change WHILE
+        # holding storage.atomic(), unlike every other ticket mutation in
+        # this service. If the change-log write blocked (contended lock, slow
+        # disk), all other ticket operations queued behind it. Confirm the
+        # flag is flipped, the site-change entry is emitted, and the log
+        # call happens outside the storage critical section.
+        svc = TicketService(self.config, self.storage, self.notifications, jira=None)
+        created = svc.create_ticket(
+            {"title": "Boiler", "description": "Silent", "email_updates": True},
+            submitter_email="r@example.com",
+        )
+
+        atomic_active = {"held": False}
+
+        class _TrackingAtomic:
+            def __enter__(self_inner):
+                atomic_active["held"] = True
+                return self_inner
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                atomic_active["held"] = False
+                return False
+
+        # Capture whether the storage.atomic() block was still held when
+        # log_site_change fired.
+        log_calls: list[dict] = []
+
+        def _record_log(*args, **kwargs):
+            log_calls.append({"under_lock": atomic_active["held"], "args": args})
+
+        self.notifications.log_site_change.side_effect = _record_log
+        self.storage.atomic.side_effect = _TrackingAtomic
+
+        result = svc.set_email_updates(created["id"], False, "admin@example.com")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["email_updates"], False)
+        # Reload from disk to confirm the flag was actually persisted.
+        stored = json.loads(self.tickets_path.read_text("utf-8"))[0]
+        self.assertEqual(stored["email_updates"], False)
+
+        # One log call, emitted OUTSIDE the storage.atomic() block.
+        self.assertEqual(len(log_calls), 1)
+        self.assertFalse(
+            log_calls[0]["under_lock"],
+            "log_site_change must run outside storage.atomic() so a slow "
+            "change-log append cannot stall other ticket operations",
+        )
+        # Sanity-check the log payload the admin dashboard consumes.
+        self.assertEqual(log_calls[0]["args"][1], "ticket_email_updates_toggled")
+        self.assertEqual(
+            log_calls[0]["args"][2],
+            {"ticket_id": created["id"], "enabled": False},
+        )
+
+    def test_set_email_updates_returns_none_for_unknown_ticket(self):
+        svc = TicketService(self.config, self.storage, self.notifications, jira=None)
+        self.assertIsNone(svc.set_email_updates("missing-id", True, "admin@example.com"))
+        # No change-log entry should be emitted for a no-op miss (create_ticket
+        # emits its own during setUp isolation, so clear the mock first).
+        self.notifications.log_site_change.reset_mock()
+        self.assertIsNone(svc.set_email_updates("still-missing", False, "admin@example.com"))
+        self.notifications.log_site_change.assert_not_called()
+
 
 class JiraWebhookRouteTestCase(unittest.TestCase):
     @classmethod
