@@ -439,6 +439,24 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(property_ids, ["prop-1", "prop-2"])
         response.raise_for_status.assert_called_once()
 
+    def test_fetch_property_ids_dedupes_duplicate_upstream_returns(self):
+        # Belt-and-braces at the upstream boundary: if the ID-listing Lambda
+        # ever returns the same id twice (transient replication, upstream
+        # bug), a plain pass-through would fan out per-property fetches
+        # twice AND leave two copies of the property in the cache — the
+        # ``/for-rent`` page then shows duplicate cards and
+        # ``get_property()`` only ever surfaces the first match. First-seen
+        # order is preserved so tests / logs stay deterministic.
+        response = Mock()
+        response.json.return_value = {
+            "property_ids": ["prop-1", "prop-2", "prop-1", "prop-3", "prop-2"]
+        }
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            property_ids = self.service._fetch_property_ids()
+
+        self.assertEqual(property_ids, ["prop-1", "prop-2", "prop-3"])
+
     def test_fetch_property_ids_raises_upstream_unavailable_on_failure(self):
         # A network/HTTP failure must surface as ``UpstreamUnavailable`` so
         # ``refresh_cache`` can leave the existing cache in place. Returning
