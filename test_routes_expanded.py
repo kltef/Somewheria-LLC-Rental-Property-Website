@@ -2042,5 +2042,92 @@ class LazyFileStatusTestCase(unittest.TestCase):
         self.assertIn("not writable", status["detail"])
 
 
+class PropertyMetaDescriptionTestCase(unittest.TestCase):
+    """Search-snippet builder is capped at Google's ~158-char display width.
+
+    Both the blurb-derived path AND the fact-derived fallback must respect
+    the cap: a listing without a blurb whose name and address are moderately
+    long would otherwise render a 200+ char meta description that gets cut
+    mid-word in search results.
+    """
+
+    def _describe(self, **prop):
+        from somewheria_app.routes.public_routes import (
+            _META_DESCRIPTION_MAX,
+            _property_meta_description,
+        )
+
+        return _property_meta_description(prop), _META_DESCRIPTION_MAX
+
+    def test_short_blurb_passes_through_unchanged(self):
+        desc, _ = self._describe(blurb="Sunlit two-bedroom near the park.")
+        self.assertEqual(desc, "Sunlit two-bedroom near the park.")
+
+    def test_blurb_collapses_internal_whitespace(self):
+        desc, _ = self._describe(blurb="Sunlit  two-bedroom\nnear the park.")
+        self.assertEqual(desc, "Sunlit two-bedroom near the park.")
+
+    def test_blurb_at_cap_is_not_truncated(self):
+        blurb = "x" * 158
+        desc, cap = self._describe(blurb=blurb)
+        self.assertEqual(desc, blurb)
+        self.assertEqual(len(desc), cap)
+
+    def test_long_blurb_is_truncated_with_ellipsis(self):
+        blurb = "x" * 400
+        desc, cap = self._describe(blurb=blurb)
+        self.assertLessEqual(len(desc), cap)
+        self.assertTrue(desc.endswith("…"))
+
+    def test_description_used_when_blurb_missing(self):
+        desc, _ = self._describe(description="Quiet corner unit with parking.")
+        self.assertEqual(desc, "Quiet corner unit with parking.")
+
+    def test_fact_fallback_is_truncated_for_long_name_and_address(self):
+        # Without a blurb, the fact-based fallback used to concatenate the
+        # name, structured facts, address, AND a marketing sentence — a
+        # long-named listing on a long-addressed street would blow past the
+        # ~155-char snippet window Google displays. The cap now applies to
+        # this path too, so search snippets aren't cut mid-word.
+        desc, cap = self._describe(
+            name="Beautifully Renovated Modern Rambler-Style House",
+            bedrooms="4",
+            bathrooms="3",
+            rent="2500",
+            address="12345 Northeast Broadway Street, Metropolitan City, Some State",
+        )
+        self.assertLessEqual(len(desc), cap)
+        self.assertTrue(desc.endswith("…"))
+
+    def test_fact_fallback_trims_trailing_rent_zero(self):
+        # Rent comes back from upstream as a float; the fallback should read
+        # "$1500/mo" not "$1500.0/mo".
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="1",
+            rent=1500.0,
+            address="123 Main St",
+        )
+        self.assertIn("$1500/mo", desc)
+        self.assertNotIn("$1500.0/mo", desc)
+
+    def test_fact_fallback_uses_default_name(self):
+        desc, _ = self._describe(bedrooms="1", bathrooms="1")
+        self.assertTrue(desc.startswith("Rental home"))
+
+    def test_missing_fields_are_omitted(self):
+        # "N/A" placeholders should not appear as literal text in the snippet.
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="N/A",
+            bathrooms="N/A",
+            rent="N/A",
+            address="N/A",
+        )
+        self.assertNotIn("N/A", desc)
+        self.assertNotIn(" in .", desc)
+
+
 if __name__ == "__main__":
     unittest.main()

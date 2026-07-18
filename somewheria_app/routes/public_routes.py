@@ -106,16 +106,29 @@ def for_rent_refresh_json():
     return jsonify(services.properties.serialize_properties(services.properties.get_visible_properties()))
 
 
+# Google typically shows the first ~155-160 characters of a page's meta
+# description in search results and truncates the rest. Cap both meta paths
+# at the same ceiling so search snippets aren't cut mid-word.
+_META_DESCRIPTION_MAX = 158
+_META_DESCRIPTION_TRUNCATE_AT = _META_DESCRIPTION_MAX - 1  # room for the ellipsis
+
+
+def _truncate_meta_description(text: str) -> str:
+    if len(text) <= _META_DESCRIPTION_MAX:
+        return text
+    return text[:_META_DESCRIPTION_TRUNCATE_AT].rstrip() + "…"
+
+
 def _property_meta_description(prop: dict) -> str:
     """A concise, factual search-result summary for one listing.
 
     Prefers the listing's own blurb/description; otherwise builds one from the
-    structured facts. Kept near ~155 chars, the length Google typically shows.
+    structured facts. Both paths are capped at ~158 chars — the length Google
+    typically shows before truncating in search results.
     """
     blurb = (prop.get("blurb") or prop.get("description") or "").strip()
     if blurb:
-        summary = " ".join(blurb.split())
-        return summary[:157].rstrip() + "…" if len(summary) > 158 else summary
+        return _truncate_meta_description(" ".join(blurb.split()))
 
     name = (prop.get("name") or "Rental home").strip()
     bits = []
@@ -136,7 +149,10 @@ def _property_meta_description(prop: dict) -> str:
     address = (prop.get("address") or "").strip()
     lead = f"{name} — " + ", ".join(bits) if bits else name
     tail = f" in {address}." if address and address != "N/A" else "."
-    return f"{lead}{tail} Available to rent from Somewheria, LLC. See photos and details, or request a tour."
+    return _truncate_meta_description(
+        f"{lead}{tail} Available to rent from Somewheria, LLC. "
+        "See photos and details, or request a tour."
+    )
 
 
 def property_details(uuid):
