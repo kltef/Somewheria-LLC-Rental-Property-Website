@@ -761,6 +761,23 @@ def renter_profile():
     return render_template("renter_profile.html", profile=profile, user=user, success=success, title="Edit Profile")
 
 
+def _valid_iso_date(value: str) -> bool:
+    """Return True if ``value`` is a strict YYYY-MM-DD calendar date.
+
+    ``date.fromisoformat`` on 3.11+ accepts other ISO 8601 shapes (with a
+    time component, week dates, ordinal dates); admin contracts store the
+    date-only form, so we enforce that shape explicitly rather than
+    relying on the parser's incidental strictness.
+    """
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_contract_pdf(uploaded_file) -> bytes | None:
     """Read the upload, validate as a PDF (magic bytes + size). Returns bytes
     on success or None when no file was supplied. Raises ValueError on bad
@@ -822,6 +839,20 @@ def admin_contracts():
                 # creates an orphan contract that no real OAuth login can
                 # ever surface for the renter.
                 error = "A valid renter email is required."
+            elif not _valid_iso_date(start_date) or not _valid_iso_date(end_date):
+                # Reject garbage date strings at the boundary. The <input
+                # type="date"> field normalizes to YYYY-MM-DD, so a bad value
+                # here is a hand-crafted POST or a paste error — either way
+                # ``_classify_contract_status`` would silently swallow the
+                # parse failure downstream and the admin dashboard would
+                # render the literal junk string as the contract's term.
+                error = "Start and end dates must be YYYY-MM-DD."
+            elif datetime.date.fromisoformat(end_date) < datetime.date.fromisoformat(start_date):
+                # A contract whose end precedes its start is nonsense and
+                # would classify as "ended" the moment it's saved. Rejecting
+                # here catches the most likely typo (year swap, month swap)
+                # while the admin still has the form open to correct it.
+                error = "End date must not be before start date."
             else:
                 contract_id = uuid_lib.uuid4().hex
                 pdf_filename = ""

@@ -1042,6 +1042,82 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Contract added for renter@example.com.", response.data)
         save_contracts_mock.assert_called_once()
 
+    def test_admin_contracts_add_rejects_malformed_dates(self):
+        # A hand-crafted POST (or a paste-error) with a non-ISO date must be
+        # rejected at the boundary so garbage never lands in
+        # renter_contracts storage. Downstream _classify_contract_status
+        # silently swallows parse failures, so without this the admin sees
+        # the literal junk string rendered as the contract's term.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-13-40",  # invalid month/day
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"YYYY-MM-DD", response.data)
+        save_contracts_mock.assert_not_called()
+
+    def test_admin_contracts_add_rejects_end_before_start(self):
+        # Contracts whose end precedes their start are nonsense and would
+        # classify as "ended" the moment they're saved. The most common
+        # cause is a year/month swap the admin should be told to fix.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-12-31",
+                    "end_date": "2030-01-01",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"End date must not be before start date.", response.data)
+        save_contracts_mock.assert_not_called()
+
+    def test_admin_contracts_add_accepts_same_start_and_end(self):
+        # A one-day contract is unusual but valid; end >= start (not strict >)
+        # is the correct predicate.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-06-15",
+                    "end_date": "2030-06-15",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract added for renter@example.com.", response.data)
+        save_contracts_mock.assert_called_once()
+
     def test_admin_contracts_delete_rejects_invalid_index(self):
         self.login_as("admin")
         with patch.object(
