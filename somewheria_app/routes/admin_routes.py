@@ -310,10 +310,15 @@ def admin_status():
     def route_ready(*endpoints):
         return all(endpoint in registered_routes for endpoint in endpoints)
 
+    # Exclude "revoked" tombstones from the count: they're deleted users
+    # kept only so an .env-based role can't silently restore access on the
+    # next login. Counting them here would show a growing "known users"
+    # total that includes people with no access.
+    active_user_count = sum(1 for role in user_roles.values() if role != "revoked")
     metrics = {
         "properties_cached": property_count,
         "pending_registrations": len(pending_registrations),
-        "known_users": len(user_roles),
+        "known_users": active_user_count,
         "cache_refresh_interval": f"{config.cache_refresh_interval}s",
     }
 
@@ -540,12 +545,20 @@ def admin_dashboard_combined():
     ticket_summary = services.tickets.summary()
     ticket_status_counts = services.tickets.status_counts()
     listing_activity = services.analytics.recent_listing_activity(months=12)
+    # Skip "revoked" tombstones: they represent deleted users whose access
+    # is gone. Left in the list, the template's role tally counts them as
+    # renters (its else branch is renter) and inflates the total user count.
+    active_user_roles = [
+        (email, role)
+        for email, role in services.storage.get_user_roles().items()
+        if role != "revoked"
+    ]
     return render_template(
         "admin_dashboard.html",
         user=get_current_user(),
         metrics=metrics,
         chart_data=chart_data,
-        users=list(services.storage.get_user_roles().items()),
+        users=active_user_roles,
         ticket_summary=ticket_summary,
         ticket_status_counts=ticket_status_counts,
         listing_activity=listing_activity,

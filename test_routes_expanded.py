@@ -912,6 +912,68 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
 
+    def test_admin_dashboard_excludes_revoked_users_from_summary(self):
+        # A "revoked" tombstone is a deleted user kept only so an env role
+        # can't silently restore access on the next login. Passing it into
+        # the dashboard "users" list would count it as a renter (the
+        # template's role tally is admin/high_admin/else, so any other role
+        # — including "revoked" — falls into the renter bucket) and inflate
+        # the total user count. The route must strip revoked entries.
+        self.login_as("high_admin", email="owner@example.com")
+        stored_roles = {
+            "active_renter@example.com": "renter",
+            "deleted@example.com": "revoked",
+        }
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value=stored_roles,
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = render_mock.call_args.kwargs
+        users = kwargs["users"]
+        self.assertEqual(users, [("active_renter@example.com", "renter")])
+        for _, role in users:
+            self.assertNotEqual(role, "revoked")
+
+    def test_admin_status_excludes_revoked_users_from_known_users_count(self):
+        # Mirrors the dashboard fix: /admin/status's "known_users" metric
+        # is the size of the persistent user_roles map, but revoked
+        # tombstones represent deleted users and must not be counted.
+        self.login_as("high_admin", email="owner@example.com")
+        stored_roles = {
+            "one@example.com": "renter",
+            "two@example.com": "admin",
+            "revoked1@example.com": "revoked",
+            "revoked2@example.com": "revoked",
+        }
+        with patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value=stored_roles,
+        ), patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[],
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/status")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = render_mock.call_args.kwargs
+        self.assertEqual(kwargs["metrics"]["known_users"], 2)
+
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(
