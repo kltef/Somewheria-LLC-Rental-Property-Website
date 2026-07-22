@@ -369,6 +369,60 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "That date is already booked.")
         send_email_mock.assert_not_called()
 
+    def test_schedule_appointment_uses_cached_property_name_when_present(self):
+        # Cached properties should not require a live upstream fetch. Skipping
+        # the outbound call saves an AWS Lambda round-trip per appointment
+        # request and lets viewings still be booked during a brief upstream
+        # outage for any listing the site has recently rendered.
+        self.seed_property(property_id="prop-1", name="Cached House")
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "fetch_live_property_name"
+        ) as live_fetch_mock, patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"success": True})
+        live_fetch_mock.assert_not_called()
+        send_email_mock.assert_called_once()
+        self.assertIn("Cached House", send_email_mock.call_args[0][1])
+
+    def test_schedule_appointment_falls_back_to_live_fetch_when_uncached(self):
+        # Cold-cache / direct-link case: the id isn't in the local cache, so
+        # the route should still verify the property exists upstream instead
+        # of silently 404ing before the live check.
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties,
+            "fetch_live_property_name",
+            return_value="Live House",
+        ) as live_fetch_mock, patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/property/prop-uncached/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        live_fetch_mock.assert_called_once_with("prop-uncached")
+        self.assertIn("Live House", send_email_mock.call_args[0][1])
+
     def test_about_page_loads(self):
         response = self.client.get("/about")
 

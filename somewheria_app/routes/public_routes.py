@@ -225,7 +225,16 @@ def schedule_appointment(uuid):
             error=f"Date must be within {MAX_APPOINTMENT_DAYS_AHEAD} days.",
         ), 400
 
-    property_name = services.properties.fetch_live_property_name(uuid)
+    # Cache-first: /for-rent refreshes on every hit and the visitor almost
+    # certainly landed here from a property page (which populates the cache),
+    # so the id is nearly always present. Skipping the upstream API call on
+    # the happy path saves an AWS Lambda round-trip per appointment request
+    # and lets viewings still be booked during a brief upstream outage for
+    # any listing already in the cache. Fall through to the live fetch only
+    # when the id isn't cached (cold start, direct-link visitor, etc.).
+    property_name = services.properties.get_property_name(uuid)
+    if not property_name:
+        property_name = services.properties.fetch_live_property_name(uuid)
     if not property_name:
         return jsonify(success=False, error="Property not found."), 404
 
