@@ -94,7 +94,14 @@ class AnalyticsTracker:
             return
         today = datetime.date.today().isoformat()
         user = session.get("user") or {}
-        visitor = user.get("email") or request.remote_addr or "anonymous"
+        # Case-normalize the email portion so a mixed-case login
+        # ("Sam@example.com") and its lowercased twin from record_login
+        # ("sam@example.com") collapse to the same key. Without this, the
+        # same visitor gets counted twice in unique_users on days they hit
+        # the site both anonymously (session cookie carries the case Google
+        # returned) and via record_login (which already lowercases).
+        email = (user.get("email") or "").strip().lower()
+        visitor = email or request.remote_addr or "anonymous"
         now = time.monotonic()
         with self._lock:
             self._prune_old_buckets(today)
