@@ -244,15 +244,23 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
         # canonical free-form ``status`` field admins set in the form.
         contract["status_class"] = _classify_contract_status(contract)
     if needs_save:
-        # Hold the storage lock across load+modify+save so a concurrent
-        # admin add/delete on the same renter can't race the backfill and
-        # silently lose one side's write. Mirrors the lost-update fix in
-        # commit e062313 for tickets and pending registrations.
+        # Re-read fresh state under atomic() and apply the ID backfill there.
+        # ``contracts_for_email`` is a snapshot taken *before* we acquired the
+        # lock; if an admin added or deleted a contract for this renter in
+        # that window, persisting our stale list would silently drop their
+        # write. Backfilling against the fresh list keeps both sides intact.
         try:
             with services.storage.atomic():
                 all_contracts = services.storage.get_renter_contracts()
-                all_contracts[email] = contracts_for_email
-                services.storage.save_renter_contracts(all_contracts)
+                fresh_list = all_contracts.get(email, [])
+                fresh_needs_save = False
+                for contract in fresh_list:
+                    if not contract.get("id"):
+                        contract["id"] = uuid_lib.uuid4().hex
+                        fresh_needs_save = True
+                if fresh_needs_save:
+                    all_contracts[email] = fresh_list
+                    services.storage.save_renter_contracts(all_contracts)
         except Exception:
             pass
     return contracts_for_email

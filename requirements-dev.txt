@@ -1,2 +1,7 @@
 -r requirements.txt
-ruff>=0.6.0
+# Cap below 0.16 to avoid the new default rules (SIM117, DTZ011, S110, BLE001,
+# I001, DTZ007, ...) auto-enabled in 0.16.0 — those flag 153 pre-existing
+# patterns across the whole tree that main was never audited for. Bump this
+# cap only after a dedicated lint-cleanup pass; a plain version bump would
+# turn the lint job red on main.
+ruff>=0.6.0,<0.16.0
