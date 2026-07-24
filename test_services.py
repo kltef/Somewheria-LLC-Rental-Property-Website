@@ -472,6 +472,75 @@ class FileStorageServiceTestCase(unittest.TestCase):
         )
 
 
+class BackfillContractIdsRaceTestCase(unittest.TestCase):
+    """``_backfill_contract_ids`` used to overwrite fresh contract state.
+
+    The route helper fetches the renter's contracts BEFORE acquiring the
+    storage lock, mutates the local list to stamp missing IDs, then inside
+    ``atomic()`` calls ``all_contracts[email] = contracts_for_email``.
+    If an admin added or deleted a contract for the same renter in the
+    window between the read and the atomic block, that concurrent write
+    was silently discarded.
+
+    The fix re-fetches the fresh list inside ``atomic()`` and applies the
+    ID backfill there — the caller still gets its own (stale) list back
+    for display, but the persisted state preserves both sides of the race.
+    """
+
+    def _make_services(self, tmpdir):
+        from somewheria_app.services.storage import FileStorageService
+
+        config = SimpleNamespace(
+            registration_file=Path(tmpdir) / "registrations.json",
+            user_roles_file=Path(tmpdir) / "roles.json",
+            renter_profile_file=Path(tmpdir) / "profiles.json",
+            contracts_file=Path(tmpdir) / "contracts.json",
+            lead_capture_file=Path(tmpdir) / "lead_captures.json",
+        )
+        storage = FileStorageService(config)
+        return SimpleNamespace(storage=storage)
+
+    def test_backfill_does_not_clobber_concurrent_addition(self):
+        from somewheria_app.routes.admin_routes import _backfill_contract_ids
+
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        services = self._make_services(tmpdir.name)
+        email = "renter@example.com"
+
+        # Seed the file with a legacy contract that has no id — this is what
+        # triggers the backfill code path.
+        services.storage.save_renter_contracts(
+            {email: [{"property_name": "Old House", "start_date": "2024-01-01"}]}
+        )
+
+        # The caller's snapshot (taken before atomic()) — one legacy contract,
+        # missing its id.
+        stale_snapshot = services.storage.get_renter_contracts().get(email, [])
+
+        # Simulate a concurrent admin add landing between the caller's read
+        # and the backfill's atomic block: a brand-new contract with a real
+        # id lands in storage.
+        services.storage.save_renter_contracts(
+            {
+                email: [
+                    {"property_name": "Old House", "start_date": "2024-01-01"},
+                    {"id": "new-c", "property_name": "New House"},
+                ]
+            }
+        )
+
+        _backfill_contract_ids(services, stale_snapshot, email)
+
+        stored = services.storage.get_renter_contracts().get(email, [])
+        # Concurrently-added contract must survive the backfill.
+        stored_names = [c.get("property_name") for c in stored]
+        self.assertIn("New House", stored_names)
+        # Legacy contract now has an id assigned by the backfill.
+        legacy = next(c for c in stored if c.get("property_name") == "Old House")
+        self.assertTrue(legacy.get("id"))
+
+
 class AppointmentServiceTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
