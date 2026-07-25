@@ -912,6 +912,27 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
 
+    def test_admin_dashboard_rejects_malformed_email_on_update(self):
+        # Defense in depth for the ``update`` action: without this guard, a
+        # hand-crafted POST with a garbage email like "not-an-email" would
+        # silently write a role entry that no real OAuth login can match,
+        # polluting user_roles storage. Parity with the ``add`` action above
+        # and with ``admin_users`` (test_admin_users_rejects_malformed_email_on_role_assignment).
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.analytics, "dashboard_data", return_value=({"visits": 10}, {"labels": []})), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.storage, "set_user_role") as set_user_role_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "update", "email": "not-an-email", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
+
     def test_admin_dashboard_excludes_revoked_users_from_summary(self):
         # A "revoked" tombstone is a deleted user kept only so an env role
         # can't silently restore access on the next login. Passing it into

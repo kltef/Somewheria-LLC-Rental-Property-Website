@@ -505,7 +505,15 @@ def admin_dashboard_combined():
         elif action == "update":
             new_role = request.form.get("role", "").strip()
             target_role = services.auth.get_user_role(email)
-            if new_role not in ALLOWED_ROLES:
+            # Reject malformed emails at the admin boundary too, mirroring
+            # the ``add`` action below and ``admin_users``. Without this, a
+            # hand-crafted POST (or paste-error) can write a role for a
+            # garbage key like ``"foo"`` that no real OAuth login can ever
+            # match — it just pollutes user_roles storage and shows up in
+            # the roster with no way to reach it.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
             elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
