@@ -586,7 +586,7 @@ class PropertyService:
             return None
         try:
             details_response = requests.get(
-                f"{self.config.api_base_url}/properties/{property_id}/details", timeout=10
+                f"{self.config.api_base_url}/properties/{property_id}/details", timeout=20
             )
             # Without raise_for_status() a 4xx/5xx JSON error body would be
             # silently passed through as a property record.
@@ -655,7 +655,7 @@ class PropertyService:
 
     def _safe_json(self, url: str, default, *, expected_type: type | tuple[type, ...] | None = None):
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=20)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -1153,7 +1153,7 @@ class PropertyService:
         try:
             response = requests.get(
                 f"{self.config.api_base_url}/properties/{property_id}/details",
-                timeout=10,
+                timeout=20,
             )
             # Without raise_for_status() a 404/5xx JSON error body would be
             # treated as a real property and the caller would proceed as if
