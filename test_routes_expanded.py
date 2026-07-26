@@ -694,7 +694,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         with patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
             self.services.storage,
             "get_user_roles",
-            return_value={},
+            return_value={"renter@example.com": "renter"},
         ), patch.object(self.services.notifications, "log_site_change") as log_mock:
             response = self.client.post(
                 "/admin/users",
@@ -707,6 +707,45 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             "admin@example.com",
             "user_deleted",
             {"email": "renter@example.com"},
+        )
+
+    def test_admin_users_delete_env_configured_user_writes_audit_log(self):
+        # An env-configured user (in ADMIN_USERS / AUTHORIZED_USERS but with
+        # no user_roles.json entry) still has to be deactivatable through the
+        # admin UI: the tombstone delete_user_role writes IS what blocks the
+        # env fallback from restoring their role on the next login. Before
+        # this fix the route keyed off delete_user_role's boolean, which
+        # reports "no previous FILE entry" (False) whenever the user came
+        # from env — so the admin saw "User not found.", the audit log was
+        # skipped, and yet the user WAS actually deactivated. Pin the
+        # corrected behavior: Deactivated message + user_deleted audit
+        # entry, matching a file-only delete.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(
+            self.services.storage,
+            "delete_user_role",
+            return_value=False,  # simulates "no previous file entry"
+        ) as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(
+            self.services.auth,
+            "get_user_role",
+            return_value="renter",  # env-configured role
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "envonly@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Deactivated", response.data)
+        delete_mock.assert_called_once_with("envonly@example.com")
+        log_mock.assert_called_once_with(
+            "admin@example.com",
+            "user_deleted",
+            {"email": "envonly@example.com"},
         )
 
     def test_admin_users_delete_missing_user_does_not_log(self):
@@ -727,6 +766,28 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         log_mock.assert_not_called()
+
+    def test_admin_users_delete_missing_user_skips_storage_write(self):
+        # delete_user_role writes a tombstone unconditionally so an env-based
+        # role can't silently restore access on the next login. Handy for a
+        # real user; harmful for a typo — a random email typed into the form
+        # otherwise pollutes user_roles storage with a permanent "revoked"
+        # entry for someone who was never a user in the first place. The
+        # route must skip the call when target_role == "guest".
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "delete_user_role") as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ):
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "ghost@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"User not found.", response.data)
+        delete_mock.assert_not_called()
 
     def test_admin_users_role_change_rejected_for_peer_does_not_log(self):
         # A standard admin attempting to assign another admin role must be
@@ -911,6 +972,76 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
+
+    def test_admin_dashboard_delete_env_configured_user_writes_audit_log(self):
+        # Mirror of test_admin_users_delete_env_configured_user_writes_audit_log
+        # for the combined admin dashboard's delete action. An env-only user
+        # (not in user_roles.json but resolved via the ADMIN_USERS /
+        # AUTHORIZED_USERS env vars) has to be deactivatable through this
+        # form too: the tombstone delete_user_role writes is what blocks the
+        # env fallback from restoring their role. Before this fix the route
+        # keyed off delete_user_role's boolean, which is False for env-only
+        # users because there's no prior FILE entry — so the admin saw
+        # "User not found.", the audit log was skipped, and yet the user
+        # WAS actually deactivated.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 10}, {"labels": []}),
+        ), patch.object(
+            self.services.storage,
+            "delete_user_role",
+            return_value=False,
+        ) as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(
+            self.services.auth,
+            "get_user_role",
+            return_value="admin",  # env-configured role
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "delete", "email": "envonly@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Deactivated", response.data)
+        delete_mock.assert_called_once_with("envonly@example.com")
+        log_mock.assert_called_once_with(
+            "owner@example.com",
+            "user_deleted",
+            {"email": "envonly@example.com"},
+        )
+
+    def test_admin_dashboard_delete_missing_user_skips_storage_write(self):
+        # Mirror of test_admin_users_delete_missing_user_skips_storage_write.
+        # delete_user_role writes a tombstone unconditionally; the route must
+        # skip it entirely for a random typo so we don't accumulate permanent
+        # "revoked" entries in user_roles for emails that were never users.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 10}, {"labels": []}),
+        ), patch.object(
+            self.services.storage,
+            "delete_user_role",
+        ) as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ):
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "delete", "email": "ghost@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"User not found.", response.data)
+        delete_mock.assert_not_called()
 
     def test_admin_dashboard_rejects_malformed_email_on_update(self):
         # Defense in depth for the ``update`` action: without this guard, a

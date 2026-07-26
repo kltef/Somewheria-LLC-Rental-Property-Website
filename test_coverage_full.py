@@ -1675,11 +1675,15 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
 
     def test_admin_dashboard_handles_branchy_post_paths(self):
         self.login_as("high_admin", email="owner@example.com")
+        # user@example.com is seeded with a real role so the delete's target
+        # existence check (target_role != "guest") passes; missing@example.com
+        # is intentionally absent so the same check rejects that delete before
+        # storage is touched.
         with patch.object(self.services.analytics, "dashboard_data", return_value=({}, {})), patch.object(
             self.services.storage,
             "get_user_roles",
-            return_value={"existing@example.com": "admin"},
-        ), patch.object(self.services.storage, "delete_user_role", side_effect=[True, False]), patch.object(
+            return_value={"existing@example.com": "admin", "user@example.com": "renter"},
+        ), patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
             self.services.storage,
             "set_user_role",
         ) as set_role_mock, patch.object(self.services.notifications, "log_site_change") as change_mock:
@@ -1732,10 +1736,12 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
 
     def test_admin_users_delete_success_and_invalid_role(self):
         self.login_as("admin")
+        # user@example.com is seeded so the delete's target existence check
+        # (target_role != "guest") passes and reaches storage.
         with patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
             self.services.storage,
             "get_user_roles",
-            side_effect=[{}, {}, {}],
+            return_value={"user@example.com": "renter"},
         ):
             delete_response = self.client.post(
                 "/admin/users",
