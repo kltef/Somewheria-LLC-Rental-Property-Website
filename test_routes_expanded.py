@@ -2287,6 +2287,48 @@ class PropertyMetaDescriptionTestCase(unittest.TestCase):
         self.assertNotIn("N/A", desc)
         self.assertNotIn(" in .", desc)
 
+    def test_whitespace_only_blurb_falls_back_to_description(self):
+        # A whitespace-only ``blurb`` is truthy, so the previous
+        # ``prop.get("blurb") or prop.get("description")`` short-circuited on
+        # it and never consulted a real ``description`` — the snippet ended up
+        # dropping into the generic fact fallback and silently discarded the
+        # only human-written copy on the listing. Prefer the first
+        # AFTER-STRIP candidate so real content wins over blank input.
+        desc, _ = self._describe(
+            blurb="   \n\t  ",
+            description="Real description of the home.",
+        )
+        self.assertEqual(desc, "Real description of the home.")
+
+    def test_whitespace_only_name_uses_default_in_fact_fallback(self):
+        # A whitespace-only ``name`` used to strip to "" AFTER the ``or
+        # "Rental home"`` fallback ran, so the snippet came back as the
+        # visibly broken " — 3 bed, 2 bath, $1500/mo in 123 Main St. …"
+        # (leading space, no listing name). The default must apply after
+        # strip so any blank shape lands on the fallback.
+        desc, _ = self._describe(
+            name="   ",
+            bedrooms="3",
+            bathrooms="2",
+            rent="1500",
+            address="123 Main St",
+        )
+        self.assertTrue(desc.startswith("Rental home"))
+        self.assertNotIn(" — 3 bed", desc[:5])
+
+    def test_whitespace_only_blurb_and_description_uses_fact_fallback(self):
+        # Both fields whitespace-only should behave the same as both fields
+        # missing — fall through to the fact-based snippet rather than
+        # returning an empty string.
+        desc, _ = self._describe(
+            blurb="   ",
+            description="\n\t  ",
+            name="Maple House",
+            bedrooms="2",
+        )
+        self.assertTrue(desc.startswith("Maple House"))
+        self.assertIn("2 bed", desc)
+
 
 if __name__ == "__main__":
     unittest.main()

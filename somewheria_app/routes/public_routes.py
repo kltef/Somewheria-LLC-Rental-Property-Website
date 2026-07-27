@@ -126,11 +126,21 @@ def _property_meta_description(prop: dict) -> str:
     structured facts. Both paths are capped at ~158 chars — the length Google
     typically shows before truncating in search results.
     """
-    blurb = (prop.get("blurb") or prop.get("description") or "").strip()
+    # Strip each candidate before choosing so a whitespace-only ``blurb``
+    # doesn't shadow a real ``description``: the previous ``blurb or
+    # description`` short-circuited on a truthy "   " and then ``.strip()``
+    # collapsed it to "", losing the description entirely and falling all
+    # the way through to the generic fact fallback.
+    blurb = (prop.get("blurb") or "").strip() or (prop.get("description") or "").strip()
     if blurb:
         return _truncate_meta_description(" ".join(blurb.split()))
 
-    name = (prop.get("name") or "Rental home").strip()
+    # ``or "Rental home"`` after ``.strip()`` for the same reason: a
+    # whitespace-only ``name`` is truthy pre-strip, so
+    # ``(prop.get("name") or "Rental home").strip()`` returned "" and the
+    # snippet rendered a leading " — 3 bed, 2 bath, …" with no listing
+    # name at all.
+    name = (prop.get("name") or "").strip() or "Rental home"
     bits = []
     beds, baths = prop.get("bedrooms"), prop.get("bathrooms")
     if beds not in (None, "", "N/A"):
