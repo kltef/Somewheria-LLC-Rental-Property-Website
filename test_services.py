@@ -569,6 +569,32 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
         self.assertEqual(loaded["prop-2"], {"2030-05-01"})
 
+    def test_load_does_not_emit_info_for_routine_reads(self):
+        """/property/<uuid> calls load() on every page view; routine reads
+        must stay at DEBUG so a busy public site doesn't flood the operator's
+        journal with per-request bookkeeping lines."""
+        with patch.object(self.service.logger, "info") as info_mock:
+            self.service.load()
+        info_mock.assert_not_called()
+
+    def test_save_does_not_emit_info_for_routine_writes(self):
+        """Every appointment booking triggers save(); those routine writes
+        should not surface at INFO. Only errors need operator attention —
+        matches how FileStorageService logs storage traffic."""
+        with patch.object(self.service.logger, "info") as info_mock:
+            self.service.save({"prop-1": {"2030-05-01"}})
+        info_mock.assert_not_called()
+
+    def test_save_skips_the_redundant_post_write_existence_probe(self):
+        """After os.replace() returns, the file exists — probing it again
+        just emitted a duplicate diagnostic line per booking. print_check_file
+        should only be called from the startup health check, not the write
+        path, so a repeated save() cannot spam the log with 'Appointments
+        saved: ... (exists)' rows."""
+        with patch.object(self.service, "print_check_file") as probe_mock:
+            self.service.save({"prop-1": {"2030-05-01"}})
+        probe_mock.assert_not_called()
+
 
 class PropertyServiceTestCase(unittest.TestCase):
     def setUp(self):

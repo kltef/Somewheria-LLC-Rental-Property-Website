@@ -22,10 +22,17 @@ class AppointmentService:
 
     def load(self) -> dict[str, set[str]]:
         appointments: dict[str, set[str]] = {}
-        abs_path = self.config.property_appointments_file.resolve()
-        self.logger.info("Loading appointments from %s", abs_path)
+        # ``/property/<uuid>`` calls load() on every page view, so a routine
+        # read must not spam INFO — the operator's terminal / systemd journal
+        # would fill with per-request "Loading appointments" lines. DEBUG
+        # keeps the trace available when it's actually being investigated
+        # without drowning production output.
+        self.logger.debug("Loading appointments from %s", self.config.property_appointments_file)
         if not self.config.property_appointments_file.exists():
-            self.logger.info("Appointments file does not exist yet: %s", abs_path)
+            self.logger.debug(
+                "Appointments file does not exist yet: %s",
+                self.config.property_appointments_file,
+            )
             return appointments
         with self._lock:
             with self.config.property_appointments_file.open("r", encoding="utf-8") as handle:
@@ -45,8 +52,10 @@ class AppointmentService:
         # then os.replace() over the destination. A crash mid-write leaves the
         # original file intact instead of a half-written, truncated one.
         path = self.config.property_appointments_file
-        abs_path = path.resolve()
-        self.logger.info("Saving %s appointment sets to %s", len(appointments), abs_path)
+        # Booking is a per-visitor operation and every call ends up here.
+        # DEBUG for the routine "wrote N sets" trace matches how the rest of
+        # the storage layer logs (only errors surface at INFO/WARNING).
+        self.logger.debug("Saving %s appointment sets to %s", len(appointments), path)
         with self._lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
@@ -64,7 +73,10 @@ class AppointmentService:
                 except OSError:
                     pass
                 raise
-        self.print_check_file(self.config.property_appointments_file, "Appointments saved")
+        # No post-write existence probe: if os.replace() didn't raise, the
+        # file is present. print_check_file() here just emitted another INFO
+        # line per booking with no diagnostic value beyond the startup health
+        # check that already runs from website_app.py.
 
     def book(self, property_id: str, iso_date: str) -> bool:
         # Returns True when the booking was newly recorded, False when the
