@@ -491,17 +491,29 @@ def admin_dashboard_combined():
             error = "You cannot modify your own account here."
         elif action == "delete":
             target_role = services.auth.get_user_role(email)
-            if not _can_act_on(actor_role, target_role):
+            # A "guest" target has no role in file OR env — there's nothing to
+            # revoke. Short-circuit before touching storage so a typo email
+            # doesn't leave a permanent ``{email: "revoked"}`` tombstone
+            # cluttering user_roles.json (the previous flow always wrote the
+            # tombstone and then reported "User not found").
+            if target_role == "guest":
+                error = "User not found."
+            elif not _can_act_on(actor_role, target_role):
                 error = "You cannot modify a user at or above your own role."
-            elif services.storage.delete_user_role(email):
+            else:
+                # Always emit the tombstone: for an env-configured admin with
+                # no file entry, ``delete_user_role`` returns False (nothing
+                # was previously stored), but the tombstone it writes is
+                # exactly what stops the .env fallback from restoring access
+                # on the next login. Use ``target_role`` — not the return
+                # value — to decide whether the delete was meaningful.
+                services.storage.delete_user_role(email)
                 success = (
                     f"Deactivated {email} — their access is revoked, but their "
                     "contracts, profile, and tickets are kept. Re-add the email "
                     "to restore access."
                 )
                 services.notifications.log_site_change(actor_email, "user_deleted", {"email": email})
-            else:
-                error = "User not found."
         elif action == "update":
             new_role = request.form.get("role", "").strip()
             target_role = services.auth.get_user_role(email)
@@ -695,9 +707,21 @@ def admin_users():
         elif email == actor_email:
             error = "You cannot modify your own account here."
         elif action == "delete":
-            if not _can_act_on(actor_role, target_role):
+            # Same short-circuit as /admin/dashboard: a "guest" target has
+            # no role anywhere, so writing a tombstone would only pollute
+            # user_roles storage with a permanent entry for an address that
+            # no one can ever log in as. Skip the storage call and report
+            # the miss.
+            if target_role == "guest":
+                error = "User not found."
+            elif not _can_act_on(actor_role, target_role):
                 error = "You cannot modify a user at or above your own role."
-            elif services.storage.delete_user_role(email):
+            else:
+                # Always issue the tombstone: for an env-only admin
+                # ``delete_user_role`` returns False (nothing was previously
+                # stored), but the tombstone it writes is exactly what stops
+                # the .env fallback from restoring access on the next login.
+                services.storage.delete_user_role(email)
                 success = (
                     f"Deactivated {email} — their access is revoked, but their "
                     "contracts, profile, and tickets are kept. Re-add the email "
@@ -711,8 +735,6 @@ def admin_users():
                 services.notifications.log_site_change(
                     actor_email, "user_deleted", {"email": email}
                 )
-            else:
-                error = "User not found."
         elif new_role in ALLOWED_ROLES:
             # Defense in depth: reject malformed emails before they touch
             # user_roles storage. Delete is intentionally exempt so an admin

@@ -694,7 +694,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         with patch.object(self.services.storage, "delete_user_role", return_value=True), patch.object(
             self.services.storage,
             "get_user_roles",
-            return_value={},
+            return_value={"renter@example.com": "renter"},
         ), patch.object(self.services.notifications, "log_site_change") as log_mock:
             response = self.client.post(
                 "/admin/users",
@@ -708,6 +708,59 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             "user_deleted",
             {"email": "renter@example.com"},
         )
+
+    def test_admin_users_delete_env_only_admin_reports_success(self):
+        # An admin configured purely through the ADMIN_USERS env var — no file
+        # entry yet — used to hit ``delete_user_role``, get False back (nothing
+        # to remove), and the route showed "User not found." even though the
+        # tombstone WAS written and the user could no longer log in. Route now
+        # uses the effective role (via auth.get_user_role) to decide success,
+        # so the UX matches what the storage actually did.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.storage, "delete_user_role", return_value=False) as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(
+            self.services.auth,
+            "get_user_role",
+            return_value="admin",
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "envadmin@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Deactivated", response.data)
+        delete_mock.assert_called_once_with("envadmin@example.com")
+        log_mock.assert_called_once_with(
+            "owner@example.com",
+            "user_deleted",
+            {"email": "envadmin@example.com"},
+        )
+
+    def test_admin_users_delete_unknown_email_does_not_touch_storage(self):
+        # A delete for an address with no role in the file OR the env used to
+        # write a permanent {email: "revoked"} tombstone to user_roles storage
+        # anyway — a slow leak where every typo permanently bloated the file.
+        # Route now short-circuits on target_role == "guest" so nothing lands
+        # in storage.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(self.services.storage, "delete_user_role") as delete_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "typo@example.com", "action": "delete"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"User not found.", response.data)
+        delete_mock.assert_not_called()
+        log_mock.assert_not_called()
 
     def test_admin_users_delete_missing_user_does_not_log(self):
         # A delete that hits a non-existent email leaves storage untouched, so
