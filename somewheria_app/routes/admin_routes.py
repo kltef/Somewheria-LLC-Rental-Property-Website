@@ -240,9 +240,6 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
             contract["id"] = uuid_lib.uuid4().hex
             needs_save = True
         contract.setdefault("pdf_filename", "")
-        # Annotate a normalized status for templates without mutating the
-        # canonical free-form ``status`` field admins set in the form.
-        contract["status_class"] = _classify_contract_status(contract)
     if needs_save:
         # Hold the storage lock across load+modify+save so a concurrent
         # admin add/delete on the same renter can't race the backfill and
@@ -255,6 +252,13 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
                 services.storage.save_renter_contracts(all_contracts)
         except Exception:
             pass
+    # Compute the display class AFTER the save so it never lands on disk.
+    # It's a derived value that depends on today's date — persisting it lets
+    # a "pending" contract keep rendering as pending long after its
+    # start_date has passed, since ``contract_detail`` previously used
+    # ``setdefault`` and would not overwrite a stored stale value.
+    for contract in contracts_for_email:
+        contract["status_class"] = _classify_contract_status(contract)
     return contracts_for_email
 
 
@@ -997,7 +1001,10 @@ def contract_detail(contract_id: str):
         contract, _ = _find_contract_for_email(services, email, contract_id)
     if not contract:
         return render_template("404.html", title="Contract Not Found"), 404
-    contract.setdefault("status_class", _classify_contract_status(contract))
+    # Always recompute — the JSON on disk may carry a stale ``status_class``
+    # persisted by an older backfill, and ``setdefault`` would keep the
+    # stale value instead of refreshing it against today's date.
+    contract["status_class"] = _classify_contract_status(contract)
     return render_template(
         "contract_detail.html",
         contract=contract,
