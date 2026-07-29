@@ -227,6 +227,19 @@ class FileStorageServiceTestCase(unittest.TestCase):
         self.assertFalse(result)
         save_json_mock.assert_not_called()
 
+    def test_add_pending_registration_ignores_missing_email(self):
+        # Behaviour parity with ``SqlStorageService`` (see
+        # ``test_add_pending_registration_ignores_missing_email`` in
+        # test_sql_storage.py): entries missing an email are rejected
+        # instead of piling up anonymous rows that no admin can approve.
+        with patch.object(
+            self.service, "get_pending_registrations", return_value=[]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertFalse(self.service.add_pending_registration({"name": "No Email"}))
+            self.assertFalse(self.service.add_pending_registration({"email": "   "}))
+            self.assertFalse(self.service.add_pending_registration({"email": None}))
+        save_json_mock.assert_not_called()
+
     def test_remove_pending_registration_deletes_matching_entry(self):
         with patch.object(
             self.service,
@@ -265,6 +278,22 @@ class FileStorageServiceTestCase(unittest.TestCase):
         ), patch.object(self.service, "save_json_file") as save_json_mock:
             result = self.service.add_pending_lead_capture({"email": "dup@example.com"})
         self.assertFalse(result)
+        save_json_mock.assert_not_called()
+
+    def test_add_pending_lead_capture_ignores_missing_email(self):
+        # Behaviour parity with ``SqlStorageService`` (see
+        # ``test_add_pending_lead_capture_ignores_missing_email`` in
+        # test_sql_storage.py): leads without an email are rejected so
+        # they can't accumulate as anonymous rows the admin UI can never
+        # associate with a real person.
+        with patch.object(
+            self.service, "get_pending_lead_captures", return_value=[]
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertFalse(
+                self.service.add_pending_lead_capture({"submitted_at": "2026-01-01"})
+            )
+            self.assertFalse(self.service.add_pending_lead_capture({"email": ""}))
+            self.assertFalse(self.service.add_pending_lead_capture({"email": None}))
         save_json_mock.assert_not_called()
 
     def test_remove_pending_lead_capture_filters_matching_email(self):
@@ -539,6 +568,45 @@ class AppointmentServiceTestCase(unittest.TestCase):
         loaded = self.service.load()
         self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
         self.assertEqual(loaded["prop-2"], {"2030-05-01"})
+
+    def test_load_skips_empty_property_id_line(self):
+        # A line stored with an empty property id (``:2030-01-10``) would
+        # otherwise land in the returned map under the "" key and get
+        # re-written verbatim by the next save(). Skip it silently so a
+        # hand-edited or corrupted file doesn't accumulate garbage entries.
+        self.appointments_path.write_text(
+            "prop-1:2030-01-10\n:2030-01-11\n",
+            encoding="utf-8",
+        )
+        loaded = self.service.load()
+        self.assertEqual(loaded, {"prop-1": {"2030-01-10"}})
+        self.assertNotIn("", loaded)
+
+    def test_load_does_not_log_at_info_on_every_call(self):
+        # load() is called on every /property/<uuid> page render; routine
+        # traces must sit at DEBUG so real-user traffic doesn't dominate
+        # application.log with no-signal messages. Regressions here would
+        # re-introduce the log flood this cleanup addressed.
+        self.appointments_path.write_text("prop-1:2030-01-10\n", encoding="utf-8")
+        with patch.object(self.service.logger, "info") as info_mock:
+            self.service.load()
+            # Also cover the "missing file" branch — same rationale.
+            self.appointments_path.unlink()
+            self.service.load()
+        info_mock.assert_not_called()
+
+    def test_save_does_not_log_at_info_or_call_print_check_file(self):
+        # save() is called from every booking; the successful path is
+        # observable via os.replace(), and log_site_change / the notification
+        # email in schedule_appointment already record the business event.
+        # An INFO trace here (and the redundant print_check_file() call the
+        # previous implementation made) is dead weight.
+        with patch.object(self.service.logger, "info") as info_mock, patch.object(
+            self.service, "print_check_file"
+        ) as print_check_mock:
+            self.service.save({"prop-1": {"2030-05-01"}})
+        info_mock.assert_not_called()
+        print_check_mock.assert_not_called()
 
 
 class PropertyServiceTestCase(unittest.TestCase):
@@ -2022,6 +2090,74 @@ class ZillowPublisherTestCase(unittest.TestCase):
         self.assertIn("failure_count", snapshot)
         self.assertIn("recent_errors", snapshot)
 
+    def test_publish_runs_inline_when_background_threads_disabled(self):
+        # DISABLE_BACKGROUND_THREADS=1 mirrors the JIRA mirror's hatch:
+        # publishes execute inline (no daemon thread, no backoff sleeps) so
+        # tests stay deterministic and side effects are observable the
+        # moment the call returns. Without this a routing test that
+        # exercises a create/update/delete path with Zillow creds present
+        # spawns a thread that outlives the test and races teardown.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(self.publisher, "_perform_publish") as perform:
+            self.publisher.publish_create({"id": "prop-1"})
+            perform.assert_called_once_with("create", "prop-1", {"property": {"id": "prop-1"}})
+        # Success recorded synchronously — no thread involved.
+        self.assertEqual(self.publisher.success_count, 1)
+        self.assertEqual(self.publisher.failure_count, 0)
+
+    def test_inline_publish_records_failure_and_notifies_on_error(self):
+        # Same hatch, but the (stubbed) publish raises. The inline path must
+        # still record the failure on the status snapshot and route the
+        # admin alert through NotificationService — matching the async
+        # path's contract so an operator sees the outage either way.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(
+            self.publisher, "_perform_publish", side_effect=RuntimeError("boom")
+        ):
+            self.publisher.publish_update({"id": "prop-2"})
+        self.assertEqual(self.publisher.failure_count, 1)
+        self.assertEqual(self.publisher.success_count, 0)
+        self.notifications.log_and_notify_error.assert_called_once()
+        # The recent-errors ring buffer captured the failure for the
+        # admin-status page.
+        snapshot = self.publisher.status_snapshot()
+        self.assertEqual(len(snapshot["recent_errors"]), 1)
+        self.assertEqual(snapshot["recent_errors"][0]["action"], "update")
+        self.assertEqual(snapshot["recent_errors"][0]["property_id"], "prop-2")
+
+    def test_inline_publish_skipped_when_credentials_missing(self):
+        # Even with the DISABLE_BACKGROUND_THREADS hatch on, missing
+        # credentials must short-circuit before touching _perform_publish —
+        # otherwise a partially-configured environment would fabricate
+        # "success" for a call that was never made.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "",
+                "ZILLOW_API_TOKEN": "",
+                "ZILLOW_FEED_KEY": "",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(self.publisher, "_perform_publish") as perform:
+            self.publisher.publish_delete("prop-3")
+            perform.assert_not_called()
+        self.assertEqual(self.publisher.success_count, 0)
+        self.assertEqual(self.publisher.failure_count, 0)
+
 
 class TicketsNowIsoTestCase(unittest.TestCase):
     """Lock the on-disk timestamp format for tickets.
@@ -2198,6 +2334,55 @@ class EmailValidationTestCase(unittest.TestCase):
     def test_rejects_oversized_strings(self):
         long_local = "a" * 255
         self.assertFalse(is_valid_email(f"{long_local}@example.com"))
+
+
+class TicketSetEmailUpdatesTestCase(unittest.TestCase):
+    """Guard the no-op short-circuit in ``TicketService.set_email_updates``.
+
+    The route is idempotent from the user's point of view: clicking the
+    toggle to the value it's already at shouldn't bump ``updated_at``
+    (jumping the ticket to the top of the "recently updated" list for
+    nothing) or append a spurious ``ticket_email_updates_toggled`` entry
+    to ``site_changes.log`` that inflates the audit trail with noise.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        self.tickets_path.write_text(
+            '[{"id": "t1", "email_updates": true, "updated_at": "2020-01-01T00:00:00Z"}]',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_no_op_when_value_unchanged_preserves_updated_at(self):
+        result = self.service.set_email_updates("t1", enabled=True, actor_email="a@example.com")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["updated_at"], "2020-01-01T00:00:00Z")
+        # No change-log entry when nothing actually changed.
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_change_bumps_updated_at_and_logs(self):
+        result = self.service.set_email_updates("t1", enabled=False, actor_email="a@example.com")
+        self.assertIsNotNone(result)
+        self.assertFalse(result["email_updates"])
+        self.assertNotEqual(result["updated_at"], "2020-01-01T00:00:00Z")
+        self.notifications.log_site_change.assert_called_once()
+        args = self.notifications.log_site_change.call_args
+        self.assertEqual(args[0][1], "ticket_email_updates_toggled")
+        self.assertEqual(args[0][2], {"ticket_id": "t1", "enabled": False})
+
+    def test_missing_ticket_returns_none(self):
+        self.assertIsNone(
+            self.service.set_email_updates("nope", enabled=True, actor_email="a@example.com")
+        )
+        self.notifications.log_site_change.assert_not_called()
 
 
 if __name__ == "__main__":

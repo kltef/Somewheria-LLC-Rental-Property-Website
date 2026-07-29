@@ -364,24 +364,40 @@ class TicketService:
         return None
 
     def set_email_updates(self, ticket_id: str, enabled: bool, actor_email: str) -> dict | None:
+        # Skip the write and change-log entry when the value already matches.
+        # A no-op POST otherwise bumps ``updated_at`` (jumping the ticket to
+        # the top of the "recently updated" list for nothing) and appends a
+        # spurious ``ticket_email_updates_toggled`` row that inflates the
+        # site-change history with noise a reviewer has to skip past.
+        # Same shape ``update_ticket`` already uses: only persist when
+        # something actually changed.
+        target: dict | None = None
+        changed = False
         with self.storage.atomic():
             tickets = self._load()
             for ticket in tickets:
                 if ticket.get("id") != ticket_id:
                     continue
-                ticket["email_updates"] = bool(enabled)
-                ticket["updated_at"] = _now_iso()
-                self._save(tickets)
-                try:
-                    self.notifications.log_site_change(
-                        actor_email or "unknown",
-                        "ticket_email_updates_toggled",
-                        {"ticket_id": ticket_id, "enabled": bool(enabled)},
-                    )
-                except Exception:
-                    pass
-                return ticket
+                target = ticket
+                new_value = bool(enabled)
+                if ticket.get("email_updates") != new_value:
+                    ticket["email_updates"] = new_value
+                    ticket["updated_at"] = _now_iso()
+                    self._save(tickets)
+                    changed = True
+                break
+        if target is None:
             return None
+        if changed:
+            try:
+                self.notifications.log_site_change(
+                    actor_email or "unknown",
+                    "ticket_email_updates_toggled",
+                    {"ticket_id": ticket_id, "enabled": bool(enabled)},
+                )
+            except Exception:
+                pass
+        return target
 
     # Send the email when ``email_updates`` is on AND we actually have a
     # reachable submitter address. The NotificationService itself will no-op

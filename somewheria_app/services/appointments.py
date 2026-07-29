@@ -21,32 +21,51 @@ class AppointmentService:
         self.logger.info("%s: %s (%s)", purpose, abs_path, status)
 
     def load(self) -> dict[str, set[str]]:
+        # Called on every /property/<uuid> page render, so the routine
+        # "loading ..." / "not created yet" traces sit at DEBUG — otherwise a
+        # single visit dominates application.log with no-signal messages.
+        # Startup / booking flows still get an INFO trail via
+        # print_check_file() and NotificationService.log_site_change().
         appointments: dict[str, set[str]] = {}
-        abs_path = self.config.property_appointments_file.resolve()
-        self.logger.info("Loading appointments from %s", abs_path)
-        if not self.config.property_appointments_file.exists():
-            self.logger.info("Appointments file does not exist yet: %s", abs_path)
-            return appointments
+        path = self.config.property_appointments_file
+        # Hold the lock across the existence check and open() so a concurrent
+        # save() (which creates the file atomically via os.replace) cannot
+        # create-then-be-observed-as-missing between the two calls. This is a
+        # thin race in practice — save() is rare — but keeps the read side
+        # observation consistent with the write side.
         with self._lock:
-            with self.config.property_appointments_file.open("r", encoding="utf-8") as handle:
+            if not path.exists():
+                self.logger.debug("Appointments file does not exist yet: %s", path.resolve())
+                return appointments
+            self.logger.debug("Loading appointments from %s", path.resolve())
+            with path.open("r", encoding="utf-8") as handle:
                 for raw_line in handle:
                     line = raw_line.strip()
                     if not line:
                         continue
                     try:
                         property_id, dates = line.split(":", 1)
-                        appointments[property_id.strip()] = {item for item in dates.split(",") if item}
-                    except Exception:
+                    except ValueError:
                         continue
+                    property_id = property_id.strip()
+                    # Skip lines that stored an empty property id — treating
+                    # them as real entries would pollute the returned map with
+                    # a bogus "" key that gets re-written on the next save().
+                    if not property_id:
+                        continue
+                    appointments[property_id] = {item for item in dates.split(",") if item}
         return appointments
 
     def save(self, appointments: dict[str, set[str]]) -> None:
         # Atomic write: render the full payload to a sibling temp file, fsync,
         # then os.replace() over the destination. A crash mid-write leaves the
         # original file intact instead of a half-written, truncated one.
+        #
+        # DEBUG log level: save() runs on every booking, and successful writes
+        # are already observable via os.replace() completing (and via the
+        # ``ticket_created`` / notification email fired by the caller).
         path = self.config.property_appointments_file
-        abs_path = path.resolve()
-        self.logger.info("Saving %s appointment sets to %s", len(appointments), abs_path)
+        self.logger.debug("Saving %s appointment sets to %s", len(appointments), path.resolve())
         with self._lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
@@ -64,7 +83,6 @@ class AppointmentService:
                 except OSError:
                     pass
                 raise
-        self.print_check_file(self.config.property_appointments_file, "Appointments saved")
 
     def book(self, property_id: str, iso_date: str) -> bool:
         # Returns True when the booking was newly recorded, False when the

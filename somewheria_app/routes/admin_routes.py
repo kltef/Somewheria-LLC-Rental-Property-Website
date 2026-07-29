@@ -321,10 +321,15 @@ def admin_status():
     def route_ready(*endpoints):
         return all(endpoint in registered_routes for endpoint in endpoints)
 
+    # Exclude "revoked" tombstones from the count: they're deleted users
+    # kept only so an .env-based role can't silently restore access on the
+    # next login. Counting them here would show a growing "known users"
+    # total that includes people with no access.
+    active_user_count = sum(1 for role in user_roles.values() if role != "revoked")
     metrics = {
         "properties_cached": property_count,
         "pending_registrations": len(pending_registrations),
-        "known_users": len(user_roles),
+        "known_users": active_user_count,
         "cache_refresh_interval": f"{config.cache_refresh_interval}s",
     }
 
@@ -511,7 +516,15 @@ def admin_dashboard_combined():
         elif action == "update":
             new_role = request.form.get("role", "").strip()
             target_role = services.auth.get_user_role(email)
-            if new_role not in ALLOWED_ROLES:
+            # Reject malformed emails at the admin boundary too, mirroring
+            # the ``add`` action below and ``admin_users``. Without this, a
+            # hand-crafted POST (or paste-error) can write a role for a
+            # garbage key like ``"foo"`` that no real OAuth login can ever
+            # match — it just pollutes user_roles storage and shows up in
+            # the roster with no way to reach it.
+            if not is_valid_email(email):
+                error = "A valid email is required."
+            elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
             elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
@@ -551,12 +564,20 @@ def admin_dashboard_combined():
     ticket_summary = services.tickets.summary()
     ticket_status_counts = services.tickets.status_counts()
     listing_activity = services.analytics.recent_listing_activity(months=12)
+    # Skip "revoked" tombstones: they represent deleted users whose access
+    # is gone. Left in the list, the template's role tally counts them as
+    # renters (its else branch is renter) and inflates the total user count.
+    active_user_roles = [
+        (email, role)
+        for email, role in services.storage.get_user_roles().items()
+        if role != "revoked"
+    ]
     return render_template(
         "admin_dashboard.html",
         user=get_current_user(),
         metrics=metrics,
         chart_data=chart_data,
-        users=list(services.storage.get_user_roles().items()),
+        users=active_user_roles,
         ticket_summary=ticket_summary,
         ticket_status_counts=ticket_status_counts,
         listing_activity=listing_activity,
@@ -772,6 +793,23 @@ def renter_profile():
     return render_template("renter_profile.html", profile=profile, user=user, success=success, title="Edit Profile")
 
 
+def _valid_iso_date(value: str) -> bool:
+    """Return True if ``value`` is a strict YYYY-MM-DD calendar date.
+
+    ``date.fromisoformat`` on 3.11+ accepts other ISO 8601 shapes (with a
+    time component, week dates, ordinal dates); admin contracts store the
+    date-only form, so we enforce that shape explicitly rather than
+    relying on the parser's incidental strictness.
+    """
+    if not isinstance(value, str) or len(value) != 10:
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_contract_pdf(uploaded_file) -> bytes | None:
     """Read the upload, validate as a PDF (magic bytes + size). Returns bytes
     on success or None when no file was supplied. Raises ValueError on bad
@@ -833,6 +871,20 @@ def admin_contracts():
                 # creates an orphan contract that no real OAuth login can
                 # ever surface for the renter.
                 error = "A valid renter email is required."
+            elif not _valid_iso_date(start_date) or not _valid_iso_date(end_date):
+                # Reject garbage date strings at the boundary. The <input
+                # type="date"> field normalizes to YYYY-MM-DD, so a bad value
+                # here is a hand-crafted POST or a paste error — either way
+                # ``_classify_contract_status`` would silently swallow the
+                # parse failure downstream and the admin dashboard would
+                # render the literal junk string as the contract's term.
+                error = "Start and end dates must be YYYY-MM-DD."
+            elif datetime.date.fromisoformat(end_date) < datetime.date.fromisoformat(start_date):
+                # A contract whose end precedes its start is nonsense and
+                # would classify as "ended" the moment it's saved. Rejecting
+                # here catches the most likely typo (year swap, month swap)
+                # while the admin still has the form open to correct it.
+                error = "End date must not be before start date."
             else:
                 contract_id = uuid_lib.uuid4().hex
                 pdf_filename = ""
@@ -956,7 +1008,10 @@ def contract_detail(contract_id: str):
         contract, _ = _find_contract_for_email(services, email, contract_id)
     if not contract:
         return render_template("404.html", title="Contract Not Found"), 404
-    contract.setdefault("status_class", _classify_contract_status(contract))
+    # Always recompute — the JSON on disk may carry a stale ``status_class``
+    # persisted by an older backfill, and ``setdefault`` would keep the
+    # stale value instead of refreshing it against today's date.
+    contract["status_class"] = _classify_contract_status(contract)
     return render_template(
         "contract_detail.html",
         contract=contract,

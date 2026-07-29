@@ -82,20 +82,28 @@ class FileStorageService:
     def add_pending_registration(self, registration: dict) -> bool:
         """Append a pending registration, skipping duplicate emails.
 
-        Returns True when a new row was stored, False when an entry for the
-        same email already existed. De-duplicating here (rather than only in
-        the route) keeps a repeated submission from bloating the file or
-        triggering a second admin notification, mirroring
-        ``add_pending_lead_capture`` and the SQL backend's idempotency.
+        Returns True when a new row was stored, False when the email is
+        missing/blank or an entry for the same email already existed.
+        De-duplicating here (rather than only in the route) keeps a repeated
+        submission from bloating the file or triggering a second admin
+        notification, mirroring the SQL backend's identical contract.
+
+        Rejecting missing-email entries matches ``SqlStorageService`` —
+        without the guard, a bug in a future caller (or a hand-crafted POST
+        slipping past the route-level ``is_valid_email`` check) could pile
+        anonymous rows into the JSON file forever, and the admin page would
+        show entries no one can ever approve.
 
         The load+save runs under ``self.file_lock`` so two concurrent
         submissions cannot both load the pre-write list and then race each
         other's saves (which would silently drop one entry).
         """
+        target_email = (registration.get("email") or "").strip().lower()
+        if not target_email:
+            return False
         with self.file_lock:
             registrations = self.get_pending_registrations()
-            target_email = (registration.get("email") or "").strip().lower()
-            if target_email and any(
+            if any(
                 (item.get("email") or "").lower() == target_email for item in registrations
             ):
                 return False
@@ -141,18 +149,24 @@ class FileStorageService:
         return self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
-        # Returns True when the lead was newly persisted, False when it was
-        # rejected as a duplicate. The caller uses the return value to decide
-        # whether to fire the "new lead" admin email — without that gate a
-        # repeated submission of an already-pending address spams the inbox.
+        # Returns True when the lead was newly persisted, False when the
+        # email is missing/blank or it was rejected as a duplicate. The
+        # caller uses the return value to decide whether to fire the
+        # "new lead" admin email — without that gate a repeated submission
+        # of an already-pending address spams the inbox. Rejecting
+        # missing-email entries matches ``SqlStorageService`` so behavior
+        # is identical whether the JSON file or the SQLite backend is
+        # active (the storage layer is feature-flagged via USE_SQLITE_STORAGE).
         # Load+save runs under the file lock so two concurrent submissions
         # can't both pass the dedup check and then race each other's saves.
+        target_email = (lead.get("email") or "").strip().lower()
+        if not target_email:
+            return False
         with self.file_lock:
             leads = self.get_pending_lead_captures()
             # De-duplicate by email so a repeated submission doesn't bloat the file
             # or give the requester a way to flood the admin UI.
-            target_email = (lead.get("email") or "").lower()
-            if target_email and any(item.get("email", "").lower() == target_email for item in leads):
+            if any(item.get("email", "").lower() == target_email for item in leads):
                 return False
             leads.append(lead)
             self.save_json_file(self.config.lead_capture_file, leads)
