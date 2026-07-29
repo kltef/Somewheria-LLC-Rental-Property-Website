@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -156,6 +157,59 @@ class TicketServiceJiraWiringTestCase(unittest.TestCase):
         # Must not raise even though JIRA blows up.
         ticket = svc.create_ticket(
             {"title": "Heater", "description": "Cold"}, submitter_email="r@example.com"
+        )
+        self.assertIn("id", ticket)
+
+    def test_slow_smtp_does_not_block_ticket_creation(self):
+        # Simulate a Gmail SMTP relay that takes ~30 s to time out — the
+        # actual worst-case for ``smtplib.SMTP(..., timeout=30)``. The
+        # ticket-creation call must return well before the send finishes.
+        # ``_enqueue_email`` honours DISABLE_BACKGROUND_THREADS in tests,
+        # so temporarily disable that hatch for this one case to exercise
+        # the daemon-thread path.
+        import time
+
+        slow_call_started = threading.Event()
+        slow_call_can_return = threading.Event()
+
+        def _slow_send_email(subject, body, to=None):
+            slow_call_started.set()
+            # Bound the wait so a bug in the test still lets it exit.
+            slow_call_can_return.wait(timeout=10)
+            return True
+
+        self.notifications.send_email.side_effect = _slow_send_email
+        svc = TicketService(self.config, self.storage, self.notifications, jira=None)
+
+        prior = os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            start = time.monotonic()
+            ticket = svc.create_ticket(
+                {"title": "Heater", "description": "Cold"},
+                submitter_email="renter@example.com",
+            )
+            elapsed = time.monotonic() - start
+        finally:
+            slow_call_can_return.set()
+            if prior is not None:
+                os.environ["DISABLE_BACKGROUND_THREADS"] = prior
+
+        # If the send were on the request thread we'd have blocked for the
+        # full timeout. Give the assertion a wide margin (1 s) so slow CI
+        # boxes don't flake, while still catching an accidental sync send.
+        self.assertLess(elapsed, 1.0)
+        self.assertIn("id", ticket)
+        # Sanity: the daemon thread did actually kick off the send.
+        self.assertTrue(slow_call_started.wait(timeout=5))
+
+    def test_email_send_error_does_not_break_ticket_creation(self):
+        # A raise from ``send_email`` inside the daemon thread must not
+        # propagate to the caller.
+        self.notifications.send_email.side_effect = RuntimeError("SMTP down")
+        svc = TicketService(self.config, self.storage, self.notifications, jira=None)
+        ticket = svc.create_ticket(
+            {"title": "Heater", "description": "Cold"},
+            submitter_email="renter@example.com",
         )
         self.assertIn("id", ticket)
 

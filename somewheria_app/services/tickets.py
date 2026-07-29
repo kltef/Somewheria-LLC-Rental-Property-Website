@@ -200,22 +200,22 @@ class TicketService:
             tickets.append(ticket)
             self._save(tickets)
 
-        try:
-            # Notify the internal admin inbox.
-            self.notifications.send_email(
-                f"New Repair Ticket: {title}",
-                (
-                    f"Ticket ID: {ticket['id']}\n"
-                    f"Submitted by: {submitter_name or submitter_email or 'anonymous'}\n"
-                    f"Contact: {contact or '(none)'}\n"
-                    f"Property: {property_name or '(not specified)'}\n"
-                    f"Category: {category}\n"
-                    f"Priority: {priority}\n\n"
-                    f"{description}"
-                ),
-            )
-        except Exception as exc:  # notifications must not block ticket creation
-            self.logger.warning("Failed to send ticket email: %s", exc)
+        # Notify the internal admin inbox. Dispatched off the request thread
+        # so a slow/unreachable SMTP relay can't stall the caller for up to
+        # ``SMTP_TIMEOUT_SECONDS`` (30s) — matching how the JIRA mirror
+        # already runs in a daemon thread below.
+        self._enqueue_email(
+            f"New Repair Ticket: {title}",
+            (
+                f"Ticket ID: {ticket['id']}\n"
+                f"Submitted by: {submitter_name or submitter_email or 'anonymous'}\n"
+                f"Contact: {contact or '(none)'}\n"
+                f"Property: {property_name or '(not specified)'}\n"
+                f"Category: {category}\n"
+                f"Priority: {priority}\n\n"
+                f"{description}"
+            ),
+        )
 
         # Confirmation email to the renter so they know we got it.
         self._maybe_email_submitter(
@@ -250,6 +250,42 @@ class TicketService:
             self._enqueue_jira_create(ticket["id"])
 
         return ticket
+
+    # ------------------------------------------------------- email dispatch
+
+    def _enqueue_email(self, subject: str, body: str, to: str | None = None) -> None:
+        """Send an email off the request thread.
+
+        SMTP has a 30 s socket timeout, so a slow Gmail relay could otherwise
+        stall the caller by that much per send — a ticket-creation request
+        that fires an internal notice plus a submitter confirmation could
+        block for up to a minute. All email sends from this service are
+        fire-and-forget (callers don't rely on the return value; delivery
+        failures are already logged inside ``NotificationService.send_email``),
+        so dispatching from a daemon thread preserves semantics while
+        removing the latency from the request path.
+
+        Honours ``DISABLE_BACKGROUND_THREADS=1`` so test runs stay
+        synchronous and can assert against mocked ``send_email`` calls.
+        """
+        if os.getenv("DISABLE_BACKGROUND_THREADS") == "1":
+            try:
+                self.notifications.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.logger.warning("Inline email send failed for %r: %s", subject, exc)
+            return
+
+        def _worker() -> None:
+            try:
+                self.notifications.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.logger.warning("Background email send failed for %r: %s", subject, exc)
+
+        threading.Thread(
+            target=_worker,
+            name="ticket-email",
+            daemon=True,
+        ).start()
 
     # --------------------------------------------------------------- JIRA
 
@@ -372,10 +408,9 @@ class TicketService:
         recipient = (ticket.get("submitted_by") or "").strip()
         if not is_valid_email(recipient):
             return
-        try:
-            self.notifications.send_email(subject, body, to=recipient)
-        except Exception as exc:
-            self.logger.warning("Failed to email submitter for ticket %s: %s", ticket.get("id"), exc)
+        # Fire-and-forget: dispatched off the request thread so a slow SMTP
+        # relay can't stall the caller. See ``_enqueue_email``.
+        self._enqueue_email(subject, body, to=recipient)
 
     def update_ticket(
         self,
@@ -613,17 +648,15 @@ class TicketService:
         else:
             # Note from the submitter — notify the internal inbox so staff
             # see a renter reply even if they're not watching the dashboard.
-            try:
-                self.notifications.send_email(
-                    f"Renter note on ticket: {ticket.get('title', '')}",
-                    (
-                        f"Ticket: {ticket_id[:8]}\n"
-                        f"From: {ticket.get('submitter_name') or submitter or 'renter'}\n\n"
-                        f"{text}"
-                    ),
-                )
-            except Exception as exc:
-                self.logger.warning("Failed to forward renter note: %s", exc)
+            # Dispatched off the request thread; see ``_enqueue_email``.
+            self._enqueue_email(
+                f"Renter note on ticket: {ticket.get('title', '')}",
+                (
+                    f"Ticket: {ticket_id[:8]}\n"
+                    f"From: {ticket.get('submitter_name') or submitter or 'renter'}\n\n"
+                    f"{text}"
+                ),
+            )
 
         try:
             self.notifications.log_site_change(
