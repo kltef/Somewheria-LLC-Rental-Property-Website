@@ -21,14 +21,19 @@ class AppointmentService:
         self.logger.info("%s: %s (%s)", purpose, abs_path, status)
 
     def load(self) -> dict[str, set[str]]:
+        # ``property_details`` calls this on every page view (including bot
+        # crawlers), so keep it at DEBUG — routine reads at INFO fill the
+        # 10 MB rotating application.log with duplicate lines and shorten
+        # the useful log retention window. Mutations (save/book) still log
+        # at INFO because they're rare and worth the audit trail.
         appointments: dict[str, set[str]] = {}
-        abs_path = self.config.property_appointments_file.resolve()
-        self.logger.info("Loading appointments from %s", abs_path)
-        if not self.config.property_appointments_file.exists():
-            self.logger.info("Appointments file does not exist yet: %s", abs_path)
+        path = self.config.property_appointments_file
+        if not path.exists():
+            self.logger.debug("Appointments file does not exist yet: %s", path)
             return appointments
+        self.logger.debug("Loading appointments from %s", path)
         with self._lock:
-            with self.config.property_appointments_file.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8") as handle:
                 for raw_line in handle:
                     line = raw_line.strip()
                     if not line:
