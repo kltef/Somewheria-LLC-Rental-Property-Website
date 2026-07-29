@@ -2051,6 +2051,74 @@ class ZillowPublisherTestCase(unittest.TestCase):
         self.assertIn("failure_count", snapshot)
         self.assertIn("recent_errors", snapshot)
 
+    def test_publish_runs_inline_when_background_threads_disabled(self):
+        # DISABLE_BACKGROUND_THREADS=1 mirrors the JIRA mirror's hatch:
+        # publishes execute inline (no daemon thread, no backoff sleeps) so
+        # tests stay deterministic and side effects are observable the
+        # moment the call returns. Without this a routing test that
+        # exercises a create/update/delete path with Zillow creds present
+        # spawns a thread that outlives the test and races teardown.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(self.publisher, "_perform_publish") as perform:
+            self.publisher.publish_create({"id": "prop-1"})
+            perform.assert_called_once_with("create", "prop-1", {"property": {"id": "prop-1"}})
+        # Success recorded synchronously — no thread involved.
+        self.assertEqual(self.publisher.success_count, 1)
+        self.assertEqual(self.publisher.failure_count, 0)
+
+    def test_inline_publish_records_failure_and_notifies_on_error(self):
+        # Same hatch, but the (stubbed) publish raises. The inline path must
+        # still record the failure on the status snapshot and route the
+        # admin alert through NotificationService — matching the async
+        # path's contract so an operator sees the outage either way.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                "ZILLOW_API_TOKEN": "token",
+                "ZILLOW_FEED_KEY": "feed",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(
+            self.publisher, "_perform_publish", side_effect=RuntimeError("boom")
+        ):
+            self.publisher.publish_update({"id": "prop-2"})
+        self.assertEqual(self.publisher.failure_count, 1)
+        self.assertEqual(self.publisher.success_count, 0)
+        self.notifications.log_and_notify_error.assert_called_once()
+        # The recent-errors ring buffer captured the failure for the
+        # admin-status page.
+        snapshot = self.publisher.status_snapshot()
+        self.assertEqual(len(snapshot["recent_errors"]), 1)
+        self.assertEqual(snapshot["recent_errors"][0]["action"], "update")
+        self.assertEqual(snapshot["recent_errors"][0]["property_id"], "prop-2")
+
+    def test_inline_publish_skipped_when_credentials_missing(self):
+        # Even with the DISABLE_BACKGROUND_THREADS hatch on, missing
+        # credentials must short-circuit before touching _perform_publish —
+        # otherwise a partially-configured environment would fabricate
+        # "success" for a call that was never made.
+        with patch.dict(
+            "os.environ",
+            {
+                "ZILLOW_API_BASE_URL": "",
+                "ZILLOW_API_TOKEN": "",
+                "ZILLOW_FEED_KEY": "",
+                "DISABLE_BACKGROUND_THREADS": "1",
+            },
+        ), patch.object(self.publisher, "_perform_publish") as perform:
+            self.publisher.publish_delete("prop-3")
+            perform.assert_not_called()
+        self.assertEqual(self.publisher.success_count, 0)
+        self.assertEqual(self.publisher.failure_count, 0)
+
 
 class TicketsNowIsoTestCase(unittest.TestCase):
     """Lock the on-disk timestamp format for tickets.

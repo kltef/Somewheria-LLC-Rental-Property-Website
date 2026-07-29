@@ -121,6 +121,30 @@ class ZillowPublisher:
             )
             return
 
+        # Honour the DISABLE_BACKGROUND_THREADS hatch used by the JIRA mirror
+        # and the rest of the app so test runs stay synchronous and
+        # predictable. Run a single publish attempt inline (no retries, no
+        # backoff sleeps) — tests exercising the retry ladder itself already
+        # call _retry_worker directly with time.sleep patched out.
+        if os.getenv("DISABLE_BACKGROUND_THREADS") == "1":
+            try:
+                self._perform_publish(action, property_id, payload)
+                self._record_success(action, property_id)
+            except Exception as exc:
+                self._record_failure(action, property_id, str(exc))
+                try:
+                    self.notifications.log_and_notify_error(
+                        "Zillow Sync Failure",
+                        f"Zillow publish failed inline. action={action} "
+                        f"property_id={property_id} error={exc}",
+                    )
+                except Exception as notify_exc:
+                    self.logger.error(
+                        "Could not notify admin of Zillow failure: %s",
+                        notify_exc,
+                    )
+            return
+
         worker = threading.Thread(
             target=self._retry_worker,
             args=(action, property_id, payload),
