@@ -125,6 +125,25 @@ def prune_local(dest_dir: Path, retention_days: int) -> int:
     return pruned
 
 
+def _int_env(name: str, default: int) -> int:
+    """Parse an integer env var with a safe fallback.
+
+    ``int(os.getenv(...))`` would raise ``ValueError`` on a mistyped value
+    like ``BACKUP_RETENTION_DAYS=weekly``, which happens AFTER a successful
+    S3 upload — the whole run then reports a non-zero exit to cron even
+    though the artifact is safely stored. Fall back to ``default`` for
+    blank / non-numeric / negative values instead.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -165,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         reason = "no BACKUP_S3_BUCKET" if not bucket else "AWS credentials not set"
         print(f"Skipping S3 upload ({reason})")
 
-    retention = int(os.getenv("BACKUP_RETENTION_DAYS", "7"))
+    retention = _int_env("BACKUP_RETENTION_DAYS", 7)
     pruned = prune_local(args.staging_dir, retention)
     if pruned:
         cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention)

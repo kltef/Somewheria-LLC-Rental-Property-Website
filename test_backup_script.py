@@ -15,6 +15,7 @@ These tests verify:
 from __future__ import annotations
 
 import gzip
+import os
 import sqlite3
 import sys
 import tempfile
@@ -22,6 +23,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -141,6 +143,32 @@ class BackupCompressTests(unittest.TestCase):
                 conn.close()
             # At least the original seed row should be present.
             self.assertGreaterEqual(count, 1)
+
+
+class BackupIntEnvTests(unittest.TestCase):
+    def test_int_env_uses_default_when_unset(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BACKUP_RETENTION_DAYS", None)
+            self.assertEqual(backup_database._int_env("BACKUP_RETENTION_DAYS", 7), 7)
+
+    def test_int_env_uses_default_when_blank(self):
+        with patch.dict(os.environ, {"BACKUP_RETENTION_DAYS": "   "}):
+            self.assertEqual(backup_database._int_env("BACKUP_RETENTION_DAYS", 7), 7)
+
+    def test_int_env_uses_default_on_non_numeric(self):
+        # Regression: a mistyped env value ("weekly") used to raise
+        # ValueError AFTER a successful S3 upload, turning the whole run
+        # into a non-zero exit for cron even though the artifact was safe.
+        with patch.dict(os.environ, {"BACKUP_RETENTION_DAYS": "weekly"}):
+            self.assertEqual(backup_database._int_env("BACKUP_RETENTION_DAYS", 7), 7)
+
+    def test_int_env_uses_default_on_negative(self):
+        with patch.dict(os.environ, {"BACKUP_RETENTION_DAYS": "-3"}):
+            self.assertEqual(backup_database._int_env("BACKUP_RETENTION_DAYS", 7), 7)
+
+    def test_int_env_reads_valid_positive(self):
+        with patch.dict(os.environ, {"BACKUP_RETENTION_DAYS": "14"}):
+            self.assertEqual(backup_database._int_env("BACKUP_RETENTION_DAYS", 7), 14)
 
 
 if __name__ == "__main__":

@@ -912,6 +912,89 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
 
+    def test_admin_dashboard_rejects_malformed_email_on_update(self):
+        # Defense in depth for the ``update`` action: without this guard, a
+        # hand-crafted POST with a garbage email like "not-an-email" would
+        # silently write a role entry that no real OAuth login can match,
+        # polluting user_roles storage. Parity with the ``add`` action above
+        # and with ``admin_users`` (test_admin_users_rejects_malformed_email_on_role_assignment).
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(self.services.analytics, "dashboard_data", return_value=({"visits": 10}, {"labels": []})), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ), patch.object(self.services.storage, "set_user_role") as set_user_role_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "update", "email": "not-an-email", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"valid email is required", response.data)
+        set_user_role_mock.assert_not_called()
+
+    def test_admin_dashboard_excludes_revoked_users_from_summary(self):
+        # A "revoked" tombstone is a deleted user kept only so an env role
+        # can't silently restore access on the next login. Passing it into
+        # the dashboard "users" list would count it as a renter (the
+        # template's role tally is admin/high_admin/else, so any other role
+        # — including "revoked" — falls into the renter bucket) and inflate
+        # the total user count. The route must strip revoked entries.
+        self.login_as("high_admin", email="owner@example.com")
+        stored_roles = {
+            "active_renter@example.com": "renter",
+            "deleted@example.com": "revoked",
+        }
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value=stored_roles,
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = render_mock.call_args.kwargs
+        users = kwargs["users"]
+        self.assertEqual(users, [("active_renter@example.com", "renter")])
+        for _, role in users:
+            self.assertNotEqual(role, "revoked")
+
+    def test_admin_status_excludes_revoked_users_from_known_users_count(self):
+        # Mirrors the dashboard fix: /admin/status's "known_users" metric
+        # is the size of the persistent user_roles map, but revoked
+        # tombstones represent deleted users and must not be counted.
+        self.login_as("high_admin", email="owner@example.com")
+        stored_roles = {
+            "one@example.com": "renter",
+            "two@example.com": "admin",
+            "revoked1@example.com": "revoked",
+            "revoked2@example.com": "revoked",
+        }
+        with patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value=stored_roles,
+        ), patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[],
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/status")
+
+        self.assertEqual(response.status_code, 200)
+        kwargs = render_mock.call_args.kwargs
+        self.assertEqual(kwargs["metrics"]["known_users"], 2)
+
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(
@@ -1034,6 +1117,82 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
                     "property_name": "Maple House",
                     "start_date": "2030-01-01",
                     "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract added for renter@example.com.", response.data)
+        save_contracts_mock.assert_called_once()
+
+    def test_admin_contracts_add_rejects_malformed_dates(self):
+        # A hand-crafted POST (or a paste-error) with a non-ISO date must be
+        # rejected at the boundary so garbage never lands in
+        # renter_contracts storage. Downstream _classify_contract_status
+        # silently swallows parse failures, so without this the admin sees
+        # the literal junk string rendered as the contract's term.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-13-40",  # invalid month/day
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"YYYY-MM-DD", response.data)
+        save_contracts_mock.assert_not_called()
+
+    def test_admin_contracts_add_rejects_end_before_start(self):
+        # Contracts whose end precedes their start are nonsense and would
+        # classify as "ended" the moment they're saved. The most common
+        # cause is a year/month swap the admin should be told to fix.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-12-31",
+                    "end_date": "2030-01-01",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"End date must not be before start date.", response.data)
+        save_contracts_mock.assert_not_called()
+
+    def test_admin_contracts_add_accepts_same_start_and_end(self):
+        # A one-day contract is unusual but valid; end >= start (not strict >)
+        # is the correct predicate.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-06-15",
+                    "end_date": "2030-06-15",
                     "status": "Active",
                 },
             )
@@ -1730,6 +1889,85 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/contract-xyz")
         self.assertEqual(response.status_code, 404)
 
+    def test_backfill_contract_ids_does_not_persist_status_class(self):
+        """``status_class`` is derived from today's date and the contract's
+        start/end dates, so persisting it lets a "pending" contract keep
+        rendering as pending long after start_date has passed. The backfill
+        must add ids to disk without leaking the derived field.
+        """
+        from somewheria_app.routes.admin_routes import _backfill_contract_ids
+
+        # Contracts missing ``id`` — triggers the backfill save.
+        contracts = [
+            {
+                "property_name": "Maple House",
+                "start_date": "2024-01-01",
+                "end_date": "2025-01-01",
+                "status": "unrecognized-freeform",
+            }
+        ]
+        # Snapshot the payload AT SAVE TIME (deep copy) because the function
+        # mutates the same dict in place after the save call to attach the
+        # derived ``status_class`` — a plain Mock only records references.
+        saved_snapshots: list[dict] = []
+
+        def _snapshot_save(payload):
+            saved_snapshots.append(copy.deepcopy(payload))
+
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={"renter@example.com": contracts}
+        ), patch.object(
+            self.services.storage, "save_renter_contracts", side_effect=_snapshot_save
+        ):
+            _backfill_contract_ids(self.services, contracts, "renter@example.com")
+
+        self.assertEqual(len(saved_snapshots), 1)
+        saved_payload = saved_snapshots[0]
+        for saved_contract in saved_payload["renter@example.com"]:
+            self.assertNotIn(
+                "status_class",
+                saved_contract,
+                "status_class is derived from today's date; persisting it stales the badge",
+            )
+            self.assertIn("id", saved_contract, "id should have been backfilled")
+        # In-memory, the returned contracts still carry the derived field
+        # so callers (dashboard render) can use it without an extra call.
+        self.assertIn("status_class", contracts[0])
+
+    def test_contract_detail_recomputes_stale_status_class(self):
+        """A ``status_class`` persisted by an earlier backfill (before the
+        fix) can become stale as dates advance; the detail route must
+        recompute it rather than trust the stored value.
+        """
+        self.login_as("renter", email="renter@example.com")
+        # start_date is in the past — the fresh classification is "active".
+        # The persisted value is deliberately stale ("pending"), matching
+        # what a pre-fix backfill would have written to disk.
+        yesterday = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+        future = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": "stale-status",
+                    "property_name": "Maple House",
+                    "start_date": yesterday,
+                    "end_date": future,
+                    "status": "unrecognized-freeform",
+                    "status_class": "pending",  # stale, persisted from before the fix
+                    "pdf_filename": "",
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get("/contracts/stale-status")
+        self.assertEqual(response.status_code, 200)
+        # The active badge picks up ``sw-badge-ok``; a stale pending would
+        # render ``sw-badge-warn`` per the template's mapping.
+        self.assertIn(b"sw-badge-ok", response.data)
+        self.assertNotIn(b"sw-badge-warn", response.data)
+
     def test_contract_download_serves_pdf(self):
         self.login_as("renter", email="renter@example.com")
         contract_id = "contract-dl"
@@ -2040,6 +2278,93 @@ class LazyFileStatusTestCase(unittest.TestCase):
         )
         self.assertFalse(status["ok"])
         self.assertIn("not writable", status["detail"])
+
+
+class PropertyMetaDescriptionTestCase(unittest.TestCase):
+    """Search-snippet builder is capped at Google's ~158-char display width.
+
+    Both the blurb-derived path AND the fact-derived fallback must respect
+    the cap: a listing without a blurb whose name and address are moderately
+    long would otherwise render a 200+ char meta description that gets cut
+    mid-word in search results.
+    """
+
+    def _describe(self, **prop):
+        from somewheria_app.routes.public_routes import (
+            _META_DESCRIPTION_MAX,
+            _property_meta_description,
+        )
+
+        return _property_meta_description(prop), _META_DESCRIPTION_MAX
+
+    def test_short_blurb_passes_through_unchanged(self):
+        desc, _ = self._describe(blurb="Sunlit two-bedroom near the park.")
+        self.assertEqual(desc, "Sunlit two-bedroom near the park.")
+
+    def test_blurb_collapses_internal_whitespace(self):
+        desc, _ = self._describe(blurb="Sunlit  two-bedroom\nnear the park.")
+        self.assertEqual(desc, "Sunlit two-bedroom near the park.")
+
+    def test_blurb_at_cap_is_not_truncated(self):
+        blurb = "x" * 158
+        desc, cap = self._describe(blurb=blurb)
+        self.assertEqual(desc, blurb)
+        self.assertEqual(len(desc), cap)
+
+    def test_long_blurb_is_truncated_with_ellipsis(self):
+        blurb = "x" * 400
+        desc, cap = self._describe(blurb=blurb)
+        self.assertLessEqual(len(desc), cap)
+        self.assertTrue(desc.endswith("…"))
+
+    def test_description_used_when_blurb_missing(self):
+        desc, _ = self._describe(description="Quiet corner unit with parking.")
+        self.assertEqual(desc, "Quiet corner unit with parking.")
+
+    def test_fact_fallback_is_truncated_for_long_name_and_address(self):
+        # Without a blurb, the fact-based fallback used to concatenate the
+        # name, structured facts, address, AND a marketing sentence — a
+        # long-named listing on a long-addressed street would blow past the
+        # ~155-char snippet window Google displays. The cap now applies to
+        # this path too, so search snippets aren't cut mid-word.
+        desc, cap = self._describe(
+            name="Beautifully Renovated Modern Rambler-Style House",
+            bedrooms="4",
+            bathrooms="3",
+            rent="2500",
+            address="12345 Northeast Broadway Street, Metropolitan City, Some State",
+        )
+        self.assertLessEqual(len(desc), cap)
+        self.assertTrue(desc.endswith("…"))
+
+    def test_fact_fallback_trims_trailing_rent_zero(self):
+        # Rent comes back from upstream as a float; the fallback should read
+        # "$1500/mo" not "$1500.0/mo".
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="1",
+            rent=1500.0,
+            address="123 Main St",
+        )
+        self.assertIn("$1500/mo", desc)
+        self.assertNotIn("$1500.0/mo", desc)
+
+    def test_fact_fallback_uses_default_name(self):
+        desc, _ = self._describe(bedrooms="1", bathrooms="1")
+        self.assertTrue(desc.startswith("Rental home"))
+
+    def test_missing_fields_are_omitted(self):
+        # "N/A" placeholders should not appear as literal text in the snippet.
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="N/A",
+            bathrooms="N/A",
+            rent="N/A",
+            address="N/A",
+        )
+        self.assertNotIn("N/A", desc)
+        self.assertNotIn(" in .", desc)
 
 
 if __name__ == "__main__":

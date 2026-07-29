@@ -439,6 +439,24 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(property_ids, ["prop-1", "prop-2"])
         response.raise_for_status.assert_called_once()
 
+    def test_fetch_property_ids_dedupes_duplicate_upstream_returns(self):
+        # Belt-and-braces at the upstream boundary: if the ID-listing Lambda
+        # ever returns the same id twice (transient replication, upstream
+        # bug), a plain pass-through would fan out per-property fetches
+        # twice AND leave two copies of the property in the cache — the
+        # ``/for-rent`` page then shows duplicate cards and
+        # ``get_property()`` only ever surfaces the first match. First-seen
+        # order is preserved so tests / logs stay deterministic.
+        response = Mock()
+        response.json.return_value = {
+            "property_ids": ["prop-1", "prop-2", "prop-1", "prop-3", "prop-2"]
+        }
+
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            property_ids = self.service._fetch_property_ids()
+
+        self.assertEqual(property_ids, ["prop-1", "prop-2", "prop-3"])
+
     def test_fetch_property_ids_raises_upstream_unavailable_on_failure(self):
         # A network/HTTP failure must surface as ``UpstreamUnavailable`` so
         # ``refresh_cache`` can leave the existing cache in place. Returning
@@ -1490,6 +1508,53 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
             self.analytics.before_request()
 
         self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+
+    def test_visitor_last_seen_hard_caps_when_all_entries_are_fresh(self):
+        # Regression: when the visitor-recency map crosses the soft cap AND
+        # every entry is still inside the session window, the old prune
+        # rebuild kept every key and left the map above threshold, forcing
+        # the O(N) filter to re-run on every subsequent request. The hard
+        # cap trims to _LAST_SEEN_HARD_CAP once the filter can't reduce.
+        from somewheria_app.services.analytics import (
+            _LAST_SEEN_HARD_CAP,
+            _LAST_SEEN_PRUNE_THRESHOLD,
+        )
+
+        # Seed with (threshold + 1) fresh entries so the prune branch fires
+        # but the "drop expired" filter has nothing to remove. Keep the
+        # timestamps well inside VISIT_SESSION_GAP_SECONDS of ``now`` so
+        # none of them look expired to the filter.
+        base = 10_000.0
+        self.analytics._visitor_last_seen = {
+            f"visitor-{i}": base + (i * 0.01)
+            for i in range(_LAST_SEEN_PRUNE_THRESHOLD + 1)
+        }
+        # Total spread above is ~50s; ``now`` sits a hair beyond the last
+        # seeded entry so every seeded visitor is well inside the 30-min
+        # session window.
+        now_stub = base + (_LAST_SEEN_PRUNE_THRESHOLD * 0.01) + 1
+
+        with self.app.test_request_context(
+            "/hello", headers={"User-Agent": self.BROWSER_UA}
+        ):
+            from flask import session
+
+            session["user"] = {"email": "new-visitor@example.com"}
+            with patch(
+                "somewheria_app.services.analytics.time.monotonic",
+                return_value=now_stub,
+            ):
+                self.analytics.before_request()
+
+        self.assertLessEqual(
+            len(self.analytics._visitor_last_seen), _LAST_SEEN_PRUNE_THRESHOLD
+        )
+        self.assertEqual(
+            len(self.analytics._visitor_last_seen), _LAST_SEEN_HARD_CAP
+        )
+        # The newest visitor (this request) must survive the compaction so
+        # its next visit within the session window is still recognised.
+        self.assertIn("new-visitor@example.com", self.analytics._visitor_last_seen)
 
     def test_normalize_property_resets_non_list_photos(self):
         notifications = Mock()

@@ -561,7 +561,21 @@ class PropertyService:
         ids = payload.get("property_ids", [])
         if not isinstance(ids, list):
             return []
-        return [item for item in ids if isinstance(item, str)]
+        # Dedupe while preserving first-seen order. If upstream ever returns
+        # the same id twice (a transient replication artifact, or a bug in the
+        # ID-listing Lambda), a plain pass-through fans out to the details
+        # endpoint twice for that id AND leaves two copies of the same
+        # property in the cache — ``/for-rent`` then renders duplicate cards
+        # and ``get_property()`` only ever surfaces the first match. Enforce
+        # uniqueness at the boundary so both symptoms are impossible.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for item in ids:
+            if not isinstance(item, str) or item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped
 
     def fetch_property_record(self, property_id: str):
         # Defense in depth: refuse property IDs that don't match the expected

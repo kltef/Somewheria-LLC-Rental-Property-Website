@@ -25,6 +25,13 @@ def _make_config(base: Path) -> SimpleNamespace:
         contracts_file=base / "renter_contracts.json",
         tickets_file=base / "tickets.json",
         lead_capture_file=base / "pending_lead_captures.json",
+        # ``SqlStorageService._path_key`` compares the incoming path against
+        # every configured storage file, including the hidden-listings JSON,
+        # so this attribute has to be present for the unknown-path shim tests
+        # to even reach their assertion. Adding a new storage bucket without
+        # extending this fixture broke CI on main; keep every file the shim
+        # references listed here.
+        hidden_listings_file=base / "hidden_listings.json",
         sqlite_file=base / "test.sqlite3",
     )
 
@@ -223,6 +230,45 @@ class BinaryFileTestCase(SqlStorageBaseTestCase):
 
     def test_delete_file_returns_false_when_absent(self):
         self.assertFalse(self.storage.delete_file(self.base / "ghost.bin"))
+
+
+class HiddenListingsTestCase(SqlStorageBaseTestCase):
+    """The hidden-listings bucket landed without SQL-backend tests. Cover the
+    round-trip, the toggle semantics, and the path-shim wiring so future
+    additions to ``_path_key`` can't regress the shim silently again."""
+
+    def test_set_listing_hidden_round_trip(self):
+        self.storage.set_listing_hidden("prop-1", True)
+        self.assertEqual(self.storage.get_hidden_listing_ids(), ["prop-1"])
+
+    def test_set_listing_hidden_is_idempotent(self):
+        self.storage.set_listing_hidden("prop-1", True)
+        self.storage.set_listing_hidden("prop-1", True)
+        self.assertEqual(self.storage.get_hidden_listing_ids(), ["prop-1"])
+
+    def test_set_listing_hidden_false_removes_row(self):
+        self.storage.set_listing_hidden("prop-1", True)
+        self.storage.set_listing_hidden("prop-1", False)
+        self.assertEqual(self.storage.get_hidden_listing_ids(), [])
+
+    def test_get_hidden_listing_ids_sorted(self):
+        for pid in ("c", "a", "b"):
+            self.storage.set_listing_hidden(pid, True)
+        self.assertEqual(self.storage.get_hidden_listing_ids(), ["a", "b", "c"])
+
+    def test_load_via_path_shim(self):
+        self.storage.set_listing_hidden("prop-1", True)
+        loaded = self.storage.load_json_file(self.config.hidden_listings_file, [])
+        self.assertEqual(loaded, ["prop-1"])
+
+    def test_save_via_path_shim_replaces_table(self):
+        self.storage.set_listing_hidden("stale", True)
+        self.storage.save_json_file(
+            self.config.hidden_listings_file, ["fresh-1", "fresh-2"]
+        )
+        self.assertEqual(
+            self.storage.get_hidden_listing_ids(), ["fresh-1", "fresh-2"]
+        )
 
 
 class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
