@@ -43,6 +43,12 @@ VISIT_SESSION_GAP_SECONDS = 30 * 60
 # Cap on the visitor-recency map so a flood of one-off clients (scanners,
 # bots) can't grow it unbounded; stale entries are dropped once crossed.
 _LAST_SEEN_PRUNE_THRESHOLD = 5000
+# When the map is still oversized after dropping expired sessions, compact
+# it down to this size by evicting the oldest surviving entries. Keeps the
+# per-request cost O(1) amortized: a burst that leaves 5001 genuinely-fresh
+# visitors would otherwise trigger the full O(N) filter on every subsequent
+# request until at least one entry aged out of the 30-min session window.
+_LAST_SEEN_HARD_CAP = _LAST_SEEN_PRUNE_THRESHOLD // 2
 
 
 class AnalyticsTracker:
@@ -112,6 +118,21 @@ class AnalyticsTracker:
                     for key, seen in self._visitor_last_seen.items()
                     if now - seen < VISIT_SESSION_GAP_SECONDS
                 }
+                # If every visitor was still inside the session window the
+                # filter above dropped nothing. Under sustained load that
+                # would re-run this O(N) walk on every subsequent request
+                # until an entry finally ages out. Force-compact by keeping
+                # only the ``_LAST_SEEN_HARD_CAP`` most-recently-seen
+                # visitors — the evicted ones are the ones closest to the
+                # session boundary anyway, so a returning-visitor undercount
+                # is bounded to that small oldest tail.
+                if len(self._visitor_last_seen) > _LAST_SEEN_PRUNE_THRESHOLD:
+                    newest = sorted(
+                        self._visitor_last_seen.items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:_LAST_SEEN_HARD_CAP]
+                    self._visitor_last_seen = dict(newest)
             self.unique_users[today].add(visitor)
 
     def after_request(self, response):
