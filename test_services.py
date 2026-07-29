@@ -569,20 +569,44 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
         self.assertEqual(loaded["prop-2"], {"2030-05-01"})
 
-    def test_load_does_not_emit_info_logs(self):
-        # Regression: /property/<uuid> calls load() on every page view,
-        # including bot crawlers. Emitting INFO logs on each read fills
-        # the rotating application.log with duplicate lines and shortens
-        # the useful log retention window. Routine reads must stay at
-        # DEBUG so INFO retains signal for mutations and errors.
-        self.service.save({"prop-1": {"2030-05-01"}})
+    def test_load_skips_empty_property_id_line(self):
+        # A line stored with an empty property id (``:2030-01-10``) would
+        # otherwise land in the returned map under the "" key and get
+        # re-written verbatim by the next save(). Skip it silently so a
+        # hand-edited or corrupted file doesn't accumulate garbage entries.
+        self.appointments_path.write_text(
+            "prop-1:2030-01-10\n:2030-01-11\n",
+            encoding="utf-8",
+        )
+        loaded = self.service.load()
+        self.assertEqual(loaded, {"prop-1": {"2030-01-10"}})
+        self.assertNotIn("", loaded)
+
+    def test_load_does_not_log_at_info_on_every_call(self):
+        # load() is called on every /property/<uuid> page render; routine
+        # traces must sit at DEBUG so real-user traffic doesn't dominate
+        # application.log with no-signal messages. Regressions here would
+        # re-introduce the log flood this cleanup addressed.
+        self.appointments_path.write_text("prop-1:2030-01-10\n", encoding="utf-8")
         with patch.object(self.service.logger, "info") as info_mock:
             self.service.load()
-            # Also cover the missing-file branch, which had its own INFO
-            # line.
+            # Also cover the "missing file" branch — same rationale.
             self.appointments_path.unlink()
             self.service.load()
         info_mock.assert_not_called()
+
+    def test_save_does_not_log_at_info_or_call_print_check_file(self):
+        # save() is called from every booking; the successful path is
+        # observable via os.replace(), and log_site_change / the notification
+        # email in schedule_appointment already record the business event.
+        # An INFO trace here (and the redundant print_check_file() call the
+        # previous implementation made) is dead weight.
+        with patch.object(self.service.logger, "info") as info_mock, patch.object(
+            self.service, "print_check_file"
+        ) as print_check_mock:
+            self.service.save({"prop-1": {"2030-05-01"}})
+        info_mock.assert_not_called()
+        print_check_mock.assert_not_called()
 
 
 class PropertyServiceTestCase(unittest.TestCase):
