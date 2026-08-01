@@ -657,6 +657,19 @@ def admin_registrations():
                 title="Pending Registrations",
                 error="No email provided.",
             )
+        # Reject malformed emails at the admin boundary, matching admin_users
+        # add/update. The /register form already validates via is_valid_email,
+        # so a garbage email here means either a hand-crafted POST or a stale
+        # pending row from before the form-side validation landed — writing
+        # "renter" for it into user_roles.json produces a ghost account that
+        # never matches a real OAuth login and pollutes the roster forever.
+        if not is_valid_email(email):
+            return render_template(
+                "admin_registrations.html",
+                pending=pending,
+                title="Pending Registrations",
+                error="A valid email is required.",
+            )
         if action == "approve":
             # Only write a file role when it's an upgrade. A file entry wins
             # over the .env lists in get_user_role, so blindly writing
