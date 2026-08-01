@@ -547,6 +547,30 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         remove_pending_mock.assert_not_called()
         send_email_mock.assert_not_called()
 
+    def test_admin_registrations_rejects_invalid_email_on_post(self):
+        # A hand-crafted approve/reject POST with a malformed email must NOT
+        # write to user_roles or fire an email — the /register form validates
+        # with is_valid_email, and this admin-side guard mirrors admin_users
+        # add/update so a garbage POST can't slip a ghost account into the
+        # roster.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
+            self.services.storage,
+            "set_user_role",
+        ) as set_role_mock, patch.object(self.services.storage, "remove_pending_registration") as remove_pending_mock, patch.object(
+            self.services.notifications,
+            "send_email",
+        ) as send_email_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "not-an-email"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        set_role_mock.assert_not_called()
+        remove_pending_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+
     def test_admin_registrations_rejects_invalid_action(self):
         self.login_as("admin")
         with patch.object(
