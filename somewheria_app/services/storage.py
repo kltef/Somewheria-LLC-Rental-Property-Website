@@ -112,9 +112,15 @@ class FileStorageService:
             return True
 
     def remove_pending_registration(self, email: str) -> None:
+        target = email.lower()
         with self.file_lock:
+            # ``or ""`` so a legacy row persisted with ``email: null`` (which
+            # ``add_pending_registration`` now rejects but earlier writes did
+            # not) doesn't blow up ``None.lower()`` and abort the admin's
+            # approve/reject POST inside the file lock.
             registrations = [
-                item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
+                item for item in self.get_pending_registrations()
+                if (item.get("email") or "").lower() != target
             ]
             self.save_json_file(self.config.registration_file, registrations)
 
@@ -166,17 +172,23 @@ class FileStorageService:
             leads = self.get_pending_lead_captures()
             # De-duplicate by email so a repeated submission doesn't bloat the file
             # or give the requester a way to flood the admin UI.
-            if any(item.get("email", "").lower() == target_email for item in leads):
+            # ``or ""`` guards against legacy rows with a null email field —
+            # ``None.lower()`` would raise inside the file lock and abort the
+            # submission for every subsequent caller until an admin cleaned
+            # the file up.
+            if any((item.get("email") or "").lower() == target_email for item in leads):
                 return False
             leads.append(lead)
             self.save_json_file(self.config.lead_capture_file, leads)
             return True
 
     def remove_pending_lead_capture(self, email: str) -> None:
+        target = email.lower()
         with self.file_lock:
+            # See remove_pending_registration for the ``or ""`` rationale.
             leads = [
                 item for item in self.get_pending_lead_captures()
-                if item.get("email", "").lower() != email.lower()
+                if (item.get("email") or "").lower() != target
             ]
             self.save_json_file(self.config.lead_capture_file, leads)
 
