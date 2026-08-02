@@ -308,6 +308,64 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}],
         )
 
+    def test_remove_pending_registration_tolerates_null_email_row(self):
+        # ``add_pending_registration`` now rejects null-email entries, but a
+        # legacy on-disk file (or a hand-edit) can still carry
+        # ``{"email": null}`` rows. ``.get("email", "")`` returns None for
+        # those and the resulting ``None.lower()`` used to crash the admin's
+        # approve/reject POST inside the file lock, blocking every subsequent
+        # writer until the file was cleaned by hand.
+        with patch.object(
+            self.service,
+            "get_pending_registrations",
+            return_value=[
+                {"email": None, "name": "Legacy"},
+                {"email": "drop@example.com"},
+                {"email": "keep@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_registration("DROP@example.com")
+
+        save_json_mock.assert_called_once_with(
+            self.config.registration_file,
+            [{"email": None, "name": "Legacy"}, {"email": "keep@example.com"}],
+        )
+
+    def test_remove_pending_lead_capture_tolerates_null_email_row(self):
+        # Mirror of the pending-registration guard for the leads bucket; both
+        # buckets share the same JSON-file shape and the same historical
+        # exposure to null-email rows.
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[
+                {"email": None},
+                {"email": "drop@example.com"},
+                {"email": "keep@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_lead_capture("drop@example.com")
+
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [{"email": None}, {"email": "keep@example.com"}],
+        )
+
+    def test_add_pending_lead_capture_tolerates_null_email_row_in_dedup(self):
+        # If a legacy row with a null email is already in the list, the
+        # duplicate-check for a new submission must not crash on
+        # ``None.lower()``; otherwise every subsequent lead submission fails
+        # (and the caller sees a 500) until the file is cleaned by hand.
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[{"email": None}, {"email": "existing@example.com"}],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_lead_capture({"email": "new@example.com"})
+            )
+        save_json_mock.assert_called_once()
+
     def test_set_user_role_lowercases_email_and_saves(self):
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,
