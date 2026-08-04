@@ -132,12 +132,20 @@ class FileStorageService:
         with self.file_lock:
             roles = self.get_user_roles()
             previous = roles.get(email)
+            # Nothing to change: absent means no local role to revoke, and an
+            # existing "revoked" tombstone is already the target state. Skip
+            # the disk write in both cases — a bulk admin sweep that hits the
+            # already-revoked path used to rewrite the whole file for no
+            # effect (same shape as the set_email_updates no-op fix in
+            # commit 38390e2).
+            if previous is None or previous == "revoked":
+                return False
             # Store a tombstone ("revoked") instead of removing the key outright
             # so that env-var fallbacks in AuthService.get_user_role cannot
             # silently restore a deleted user's access on their next login.
             roles[email] = "revoked"
             self.save_json_file(self.config.user_roles_file, roles)
-        return previous is not None and previous != "revoked"
+        return True
 
     def get_renter_profiles(self) -> dict:
         return self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)
