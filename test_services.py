@@ -331,6 +331,10 @@ class FileStorageServiceTestCase(unittest.TestCase):
         save_json_mock.assert_called_once_with(self.config.user_roles_file, {"admin@example.com": "revoked"})
 
     def test_delete_user_role_returns_false_when_missing(self):
+        # An absent user has no local role to revoke: skip the disk write
+        # entirely rather than persisting a tombstone for a nonexistent key
+        # (which would pollute user_roles.json with rows for every
+        # hand-crafted POST hitting an unknown email).
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,
             "save_json_file",
@@ -338,7 +342,21 @@ class FileStorageServiceTestCase(unittest.TestCase):
             removed = self.service.delete_user_role("missing@example.com")
 
         self.assertFalse(removed)
-        save_json_mock.assert_called_once_with(self.config.user_roles_file, {"missing@example.com": "revoked"})
+        save_json_mock.assert_not_called()
+
+    def test_delete_user_role_no_op_when_already_revoked(self):
+        # Re-revoking an already-revoked user must NOT rewrite the file: it
+        # doesn't change disk state and would otherwise churn on repeated
+        # admin action or a bulk sweep.
+        with patch.object(
+            self.service,
+            "get_user_roles",
+            return_value={"gone@example.com": "revoked"},
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            removed = self.service.delete_user_role("gone@example.com")
+
+        self.assertFalse(removed)
+        save_json_mock.assert_not_called()
 
     def test_save_renter_profiles_delegates_to_save_json_file(self):
         profiles = {"renter@example.com": {"name": "Jamie"}}
