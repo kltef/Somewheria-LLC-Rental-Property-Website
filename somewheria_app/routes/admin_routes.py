@@ -1056,6 +1056,16 @@ def contract_download(contract_id: str):
             download_name=f"contract-{contract_id[:8]}.pdf",
         )
     except Exception:
+        # send_file races with admin delete (unlink between the exists()
+        # check above and Flask's open()), hits permission errors, or
+        # trips over a truncated PDF -- all real infrastructure faults,
+        # not "not found." Log with contract_id + path so admins have a
+        # trail, then keep the 404 fallback so the renter response stays
+        # stable and no partial body is streamed.
+        current_app.logger.exception(
+            "contract_download: send_file failed for %s at %s",
+            contract_id, pdf_path,
+        )
         abort(404)
 
 
