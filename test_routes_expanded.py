@@ -2058,6 +2058,58 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/does-not-exist/download")
         self.assertEqual(response.status_code, 404)
 
+    def test_contract_download_logs_when_send_file_raises_after_exists_check(self):
+        # The contract exists in storage AND its PDF is on disk (the two
+        # existence checks the route runs before touching send_file), but
+        # send_file itself blows up -- a stand-in for the real fault modes:
+        # a race with an admin delete unlinking the PDF between the exists()
+        # check and send_file's open(), a permission problem on the upload
+        # dir, or a truncated PDF. The old handler swallowed those as a
+        # bare abort(404), leaving admins with no log trail. The response
+        # stays 404 (behavior compatible) but the exception must now hit
+        # the app logger so the failure is diagnosable.
+        self.login_as("renter", email="renter@example.com")
+        contract_id = "contract-send-file-boom"
+        upload_dir = self.services.config.contract_upload_dir
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = upload_dir / f"{contract_id}.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 sample")
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": contract_id,
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": f"{contract_id}.pdf",
+                }
+            ]
+        }
+        try:
+            with patch.object(
+                self.services.storage,
+                "get_renter_contracts",
+                return_value=contracts_data,
+            ), patch(
+                "somewheria_app.routes.admin_routes.send_file",
+                side_effect=PermissionError("simulated I/O failure"),
+            ):
+                with self.assertLogs(self.app.logger, level="ERROR") as log_ctx:
+                    response = self.client.get(
+                        f"/contracts/{contract_id}/download"
+                    )
+            self.assertEqual(response.status_code, 404)
+            joined = "\n".join(log_ctx.output)
+            self.assertIn("contract_download", joined)
+            self.assertIn(contract_id, joined)
+            self.assertIn("PermissionError", joined)
+        finally:
+            try:
+                pdf_path.unlink()
+            except OSError:
+                pass
+
     def test_contract_pdfs_stored_outside_static_tree(self):
         """Regression: contract PDFs must not live under ``static/`` because
         Flask's static handler would serve them at /static/uploads/contracts/...
