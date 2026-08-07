@@ -86,9 +86,31 @@ class AppointmentService:
 
     def book(self, property_id: str, iso_date: str) -> bool:
         # Returns True when the booking was newly recorded, False when the
-        # date was already taken for that property. Load+save run under the
-        # same lock so a second caller cannot squeeze in between and produce
-        # a double-booking on the same property/date.
+        # date was already taken for that property (or the inputs were
+        # rejected). Load+save run under the same lock so a second caller
+        # cannot squeeze in between and produce a double-booking on the
+        # same property/date.
+        #
+        # Reject inputs the on-disk format cannot round-trip. The
+        # appointments file is line-oriented ``property_id:date1,date2``;
+        # the load side splits on the first ``:``, filters empty property
+        # ids, and drops empty dates from the comma-separated set. A caller
+        # bypassing the route's upstream validation with an empty value or
+        # one containing ``:`` / ``,`` / a newline would otherwise get
+        # ``True`` back from a booking whose next ``load()`` silently drops
+        # the row, so a repeat "already booked" caller cannot happen and a
+        # cascade of ghost True's stacks up in the file. Rejecting here
+        # matches ``PROPERTY_ID_PATTERN`` (colon and comma are already
+        # forbidden by the route) and turns a silent corruption into a
+        # visible ``False`` at the boundary.
+        if not isinstance(property_id, str) or not property_id.strip():
+            return False
+        if not isinstance(iso_date, str) or not iso_date.strip():
+            return False
+        if any(bad in property_id for bad in (":", ",", "\n", "\r")):
+            return False
+        if any(bad in iso_date for bad in (":", ",", "\n", "\r")):
+            return False
         with self._lock:
             appointments = self.load()
             booked = appointments.setdefault(property_id, set())
