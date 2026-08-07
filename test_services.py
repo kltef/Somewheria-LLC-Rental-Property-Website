@@ -569,6 +569,48 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded["prop-1"], {"2030-05-01", "2030-05-02"})
         self.assertEqual(loaded["prop-2"], {"2030-05-01"})
 
+    def test_book_rejects_empty_property_id(self):
+        # An empty / whitespace property id would setdefault a "" key and
+        # persist a ``:date`` line the next load() silently drops, so the
+        # booking is lost and the caller can't tell. Reject at the boundary.
+        self.assertFalse(self.service.book("", "2030-05-01"))
+        self.assertFalse(self.service.book("   ", "2030-05-01"))
+        self.assertFalse(self.appointments_path.exists())
+
+    def test_book_rejects_empty_iso_date(self):
+        # An empty iso_date lands as ``prop-1:`` on disk; load() then filters
+        # the empty date out and returns an empty set, so the "booked" date is
+        # gone. Refusing here surfaces the failure to the caller.
+        self.assertFalse(self.service.book("prop-1", ""))
+        self.assertFalse(self.service.book("prop-1", "   "))
+        self.assertFalse(self.appointments_path.exists())
+
+    def test_book_rejects_property_id_containing_format_delimiters(self):
+        # ``:`` is the property_id/dates separator, ``,`` splits the dates,
+        # and a newline ends a record — any of these embedded in an id would
+        # produce a line load() misparses (best case: one lost booking; worst
+        # case: two properties collapse into one).
+        for bad_id in ("bad:id", "bad,id", "bad\nid", "bad\rid"):
+            self.assertFalse(self.service.book(bad_id, "2030-05-01"), bad_id)
+        self.assertFalse(self.appointments_path.exists())
+
+    def test_book_rejects_iso_date_containing_format_delimiters(self):
+        # Same rationale as the property-id case: a ``,`` in a date joins
+        # two dates into one on the wire; a ``:`` shifts the boundary between
+        # property_id and dates; a newline splits one record into two.
+        for bad_date in ("2030-05-01,2030-05-02", "2030-05-01:12:00", "2030\n05-01"):
+            self.assertFalse(self.service.book("prop-1", bad_date), bad_date)
+        self.assertFalse(self.appointments_path.exists())
+
+    def test_book_rejects_non_string_inputs(self):
+        # Defensive: a caller passing an int/None/bytes would otherwise trip
+        # str-only paths inside load()/save() with a less obvious error.
+        self.assertFalse(self.service.book(None, "2030-05-01"))
+        self.assertFalse(self.service.book("prop-1", None))
+        self.assertFalse(self.service.book(123, "2030-05-01"))
+        self.assertFalse(self.service.book("prop-1", 20300501))
+        self.assertFalse(self.appointments_path.exists())
+
     def test_load_skips_empty_property_id_line(self):
         # A line stored with an empty property id (``:2030-01-10``) would
         # otherwise land in the returned map under the "" key and get

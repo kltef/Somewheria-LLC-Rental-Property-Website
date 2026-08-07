@@ -288,17 +288,25 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
-        self.assertFalse(hasattr(self.config, "hidden_listings_file"))
-        self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
-        self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
+        # DID configure correctly.
+        #
+        # The shared ``_make_config`` fixture deliberately sets
+        # ``hidden_listings_file`` (the other cases in
+        # ``HiddenListingsTestCase`` need it to route through the path
+        # shim). Build a local ``SimpleNamespace`` with that attribute
+        # stripped so this case actually exercises the missing-attribute
+        # branch of ``_path_key``'s ``getattr(..., None)`` fallback.
+        stripped_config = SimpleNamespace(
+            **{k: v for k, v in vars(self.config).items() if k != "hidden_listings_file"}
+        )
+        self.assertFalse(hasattr(stripped_config, "hidden_listings_file"))
+        storage = SqlStorageService(stripped_config)
+        self.assertEqual(storage.load_json_file(self.base / "unknown.json", []), [])
+        storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
         # A path that IS configured must still route correctly.
-        self.storage.set_user_role("still-works@example.com", "renter")
+        storage.set_user_role("still-works@example.com", "renter")
         self.assertEqual(
-            self.storage.get_user_roles(),
+            storage.get_user_roles(),
             {"still-works@example.com": "renter"},
         )
 
