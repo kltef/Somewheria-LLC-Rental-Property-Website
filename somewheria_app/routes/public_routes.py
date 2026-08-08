@@ -119,6 +119,20 @@ def _truncate_meta_description(text: str) -> str:
     return text[:_META_DESCRIPTION_TRUNCATE_AT].rstrip() + "…"
 
 
+def _pluralize_count(count, singular: str) -> str:
+    # "2 bed" and "3 bath" read wrong to a human eye and land in Google
+    # search snippets exactly that way — meta_description is what the crawler
+    # sees for the fact-fallback path. Pluralize only when the count parses
+    # as a number != 1 (so free-form values like "Studio" fall through as-is
+    # rather than becoming "Studios").
+    try:
+        numeric = float(count)
+    except (TypeError, ValueError):
+        return f"{count} {singular}"
+    label = singular if numeric == 1 else f"{singular}s"
+    return f"{count} {label}"
+
+
 def _property_meta_description(prop: dict) -> str:
     """A concise, factual search-result summary for one listing.
 
@@ -134,9 +148,9 @@ def _property_meta_description(prop: dict) -> str:
     bits = []
     beds, baths = prop.get("bedrooms"), prop.get("bathrooms")
     if beds not in (None, "", "N/A"):
-        bits.append(f"{beds} bed")
+        bits.append(_pluralize_count(beds, "bed"))
     if baths not in (None, "", "N/A"):
-        bits.append(f"{baths} bath")
+        bits.append(_pluralize_count(baths, "bath"))
     rent = prop.get("rent")
     if rent not in (None, "", "N/A"):
         # Trim a trailing ".0" the upstream sends (rent comes back as a float),

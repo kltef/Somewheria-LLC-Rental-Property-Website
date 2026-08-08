@@ -2415,6 +2415,60 @@ class PropertyMetaDescriptionTestCase(unittest.TestCase):
         self.assertNotIn("N/A", desc)
         self.assertNotIn(" in .", desc)
 
+    def test_fact_fallback_pluralizes_bed_and_bath_counts(self):
+        # The fact-based path used to emit "{n} bed" / "{n} bath" regardless
+        # of count, so a 2-bedroom listing without a blurb read "2 bed" in
+        # Google's search snippet. Match natural English: singular only when
+        # the count is exactly 1.
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="3",
+            address="123 Main St",
+        )
+        self.assertIn("2 beds", desc)
+        self.assertNotIn("2 bed,", desc)
+        self.assertIn("3 baths", desc)
+        self.assertNotIn("3 bath,", desc)
+        self.assertNotIn("3 bath ", desc)
+
+    def test_fact_fallback_keeps_singular_for_one(self):
+        # Both string "1" and int 1 count as singular; a half-count like 1.5
+        # is plural.
+        for beds, baths in (("1", "1"), (1, 1)):
+            desc, _ = self._describe(
+                name="Maple House",
+                bedrooms=beds,
+                bathrooms=baths,
+                address="123 Main St",
+            )
+            self.assertIn(f"{beds} bed,", desc)
+            self.assertIn(f"{baths} bath ", desc + " ")
+            self.assertNotIn("beds", desc)
+            self.assertNotIn("baths", desc)
+
+    def test_fact_fallback_pluralizes_half_baths(self):
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="1.5",
+            address="123 Main St",
+        )
+        self.assertIn("1.5 baths", desc)
+
+    def test_fact_fallback_passes_through_non_numeric_bedrooms(self):
+        # Free-form values (e.g. "Studio") don't parse as numbers; leave them
+        # alone rather than tacking on an "s".
+        desc, _ = self._describe(
+            name="Loft",
+            bedrooms="Studio",
+            bathrooms="1",
+            address="123 Main St",
+        )
+        self.assertIn("Studio bed", desc)
+        self.assertNotIn("Studios", desc)
+        self.assertNotIn("Studio beds", desc)
+
 
 if __name__ == "__main__":
     unittest.main()
