@@ -419,6 +419,29 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(current, current_before)
         self.assertEqual(latest, latest_before)
 
+    def test_build_change_log_produces_deterministic_ordering(self):
+        # The diff is written into a JSONL change log and read back by
+        # analytics.recent_listing_activity. ``changed`` and each entry's
+        # ``fields`` list used to come out of set iteration, so identical
+        # inputs produced different byte outputs on every refresh — noise
+        # for anyone diffing site_changes.log. Both lists should be sorted
+        # so identical inputs produce byte-identical entries.
+        current = [
+            {"id": "prop-b", "name": "Old B", "rent": "1000", "description": "old"},
+            {"id": "prop-a", "name": "Old A", "rent": "900"},
+        ]
+        latest = [
+            {"id": "prop-b", "name": "New B", "rent": "1100", "description": "new"},
+            {"id": "prop-a", "name": "New A", "rent": "950"},
+        ]
+        first = self.service._build_change_log(current, latest)
+        second = self.service._build_change_log(current, latest)
+        self.assertEqual(first, second)
+        changed_ids = [entry["id"] for entry in first["changed"]]
+        self.assertEqual(changed_ids, sorted(changed_ids))
+        for entry in first["changed"]:
+            self.assertEqual(entry["fields"], sorted(entry["fields"]))
+
     def test_fetch_all_properties_filters_out_missing_records(self):
         with patch.object(self.service, "_fetch_property_ids", return_value=["prop-1", "prop-2"]), patch.object(
             self.service,
@@ -1317,6 +1340,24 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
                 self.analytics.before_request()
 
         self.assertEqual(sum(self.analytics.site_visits.values()), 2)
+
+    def test_mixed_case_email_collapses_to_single_visitor(self):
+        # ``record_login`` (in auth_routes) passes a lowercased email, but
+        # the session cookie carries whatever case Google returned. Without
+        # case-normalizing the visitor key in ``before_request``, the same
+        # person shows up as two distinct entries in ``unique_users`` on
+        # days they visit both anonymously and after login.
+        for email in ("Sam@Example.com", "sam@example.com", "SAM@EXAMPLE.COM"):
+            with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+                from flask import session
+
+                session["user"] = {"email": email}
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+        unique_today = next(iter(self.analytics.unique_users.values()))
+        self.assertEqual(len(unique_today), 1)
+        self.assertIn("sam@example.com", unique_today)
 
     def test_visit_counts_again_after_session_gap(self):
         from somewheria_app.services.analytics import VISIT_SESSION_GAP_SECONDS

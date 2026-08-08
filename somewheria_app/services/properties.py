@@ -505,10 +505,20 @@ class PropertyService:
         changed = []
         current_by_id = by_id(current_properties)
         latest_by_id = by_id(latest_properties)
-        for property_id in old_ids & new_ids:
+        # Sort both the id traversal and the per-property fields list so
+        # identical semantic diffs produce byte-identical change-log entries.
+        # Set iteration order is unspecified in Python, which meant a
+        # cache_updated entry written twice from the same input carried
+        # different orderings of ``changed`` and ``fields`` — noise for
+        # anyone diffing site_changes.log between runs, and enough to flake
+        # equality assertions that happen to compare the serialized entry.
+        for property_id in sorted(old_ids & new_ids):
             old = current_by_id[property_id]
             new = latest_by_id[property_id]
-            diffs = [key for key in set(old.keys()).union(new.keys()) if old.get(key) != new.get(key)]
+            diffs = sorted(
+                key for key in set(old.keys()) | set(new.keys())
+                if old.get(key) != new.get(key)
+            )
             if diffs:
                 changed.append({"id": property_id, "fields": diffs})
         return {
