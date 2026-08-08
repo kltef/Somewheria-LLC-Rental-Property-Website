@@ -27,6 +27,21 @@ MAX_APPOINTMENT_DAYS_AHEAD = 365
 ALLOWED_CONTACT_METHODS = {"email", "phone", "text", "sms", "call"}
 
 
+def _json_str(payload: dict, key: str, max_len: int) -> str:
+    """Read a JSON field, coerce non-strings to "", strip + cap length.
+
+    ``request.get_json()`` yields whatever the client sent, so a value like
+    ``{"name": 42}`` or ``{"date": ["a"]}`` slips past a plain
+    ``(value or "").strip()`` and crashes with AttributeError — which the
+    global crash handler turns into a bare 503 AND fires an alert email.
+    Coercing at the boundary means a malformed body is a clean 400 instead.
+    """
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:max_len]
+
+
 def home():
     return render_template(
         "home.html",
@@ -204,10 +219,10 @@ def schedule_appointment(uuid):
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return jsonify(success=False, error="Invalid payload."), 400
-    name = (data.get("name") or "").strip()[:MAX_NAME_LEN]
-    date = (data.get("date") or "").strip()[:MAX_DATE_LEN]
-    contact_method = (data.get("contact_method") or "").strip().lower()[:32]
-    contact_info = (data.get("contact_info") or "").strip()[:MAX_CONTACT_LEN]
+    name = _json_str(data, "name", MAX_NAME_LEN)
+    date = _json_str(data, "date", MAX_DATE_LEN)
+    contact_method = _json_str(data, "contact_method", 32).lower()
+    contact_info = _json_str(data, "contact_info", MAX_CONTACT_LEN)
 
     if not name or not contact_info:
         return jsonify(success=False, error="Name and contact info are required."), 400
