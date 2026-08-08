@@ -260,6 +260,65 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Invalid date.")
 
+    def test_schedule_appointment_coerces_non_string_json_values(self):
+        # A hostile / broken client that submits non-string values (int, list,
+        # dict, null) used to crash on ``(value or "").strip()`` — an
+        # AttributeError swallowed by the global crash handler, which returned
+        # a bare 503 AND fired a crash-alert email. Non-string values must be
+        # treated as absent so the endpoint answers with a clean validation
+        # 400 (and no crash email) regardless of what shape the client sends.
+        with patch.object(self.services.notifications, "send_email") as send_email_mock:
+            responses = [
+                # Non-string name -> "name required" 400 (not a 503).
+                self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": 42,
+                        "date": "2099-01-01",
+                        "contact_method": "email",
+                        "contact_info": "alex@example.com",
+                    },
+                ),
+                # Non-string contact_info -> "name required" 400.
+                self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": "2099-01-01",
+                        "contact_method": "email",
+                        "contact_info": ["alex@example.com"],
+                    },
+                ),
+                # Non-string date -> "Invalid date." 400.
+                self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": {"year": 2099},
+                        "contact_method": "email",
+                        "contact_info": "alex@example.com",
+                    },
+                ),
+                # Non-string contact_method -> coerced to "" and accepted.
+                # (Empty contact_method skips the ALLOWED_CONTACT_METHODS
+                # check by design; asserting on the earlier ``date`` 400 so
+                # this test doesn't need to also seed a working booking.)
+                self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": "bad",
+                        "contact_method": ["email"],
+                        "contact_info": "alex@example.com",
+                    },
+                ),
+            ]
+
+        for response in responses:
+            self.assertEqual(response.status_code, 400)
+        # No route-thrown exceptions means the crash handler never ran.
+        send_email_mock.assert_not_called()
+
     def test_schedule_appointment_rejects_past_date(self):
         past_date = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 
