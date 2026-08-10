@@ -288,17 +288,34 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
-        self.assertFalse(hasattr(self.config, "hidden_listings_file"))
-        self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
-        self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
-        # A path that IS configured must still route correctly.
-        self.storage.set_user_role("still-works@example.com", "renter")
+        # DID configure correctly.
+        #
+        # The shared ``_make_config`` fixture DOES set every known attribute
+        # (bd1d1a3 added ``hidden_listings_file`` to keep CI green), so this
+        # test builds an independent, deliberately incomplete config and
+        # points a fresh SqlStorageService at it to exercise the branch
+        # directly. Depending on what the fixture happens to include today
+        # made the test flaky against future fixture edits.
+        partial_config = SimpleNamespace(
+            registration_file=self.base / "pending_registrations.json",
+            user_roles_file=self.base / "user_roles.json",
+            renter_profile_file=self.base / "renter_profiles.json",
+            contracts_file=self.base / "renter_contracts.json",
+            tickets_file=self.base / "tickets.json",
+            lead_capture_file=self.base / "pending_lead_captures.json",
+            # ``hidden_listings_file`` intentionally omitted.
+            sqlite_file=self.base / "partial.sqlite3",
+        )
+        self.assertFalse(hasattr(partial_config, "hidden_listings_file"))
+        partial_storage = SqlStorageService(partial_config)
         self.assertEqual(
-            self.storage.get_user_roles(),
+            partial_storage.load_json_file(self.base / "unknown.json", []), []
+        )
+        partial_storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
+        # A path that IS configured must still route correctly.
+        partial_storage.set_user_role("still-works@example.com", "renter")
+        self.assertEqual(
+            partial_storage.get_user_roles(),
             {"still-works@example.com": "renter"},
         )
 
