@@ -733,8 +733,13 @@ class PropertyService:
                 # whose description reads "No pets allowed" would have its
                 # explicit "No" flipped to "Yes" by the substring match.
                 # Negations are checked first so that inference itself can
-                # produce "No", and \bpet keeps carpet/trumpet/puppet from
-                # matching at all.
+                # produce "No". The affirmative pattern anchors both edges of
+                # "pet"/"pets" as a whole word — the earlier ``\bpet`` prefix
+                # match falsely fired "Yes" on unrelated words that happen to
+                # start with those letters (``petunias`` in a garden blurb,
+                # ``petition``, ``petroleum``); ``\bpets?\b`` still catches
+                # legitimate mentions like "pet friendly", "small pet ok",
+                # or "pets welcome" without those false positives.
                 amenity_text = " ".join(
                     str(item).lower()
                     for item in normalized.get("included_amenities", [])
@@ -745,7 +750,7 @@ class PropertyService:
                     searchable,
                 ):
                     pets_allowed = "No"
-                elif re.search(r"\bpet", searchable):
+                elif re.search(r"\bpets?\b", searchable):
                     pets_allowed = "Yes"
                 else:
                     pets_allowed = "Unknown"
