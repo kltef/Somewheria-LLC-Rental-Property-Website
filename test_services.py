@@ -734,6 +734,44 @@ class PropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(normalized["included_amenities"], [])
         self.assertEqual(normalized["pets_allowed"], "Yes")
 
+    def test_normalize_property_pets_inference_ignores_words_starting_with_pet(self):
+        # The old ``\bpet`` prefix match fired on unrelated words that happen
+        # to start with the same three letters — a garden blurb mentioning
+        # "petunias", a legal note mentioning a "petition", or any listing
+        # that quoted a "petroleum" fixture would flip ``pets_allowed`` to
+        # "Yes" even though no pet policy was described. The whole-word
+        # ``\bpets?\b`` anchor should leave those cases as "Unknown".
+        for description in (
+            "Wraparound garden with mature petunias and roses.",
+            "Prior owner filed a petition to rezone the lot.",
+            "Historic block; petroleum lantern fixtures preserved.",
+        ):
+            normalized = self.service.normalize_property(
+                {"name": "Maple", "description": description}, "prop-1"
+            )
+            self.assertEqual(
+                normalized["pets_allowed"],
+                "Unknown",
+                msg=f"false pet inference for description {description!r}",
+            )
+
+    def test_normalize_property_pets_inference_still_matches_pet_and_pets(self):
+        # Confirm the tightened regex still catches the affirmative phrasings
+        # the previous behavior was actually there to handle.
+        for description in (
+            "Small pet allowed with prior approval.",
+            "Pets welcome; deposit applies.",
+            "Cat-friendly unit — one pet limit.",
+        ):
+            normalized = self.service.normalize_property(
+                {"name": "Maple", "description": description}, "prop-1"
+            )
+            self.assertEqual(
+                normalized["pets_allowed"],
+                "Yes",
+                msg=f"missed pet inference for description {description!r}",
+            )
+
     def test_normalize_property_coerces_non_list_included_amenities_to_empty_list(self):
         # A malformed upstream payload that returns a string (or any other
         # non-list) for included_amenities must not crash; the string would

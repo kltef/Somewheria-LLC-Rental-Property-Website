@@ -288,10 +288,13 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
+        # DID configure correctly. Strip a known attribute here to
+        # exercise the ``getattr(..., None)`` fallback in ``_path_key``:
+        # the stock fixture now lists every configured file (commit
+        # bd1d1a3 extended it with ``hidden_listings_file`` to restore
+        # CI), so the test has to remove one intentionally to keep
+        # covering the missing-attribute contract.
+        del self.config.hidden_listings_file
         self.assertFalse(hasattr(self.config, "hidden_listings_file"))
         self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
@@ -301,6 +304,13 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
             self.storage.get_user_roles(),
             {"still-works@example.com": "renter"},
         )
+        # And the previously-configured path (now missing) itself falls
+        # through to the "unknown path" branch, exercising getattr's
+        # None default rather than the equality comparison that would
+        # otherwise raise AttributeError.
+        removed_path = self.base / "hidden_listings.json"
+        self.assertEqual(self.storage.load_json_file(removed_path, []), [])
+        self.storage.save_json_file(removed_path, ["prop-1"])
 
 
 class AtomicTestCase(SqlStorageBaseTestCase):
