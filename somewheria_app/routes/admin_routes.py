@@ -920,10 +920,25 @@ def admin_contracts():
                     # (which silently drops one of the new contracts on the
                     # file backend). Same class of fix as commit e062313
                     # made for tickets and pending registrations.
-                    with services.storage.atomic():
-                        contracts_data = services.storage.get_renter_contracts()
-                        contracts_data.setdefault(renter_email, []).append(new_contract)
-                        services.storage.save_renter_contracts(contracts_data)
+                    try:
+                        with services.storage.atomic():
+                            contracts_data = services.storage.get_renter_contracts()
+                            contracts_data.setdefault(renter_email, []).append(new_contract)
+                            services.storage.save_renter_contracts(contracts_data)
+                    except Exception:
+                        # save_renter_contracts failed after the PDF was
+                        # already written; without a renter_contracts entry
+                        # pointing at it, the file becomes an orphan under
+                        # contract_upload_dir that repeated failures would
+                        # accumulate. Best-effort delete before re-raising so
+                        # the crash handler still turns this into a 503 —
+                        # same pattern TicketService.add_photo uses for the
+                        # ticket-photo write.
+                        if pdf_filename:
+                            services.storage.delete_file(
+                                services.config.contract_upload_dir / pdf_filename
+                            )
+                        raise
                     success = f"Contract added for {renter_email}."
         elif action == "delete":
             renter_email = request.form.get("renter_email", "").strip().lower()
