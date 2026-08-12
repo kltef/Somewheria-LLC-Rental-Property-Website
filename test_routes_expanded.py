@@ -1869,6 +1869,90 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(contract["id"], contract["pdf_filename"])
         self.assertEqual(captured["bytes"], b"%PDF-1.4 hello")
 
+    def test_admin_contracts_add_cleans_up_pdf_on_persist_failure(self):
+        # If save_renter_contracts blows up after the PDF is already on
+        # disk, nothing in renter_contracts references the file — the
+        # upload dir would accumulate <uuid>.pdf orphans on repeated
+        # failures. The route must delete the just-written file before
+        # letting the exception propagate to the crash handler, mirroring
+        # TicketService.add_photo's post-write cleanup.
+        self.login_as("admin")
+        captured = {}
+
+        def fake_save(target, data):
+            captured["path"] = target
+            captured["bytes"] = data
+            return True
+
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={}
+        ), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+            side_effect=OSError("disk full"),
+        ), patch.object(
+            self.services.storage, "save_binary_file", side_effect=fake_save
+        ), patch.object(
+            self.services.storage, "delete_file", return_value=True
+        ) as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                    "contract_pdf": (BytesIO(b"%PDF-1.4 hello"), "lease.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        # The crash handler turns the propagated exception into a bare 503;
+        # the important assertion is that the orphan PDF got cleaned up.
+        self.assertEqual(response.status_code, 503)
+        delete_file_mock.assert_called_once()
+        cleaned_path = delete_file_mock.call_args[0][0]
+        self.assertEqual(cleaned_path, captured["path"])
+        # The file the route tried to clean up must sit inside the
+        # configured contract upload dir — not anywhere else on disk.
+        upload_root = self.services.config.contract_upload_dir.resolve()
+        self.assertEqual(cleaned_path.parent.resolve(), upload_root)
+
+    def test_admin_contracts_add_persist_failure_without_pdf_skips_cleanup(self):
+        # When the admin adds a contract with no PDF uploaded, a subsequent
+        # persist failure must NOT call delete_file at all — there's no
+        # orphan to clean up, and a spurious delete_file(<empty-name>) call
+        # would be a bug.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value={}
+        ), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+            side_effect=OSError("disk full"),
+        ), patch.object(
+            self.services.storage, "save_binary_file"
+        ) as save_binary_mock, patch.object(
+            self.services.storage, "delete_file"
+        ) as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 503)
+        save_binary_mock.assert_not_called()
+        delete_file_mock.assert_not_called()
+
     def test_admin_contracts_rejects_non_pdf_upload(self):
         self.login_as("admin")
         with patch.object(
