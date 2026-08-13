@@ -111,6 +111,38 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.get("/", headers={"X-Request-Id": "trace-me-123"})
         self.assertEqual(response.headers.get("X-Request-Id"), "trace-me-123")
 
+    def test_inbound_request_id_with_tab_is_rejected(self):
+        # A tab inside the id would split the ConsoleFormatter's ``[<id>]``
+        # log tag and get echoed verbatim into the response header. Reject
+        # the whole header and generate a fresh id rather than trying to
+        # strip the bad character (the client can see, via the echoed
+        # header, that we didn't honor their trace id).
+        response = self.client.get("/", headers={"X-Request-Id": "a\tb"})
+        returned = response.headers.get("X-Request-Id", "")
+        self.assertNotEqual(returned, "a\tb")
+        self.assertNotIn("\t", returned)
+        self.assertTrue(returned)
+
+    def test_inbound_request_id_whitespace_only_is_rejected(self):
+        # An id of only whitespace previously became the request_id and
+        # produced an empty-looking ``[   ]`` tag in every log line the
+        # request emitted; fall back to a fresh UUID instead.
+        response = self.client.get("/", headers={"X-Request-Id": "   "})
+        returned = response.headers.get("X-Request-Id", "")
+        self.assertNotEqual(returned.strip(), "")
+        self.assertNotEqual(returned, "   ")
+
+    def test_inbound_request_id_with_disallowed_chars_is_rejected(self):
+        # An id carrying angle brackets, quotes, or other delimiters would
+        # be echoed straight back into the response header and into every
+        # log line. Reject anything outside the safe opaque-token set so
+        # a hostile client can't inject content into either sink.
+        response = self.client.get("/", headers={"X-Request-Id": "abc<script>"})
+        returned = response.headers.get("X-Request-Id", "")
+        self.assertNotEqual(returned, "abc<script>")
+        self.assertNotIn("<", returned)
+        self.assertNotIn(">", returned)
+
     def test_auth_status_returns_authenticated_payload(self):
         self.login_as("renter", email="renter@example.com", name="Renter User")
 

@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 import time
 import traceback
@@ -33,6 +34,36 @@ from .services.zillow import ZillowPublisher
 
 def _is_development() -> bool:
     return os.getenv("FLASK_ENV", "production").lower() in ("development", "dev", "local")
+
+
+# Opaque-token character set for a trace id: alphanumerics and the three
+# separators load balancers actually use. Anything outside this set (tabs,
+# spaces, quotes, angle brackets, control chars, unicode) would corrupt one
+# of the places the id ends up: the ConsoleFormatter's ``[{request_id}]``
+# tag would split on an embedded tab or space; the echoed
+# ``X-Request-Id`` response header would carry attacker-controlled text
+# back to any downstream log parser; and JSON log ingestion tools that
+# treat the value as a search key would trip on delimiters.
+_SAFE_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _sanitize_request_id(raw: str) -> str:
+    """Return ``raw`` if it is a plausible opaque trace id, else ``""``.
+
+    The previous flow accepted any truthy header value up to 64 chars, so a
+    client-supplied ``X-Request-Id: "   "`` (whitespace) or ``"a\tb"`` (tab)
+    became the id — and then landed in the ConsoleFormatter's ``[<id>]`` log
+    tag, splitting the log line or producing an empty-looking tag. Reject the
+    whole header rather than partially stripping so a caller who set a bad
+    value gets a fresh UUID and can see (via the echoed response header)
+    that we didn't honor their id.
+    """
+    if not raw:
+        return ""
+    trimmed = raw.strip()[:64]
+    if not trimmed or not _SAFE_REQUEST_ID_RE.fullmatch(trimmed):
+        return ""
+    return trimmed
 
 
 def create_app() -> Flask:
@@ -119,8 +150,8 @@ def create_app() -> Flask:
     # X-Request-Id (e.g. from a future load balancer) is honored when present.
     @app.before_request
     def _assign_request_id():
-        incoming = request.headers.get("X-Request-Id", "")
-        g.request_id = (incoming[:64] or uuid.uuid4().hex[:8])
+        incoming = _sanitize_request_id(request.headers.get("X-Request-Id", ""))
+        g.request_id = incoming or uuid.uuid4().hex[:8]
 
     # The role is resolved once at login and cached in the session cookie, so
     # without this hook a promotion/demotion/revocation made in the admin UI
