@@ -122,6 +122,15 @@ class GeneratedRouteMatrixTestCase(unittest.TestCase):
                 stack.enter_context(patch.object(self.services.properties, "fetch_live_property_name", return_value="Maple House"))
                 stack.enter_context(patch.object(self.services.appointments, "book", return_value=True))
                 stack.enter_context(patch.object(self.services.notifications, "send_email"))
+            if path == "/report-issue":
+                # Stand in for a working SMTP relay so the matrix continues
+                # to assert the happy-path status code. The route now returns
+                # 503 when send_email reports a failure (unset
+                # EMAIL_APP_PASSWORD, SMTP outage), which is the correct
+                # behaviour but is NOT what this matrix is designed to cover.
+                stack.enter_context(
+                    patch.object(self.services.notifications, "send_email", return_value=True)
+                )
             if path == "/google/login":
                 self.services.config.google_client_id = "client-id"
                 self.services.config.google_client_secret = "client-secret"

@@ -408,7 +408,9 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Name and description are required fields.", response.data)
 
     def test_report_issue_sends_email_and_renders_confirmation(self):
-        with patch.object(self.services.notifications, "send_email") as send_email_mock:
+        with patch.object(
+            self.services.notifications, "send_email", return_value=True
+        ) as send_email_mock:
             response = self.client.post(
                 "/report-issue",
                 data={"name": "Jamie", "description": "Broken contact form"},
@@ -418,6 +420,30 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Jamie", response.data)
         send_email_mock.assert_called_once()
         self.assertIn("User Reported Issue", send_email_mock.call_args[0][0])
+
+    def test_report_issue_surfaces_send_failure_instead_of_confirming(self):
+        # When SMTP is unreachable (or EMAIL_APP_PASSWORD is unset), the
+        # report has actually gone nowhere — showing the "thank you" page
+        # was a silent drop. Route must return an error status AND route
+        # the failure through log_and_notify_error so the admin can see
+        # (in application.log) that a report was lost.
+        with patch.object(
+            self.services.notifications, "send_email", return_value=False
+        ) as send_email_mock, patch.object(
+            self.services.notifications, "log_and_notify_error"
+        ) as log_mock:
+            response = self.client.post(
+                "/report-issue",
+                data={"name": "Jamie", "description": "Broken contact form"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn(b"your report has been submitted", response.data)
+        send_email_mock.assert_called_once()
+        log_mock.assert_called_once()
+        self.assertIn(
+            "Issue Report Delivery Failure", log_mock.call_args[0][0]
+        )
 
     def test_register_page_loads(self):
         response = self.client.get("/register")
