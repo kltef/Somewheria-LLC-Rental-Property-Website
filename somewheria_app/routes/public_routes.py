@@ -323,10 +323,28 @@ def report_issue():
     issue_description = (request.form.get("description") or "").strip()[:MAX_DESCRIPTION_LEN]
     if not user_name or not issue_description:
         return "Name and description are required fields.", 400
-    services.notifications.send_email(
+    # Only render the confirmation page when the report actually reached the
+    # admin inbox. ``send_email`` returns False when EMAIL_APP_PASSWORD is
+    # missing or the SMTP send raised — the previous flow discarded that
+    # signal, so a user submitting during an SMTP outage saw the confirmation
+    # page while the report went nowhere. Mirror ``contact_submit``: surface
+    # the failure to the admin log (which will also send the alert email once
+    # the outage clears, thanks to the crash-alert dedupe key) and give the
+    # user a real error rather than a silent drop.
+    delivered = services.notifications.send_email(
         "User Reported Issue",
         f"Issue reported by {user_name}:\n\n{issue_description}",
     )
+    if not delivered:
+        services.notifications.log_and_notify_error(
+            "Issue Report Delivery Failure",
+            f"Issue report from {user_name} could not be emailed: {issue_description}",
+        )
+        return (
+            "Sorry — we couldn't send your report just now. "
+            "Please email or call us directly.",
+            503,
+        )
     return render_template(
         "report_issue.html",
         title="Report an Issue",
