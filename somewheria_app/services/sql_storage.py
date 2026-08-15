@@ -190,11 +190,18 @@ class SqlStorageService:
         with self.db.transaction() as conn:
             row = conn.execute("SELECT role FROM user_roles WHERE email = ?", (email,)).fetchone()
             previous = row["role"] if row else None
+            # Nothing to change: absent means no local role to revoke, and an
+            # existing "revoked" tombstone is already the target state. Skip
+            # the SQL write in both cases so a bulk admin sweep that hits the
+            # already-revoked path doesn't churn the DB for no effect. Mirrors
+            # the FileStorageService change in the same commit.
+            if previous is None or previous == "revoked":
+                return False
             conn.execute(
                 "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
                 (email, "revoked"),
             )
-        return previous is not None and previous != "revoked"
+        return True
 
     def _replace_user_roles(self, data: dict) -> None:
         with self.db.transaction() as conn:
