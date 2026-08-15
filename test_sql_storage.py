@@ -64,6 +64,22 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
     def test_delete_user_role_returns_false_when_absent(self):
         existed = self.storage.delete_user_role("ghost@example.com")
         self.assertFalse(existed)
+        # And leaves no row behind: an absent user has no local role to
+        # revoke, so we skip the SQL write instead of inserting a phantom
+        # tombstone keyed to an email that has never logged in.
+        self.assertEqual(self.storage.get_user_roles(), {})
+
+    def test_delete_user_role_no_op_when_already_revoked(self):
+        # Re-revoking an already-revoked user must NOT re-write the row: no
+        # state change and no reason to churn the DB on repeat admin action
+        # or a bulk sweep.
+        self.storage.set_user_role("gone@example.com", "renter")
+        self.assertTrue(self.storage.delete_user_role("gone@example.com"))
+        # Second delete: same target state, so returns False and no-ops.
+        self.assertFalse(self.storage.delete_user_role("gone@example.com"))
+        self.assertEqual(
+            self.storage.get_user_roles(), {"gone@example.com": "revoked"}
+        )
 
 
 class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
@@ -288,10 +304,15 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
+        # DID configure correctly. Delete a known attribute here to simulate
+        # a config that's out of sync, then verify the shim still returns
+        # the default for an unknown path and still routes the paths it does
+        # know about correctly. Without this delattr the assertion below
+        # trips against the shared ``_make_config`` fixture — bd1d1a3 added
+        # ``hidden_listings_file`` there to keep the other path-shim tests
+        # reachable, so the "attribute absent" branch has to be simulated
+        # per test.
+        delattr(self.config, "hidden_listings_file")
         self.assertFalse(hasattr(self.config, "hidden_listings_file"))
         self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
