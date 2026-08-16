@@ -288,17 +288,31 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
-        self.assertFalse(hasattr(self.config, "hidden_listings_file"))
-        self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
-        self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
-        # A path that IS configured must still route correctly.
-        self.storage.set_user_role("still-works@example.com", "renter")
+        # DID configure correctly.
+        #
+        # The base fixture supplies every attribute the shim looks up, so
+        # this test builds a stripped-down config that deliberately omits
+        # one and pins the shim behaviour against it. Using the base
+        # fixture's ``self.config`` here would be a tautology — see
+        # ``_PATH_KEY_ATTRS`` in ``services/sql_storage.py`` for the full
+        # list the shim iterates.
+        stripped = SimpleNamespace(
+            # Deliberately no ``hidden_listings_file`` — this is the attribute
+            # under test. Keep at least one attribute present so the shim can
+            # still route configured paths (see the last assertion).
+            user_roles_file=self.base / "user_roles.json",
+            sqlite_file=self.base / "missing_attr.sqlite3",
+        )
+        self.assertFalse(hasattr(stripped, "hidden_listings_file"))
+        storage = SqlStorageService(stripped)
         self.assertEqual(
-            self.storage.get_user_roles(),
+            storage.load_json_file(self.base / "unknown.json", []), []
+        )
+        storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
+        # A path that IS configured must still route correctly.
+        storage.set_user_role("still-works@example.com", "renter")
+        self.assertEqual(
+            storage.get_user_roles(),
             {"still-works@example.com": "renter"},
         )
 
