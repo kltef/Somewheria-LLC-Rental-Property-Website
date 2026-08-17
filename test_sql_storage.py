@@ -288,10 +288,12 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # shim must fall through to the "unknown path" branch rather than
         # raising AttributeError halfway through the checks. That would
         # abort load/save for every path — including the ones the config
-        # DID configure correctly. The stock ``_make_config`` doesn't set
-        # ``hidden_listings_file`` at all, so the shim already needs to
-        # tolerate the missing attribute; if it doesn't, an unknown-path
-        # load raises AttributeError instead of returning the default.
+        # DID configure correctly.
+        #
+        # ``_make_config`` deliberately sets every attribute the shim knows
+        # about (other tests in this file route through them), so drop one
+        # here to reconstruct the older-config shape this test is about.
+        del self.config.hidden_listings_file
         self.assertFalse(hasattr(self.config, "hidden_listings_file"))
         self.assertEqual(self.storage.load_json_file(self.base / "unknown.json", []), [])
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])

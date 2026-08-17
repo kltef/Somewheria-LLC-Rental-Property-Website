@@ -657,6 +657,28 @@ def admin_registrations():
                 title="Pending Registrations",
                 error="No email provided.",
             )
+        if action not in ("approve", "reject"):
+            return render_template(
+                "admin_registrations.html",
+                pending=pending,
+                title="Pending Registrations",
+                error="Invalid action.",
+            )
+        # Act only on an address that is actually awaiting a decision. The
+        # form only ever submits rows rendered from ``pending``, so a miss
+        # here is a hand-crafted POST or a stale tab racing another admin's
+        # decision. Without the check, ``approve`` grants the renter role to
+        # any address the request names — one that was never vetted, or one
+        # already decided moments ago — and ``reject`` emails a rejection to
+        # someone who never applied.
+        actor_email = (get_current_user() or {}).get("email", "").lower()
+        if not any((item.get("email") or "").lower() == email for item in pending):
+            return render_template(
+                "admin_registrations.html",
+                pending=pending,
+                title="Pending Registrations",
+                error="That registration is no longer pending.",
+            )
         if action == "approve":
             # Only write a file role when it's an upgrade. A file entry wins
             # over the .env lists in get_user_role, so blindly writing
@@ -665,24 +687,27 @@ def admin_registrations():
             if role_rank(services.auth.get_user_role(email)) < role_rank("renter"):
                 services.storage.set_user_role(email, "renter")
             services.storage.remove_pending_registration(email)
+            # Approving grants a role, so it belongs in the audit trail
+            # alongside the role mutations made from /admin/users and
+            # /admin/dashboard — otherwise the only record of how an account
+            # gained access is the approval email in someone's inbox.
+            services.notifications.log_site_change(
+                actor_email, "registration_approved", {"email": email}
+            )
             services.notifications.send_email(
                 "Registration Approved",
                 "Your registration for Somewheria has been approved. You can now log in.",
                 to=email,
             )
-        elif action == "reject":
+        else:
             services.storage.remove_pending_registration(email)
+            services.notifications.log_site_change(
+                actor_email, "registration_rejected", {"email": email}
+            )
             services.notifications.send_email(
                 "Registration Rejected",
                 "Your registration for Somewheria was not approved at this time.",
                 to=email,
-            )
-        else:
-            return render_template(
-                "admin_registrations.html",
-                pending=pending,
-                title="Pending Registrations",
-                error="Invalid action.",
             )
         pending = services.storage.get_pending_registrations()
     return render_template("admin_registrations.html", pending=pending, title="Pending Registrations")

@@ -188,7 +188,12 @@ def google_callback():
 
 
 def logout():
-    session.pop("user", None)
+    # Drop the whole session, not just the user. Popping one key left the
+    # CSRF token (and any half-finished OAuth state) alive across the
+    # logout, so the token a logged-in session issued stayed valid for
+    # whoever used the browser next — the same fixation risk the callback
+    # already clears with session.clear() on the way in.
+    session.clear()
     return redirect(url_for("home"))
 
 
