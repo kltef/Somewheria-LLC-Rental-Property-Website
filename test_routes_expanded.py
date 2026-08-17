@@ -97,6 +97,19 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertNotIn("user", session)
 
+    def test_logout_drops_every_session_key(self):
+        # Logging out must not leave the CSRF token (or half-finished OAuth
+        # state) alive for whoever uses the browser next.
+        self.login_as("renter")
+        with self.client.session_transaction() as session:
+            session["_csrf_token"] = "leftover-token"
+            session["oauth_state"] = "leftover-state"
+
+        self.client.get("/logout", follow_redirects=False)
+
+        with self.client.session_transaction() as session:
+            self.assertEqual(dict(session), {})
+
     def test_auth_status_returns_unauthenticated_payload(self):
         response = self.client.get("/auth/status")
 
@@ -615,6 +628,100 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         send_email_mock.assert_called_once()
         # The rejection email must go to the user being rejected, not the admin inbox.
         self.assertEqual(send_email_mock.call_args.kwargs.get("to"), "pending@example.com")
+
+    def test_admin_registrations_approve_rejects_email_that_is_not_pending(self):
+        # A hand-crafted POST (or a stale tab racing another admin's decision)
+        # must not be able to grant the renter role to an address that was
+        # never vetted through the registration flow.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[{"email": "pending@example.com", "name": "Pending"}],
+        ), patch.object(self.services.storage, "set_user_role") as set_role_mock, patch.object(
+            self.services.storage,
+            "remove_pending_registration",
+        ) as remove_pending_mock, patch.object(self.services.notifications, "send_email") as send_email_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "never-applied@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        set_role_mock.assert_not_called()
+        remove_pending_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+
+    def test_admin_registrations_reject_rejects_email_that_is_not_pending(self):
+        # Same guard on the reject path: nobody who never applied should
+        # receive a rejection email.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[{"email": "pending@example.com", "name": "Pending"}],
+        ), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ) as remove_pending_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "reject", "email": "never-applied@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        remove_pending_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+
+    def test_admin_registrations_approve_writes_audit_entry(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [],
+            ],
+        ), patch.object(self.services.storage, "set_user_role"), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ), patch.object(self.services.notifications, "send_email"), patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_change_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        log_change_mock.assert_called_once()
+        self.assertEqual(log_change_mock.call_args.args[1], "registration_approved")
+        self.assertEqual(
+            log_change_mock.call_args.args[2], {"email": "pending@example.com"}
+        )
+
+    def test_admin_registrations_reject_writes_audit_entry(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [],
+            ],
+        ), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ), patch.object(self.services.notifications, "send_email"), patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_change_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "reject", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        log_change_mock.assert_called_once()
+        self.assertEqual(log_change_mock.call_args.args[1], "registration_rejected")
 
     def test_admin_users_page_loads(self):
         self.login_as("admin")
