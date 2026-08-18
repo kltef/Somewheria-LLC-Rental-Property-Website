@@ -1,6 +1,7 @@
 import collections
 import html
 import json
+import os
 import re
 import smtplib
 import threading
@@ -63,6 +64,43 @@ class NotificationService:
         except Exception as exc:
             self.console.error("Failed to send email '%s': %s", subject, exc)
             return False
+
+    def enqueue_email(self, subject: str, body: str, to: str | None = None) -> None:
+        """Send an email off the request thread.
+
+        SMTP has a 30 s socket timeout, so a slow Gmail relay could otherwise
+        stall the caller by that much per send — a public POST that fires an
+        admin notification (registration, appointment request, issue report)
+        could block a visitor's response for up to 30 s per attempt.
+
+        Fire-and-forget: callers don't rely on the return value. Delivery
+        failures are already logged inside :meth:`send_email`. Use this
+        wherever the notification is a courtesy to the admin and the visitor
+        shouldn't be made to wait on SMTP; use :meth:`send_email` directly
+        only when the caller genuinely needs the delivery outcome (e.g. the
+        contact form, which surfaces a "sorry, couldn't send" message).
+
+        Honours ``DISABLE_BACKGROUND_THREADS=1`` so test runs stay
+        synchronous and can assert against mocked ``send_email`` calls.
+        """
+        if os.getenv("DISABLE_BACKGROUND_THREADS") == "1":
+            try:
+                self.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.console.warning("Inline email send failed for %r: %s", subject, exc)
+            return
+
+        def _worker() -> None:
+            try:
+                self.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.console.warning("Background email send failed for %r: %s", subject, exc)
+
+        threading.Thread(
+            target=_worker,
+            name="notify-email",
+            daemon=True,
+        ).start()
 
     def _html_email_body(self, subject: str, body: str) -> str:
         escaped_subject = html.escape(subject)

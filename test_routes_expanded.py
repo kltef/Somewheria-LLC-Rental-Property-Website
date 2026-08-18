@@ -1019,6 +1019,45 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
 
+    def test_admin_dashboard_add_rejects_env_configured_user(self):
+        # Regression: the "Add User" dedupe check used to look only at
+        # user_roles.json. An account configured only through .env
+        # (ADMIN_USERS / HIGH_ADMIN_USERS / AUTHORIZED_USERS) passed the
+        # check, and the ``set_user_role`` write that followed silently
+        # replaced the env-configured role — because a file entry wins over
+        # env in ``AuthService.get_user_role``, the target user was
+        # demoted (e.g. admin → renter) on their next session refresh with
+        # no "User already exists" warning. The check must consult
+        # ``get_user_role`` so env-configured addresses trip the dedupe.
+        self.login_as("high_admin", email="owner@example.com")
+        original_admins = self.services.config.admin_users
+        self.services.config.admin_users = list(original_admins) + ["env-admin@example.com"]
+        try:
+            with patch.object(
+                self.services.analytics,
+                "dashboard_data",
+                return_value=({"visits": 0}, {"labels": []}),
+            ), patch.object(
+                self.services.storage,
+                "get_user_roles",
+                return_value={},
+            ), patch.object(
+                self.services.storage, "set_user_role"
+            ) as set_user_role_mock, patch.object(
+                self.services.notifications, "log_site_change"
+            ) as log_mock:
+                response = self.client.post(
+                    "/admin/dashboard",
+                    data={"action": "add", "email": "env-admin@example.com", "role": "renter"},
+                )
+        finally:
+            self.services.config.admin_users = original_admins
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"User already exists.", response.data)
+        set_user_role_mock.assert_not_called()
+        log_mock.assert_not_called()
+
     def test_admin_dashboard_rejects_malformed_email_on_update(self):
         # Defense in depth for the ``update`` action: without this guard, a
         # hand-crafted POST with a garbage email like "not-an-email" would

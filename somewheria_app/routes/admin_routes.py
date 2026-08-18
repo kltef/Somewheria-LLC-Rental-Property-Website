@@ -538,7 +538,6 @@ def admin_dashboard_combined():
                 )
         elif action == "add":
             new_role = request.form.get("role", "renter").strip()
-            user_roles = services.storage.get_user_roles()
             # Reject malformed emails at the admin boundary too. The public
             # /register path already validates with is_valid_email; without
             # the same gate here, an admin paste-error puts a garbage entry
@@ -546,7 +545,15 @@ def admin_dashboard_combined():
             # OAuth login and just pollutes the table.
             if not is_valid_email(email):
                 error = "A valid email is required."
-            elif email in user_roles and user_roles.get(email) != "revoked":
+            # Resolve via AuthService so the dedupe check also sees accounts
+            # configured only through .env (ADMIN_USERS / HIGH_ADMIN_USERS /
+            # AUTHORIZED_USERS) that never landed in user_roles.json. Without
+            # this, "Add User" against an env-configured admin's address passed
+            # the check and then wrote a fresh (typically lower-ranked) file
+            # entry — and because a file entry wins over env in get_user_role,
+            # the env-configured admin was silently demoted on their next
+            # session refresh with no "User already exists" warning.
+            elif services.auth.get_user_role(email) != "guest":
                 error = "User already exists."
             elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
@@ -634,7 +641,9 @@ def register():
             {"name": name, "email": email, "reason": reason}
         )
         if newly_added:
-            services.notifications.send_email(
+            # Off the request thread so a slow Gmail relay can't stall the
+            # visitor's /register response by up to SMTP_TIMEOUT_SECONDS.
+            services.notifications.enqueue_email(
                 "New Registration Request",
                 f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
             )
