@@ -1,3 +1,4 @@
+import os
 import tempfile
 import time
 import unittest
@@ -1100,6 +1101,54 @@ class NotificationServiceTestCase(unittest.TestCase):
             result = self.service.send_email("Test Subject", "Hello world")
 
         self.assertFalse(result)
+
+    def test_enqueue_email_runs_inline_when_background_threads_disabled(self):
+        # Under DISABLE_BACKGROUND_THREADS=1 (CI, tests, single-threaded
+        # test harness) the helper must call send_email on the calling
+        # thread so test doubles can assert against it just like a direct
+        # send_email call.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email"
+        ) as send_email_mock:
+            self.service.enqueue_email("Subj", "Body", to="dest@example.com")
+
+        send_email_mock.assert_called_once_with("Subj", "Body", to="dest@example.com")
+
+    def test_enqueue_email_swallows_inline_send_exceptions(self):
+        # A synchronous send that raises must not propagate to the caller —
+        # the callers (public POST paths) treat email as fire-and-forget,
+        # and an unexpected send_email exception must not fail the visitor's
+        # request.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email", side_effect=RuntimeError("boom")
+        ):
+            # No assertion beyond "does not raise".
+            self.service.enqueue_email("Subj", "Body")
+
+    def test_enqueue_email_dispatches_to_daemon_thread_when_enabled(self):
+        # When background threads are allowed (production path), the helper
+        # must spawn a daemon thread and return immediately so a slow SMTP
+        # relay can't hold up the visitor's response.
+        started = []
+
+        class DummyThread:
+            def __init__(self, target, name=None, daemon=None):
+                started.append({"target": target, "name": name, "daemon": daemon})
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with patch.dict(os.environ, {}, clear=False) as _env:
+            os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+            with patch.object(self.service, "send_email") as send_email_mock, patch(
+                "somewheria_app.services.notifications.threading.Thread", DummyThread
+            ):
+                self.service.enqueue_email("Subj", "Body")
+
+        self.assertEqual(len(started), 1)
+        self.assertTrue(started[0]["daemon"])
+        send_email_mock.assert_called_once_with("Subj", "Body", to=None)
 
     def test_html_email_body_formats_subject_and_lines(self):
         html_body = self.service._html_email_body(

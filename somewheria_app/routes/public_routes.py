@@ -242,7 +242,9 @@ def schedule_appointment(uuid):
         f"Contact info: {contact_info}\n"
         f"Requested at: {utcnow_iso()}"
     )
-    services.notifications.send_email("Viewing Appointment Request", message)
+    # Off the request thread so a slow Gmail relay can't stall the visitor's
+    # appointment-request response by up to SMTP_TIMEOUT_SECONDS.
+    services.notifications.enqueue_email("Viewing Appointment Request", message)
     return jsonify(success=True)
 
 
@@ -323,7 +325,9 @@ def report_issue():
     issue_description = (request.form.get("description") or "").strip()[:MAX_DESCRIPTION_LEN]
     if not user_name or not issue_description:
         return "Name and description are required fields.", 400
-    services.notifications.send_email(
+    # Off the request thread so a slow Gmail relay can't stall the visitor's
+    # /report-issue response by up to SMTP_TIMEOUT_SECONDS.
+    services.notifications.enqueue_email(
         "User Reported Issue",
         f"Issue reported by {user_name}:\n\n{issue_description}",
     )
