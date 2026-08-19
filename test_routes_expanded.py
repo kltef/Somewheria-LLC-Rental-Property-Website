@@ -2522,6 +2522,56 @@ class PropertyMetaDescriptionTestCase(unittest.TestCase):
         self.assertNotIn("N/A", desc)
         self.assertNotIn(" in .", desc)
 
+    def test_fact_fallback_singular_counts_use_singular_noun(self):
+        # A 1-bed / 1-bath listing must not read "1 beds, 1 baths" in the
+        # search snippet — Google displays this verbatim.
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="1",
+            bathrooms="1",
+            address="123 Main St",
+        )
+        self.assertIn("1 bed,", desc)
+        self.assertIn("1 bath ", desc)
+        self.assertNotIn("1 beds", desc)
+        self.assertNotIn("1 baths", desc)
+
+    def test_fact_fallback_plural_counts_use_plural_noun(self):
+        # A 2+ count needs the plural form so search snippets read
+        # "2 beds, 3 baths" instead of the previously-broken "2 bed, 3 bath".
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="3",
+            address="123 Main St",
+        )
+        self.assertIn("2 beds", desc)
+        self.assertIn("3 baths", desc)
+
+    def test_fact_fallback_half_bath_is_plural(self):
+        # 1.5 baths (a common half-bath listing) is not exactly one, so the
+        # plural is correct: "1.5 baths".
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="2",
+            bathrooms="1.5",
+            address="123 Main St",
+        )
+        self.assertIn("1.5 baths", desc)
+
+    def test_fact_fallback_nonnumeric_count_falls_back_to_plural(self):
+        # An upstream free-text value like "two" (or a hand-crafted payload)
+        # should still render — the count phrase falls back to the plural form
+        # rather than crashing or dropping the field.
+        desc, _ = self._describe(
+            name="Maple House",
+            bedrooms="two",
+            bathrooms="one",
+            address="123 Main St",
+        )
+        self.assertIn("two beds", desc)
+        self.assertIn("one baths", desc)
+
 
 if __name__ == "__main__":
     unittest.main()

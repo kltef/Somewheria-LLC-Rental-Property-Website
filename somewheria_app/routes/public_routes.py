@@ -119,6 +119,22 @@ def _truncate_meta_description(text: str) -> str:
     return text[:_META_DESCRIPTION_TRUNCATE_AT].rstrip() + "…"
 
 
+def _count_noun(count, singular: str) -> str:
+    """Render ``count`` with the correct singular / plural noun form.
+
+    Used by the fact-based meta-description fallback so search snippets read
+    ``2 beds, 1 bath`` rather than the grammatically-broken ``2 bed, 1 bath``.
+    Non-numeric values (an upstream free-text field, a hand-crafted payload)
+    are treated as plural — the alternative would drop the count entirely on
+    a value like ``"two"`` or crash a search snippet on ``NaN``.
+    """
+    try:
+        numeric = float(count)
+    except (TypeError, ValueError):
+        return f"{count} {singular}s"
+    return f"{count} {singular}" if numeric == 1 else f"{count} {singular}s"
+
+
 def _property_meta_description(prop: dict) -> str:
     """A concise, factual search-result summary for one listing.
 
@@ -134,9 +150,9 @@ def _property_meta_description(prop: dict) -> str:
     bits = []
     beds, baths = prop.get("bedrooms"), prop.get("bathrooms")
     if beds not in (None, "", "N/A"):
-        bits.append(f"{beds} bed")
+        bits.append(_count_noun(beds, "bed"))
     if baths not in (None, "", "N/A"):
-        bits.append(f"{baths} bath")
+        bits.append(_count_noun(baths, "bath"))
     rent = prop.get("rent")
     if rent not in (None, "", "N/A"):
         # Trim a trailing ".0" the upstream sends (rent comes back as a float),
