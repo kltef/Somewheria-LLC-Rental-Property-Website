@@ -273,6 +273,66 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Invalid date.")
 
+    def test_schedule_appointment_coerces_non_string_fields_to_400(self):
+        # JSON callers can send numbers, lists, dicts, or nulls for any of
+        # these fields. Before the coercion fix, ``(5 or "").strip()`` raised
+        # AttributeError, which escaped to the crash handler as a blank 503
+        # + rate-limited crash email. Coerced non-strings must instead land
+        # cleanly on the existing "missing required field" 400.
+        future_date = (
+            datetime.date.today() + datetime.timedelta(days=5)
+        ).isoformat()
+        for bogus in (5, ["Alex"], {"first": "Alex"}, None):
+            with self.subTest(bogus=bogus):
+                # ``name`` is a required field — coerced-to-empty hits the
+                # existing "Name and contact info are required." 400.
+                response = self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": bogus,
+                        "date": future_date,
+                        "contact_method": "email",
+                        "contact_info": "alex@example.com",
+                    },
+                )
+                self.assertEqual(response.status_code, 400)
+                # ``date`` — coerced to "" fails fromisoformat → "Invalid date." 400.
+                response = self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": bogus,
+                        "contact_method": "email",
+                        "contact_info": "alex@example.com",
+                    },
+                )
+                self.assertEqual(response.status_code, 400)
+                # ``contact_info`` — required, same 400 as ``name``.
+                response = self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": future_date,
+                        "contact_method": "email",
+                        "contact_info": bogus,
+                    },
+                )
+                self.assertEqual(response.status_code, 400)
+                # ``contact_method`` is optional and coerces to "" which is
+                # a valid value, so it flows past validation. The key
+                # assertion is only that it doesn't crash into the 503
+                # crash-handler path.
+                response = self.client.post(
+                    "/property/prop-1/schedule",
+                    json={
+                        "name": "Alex",
+                        "date": future_date,
+                        "contact_method": bogus,
+                        "contact_info": "alex@example.com",
+                    },
+                )
+                self.assertNotEqual(response.status_code, 503)
+
     def test_schedule_appointment_rejects_past_date(self):
         past_date = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 

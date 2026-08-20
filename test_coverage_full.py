@@ -41,7 +41,13 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.service = PropertyService(self.config, self.notifications)
 
     def tearDown(self):
-        for filename in ("prop-1_abc123.png", "prop-1_bad.png", "prop-1_assoc.png", "prop-1_httperr.png"):
+        for filename in (
+            "prop-1_abc123.png",
+            "prop-1_bad.png",
+            "prop-1_assoc.png",
+            "prop-1_httperr.png",
+            "prop-1_phone1.jpg",
+        ):
             file_path = self.upload_dir / filename
             if file_path.exists():
                 file_path.unlink()
@@ -270,6 +276,34 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         ) as thread_ctor:
             self.service.trigger_background_refresh("admin@example.com")
         thread_ctor.assert_called_once()
+
+    def test_trigger_background_refresh_resets_flag_when_thread_start_fails(self):
+        # ``thread.start()`` can raise (``RuntimeError: can't start new thread``
+        # under fd/thread exhaustion) BEFORE the worker's finally clause runs.
+        # Without the try/except reset the flag stays True permanently and
+        # every subsequent trigger short-circuits — meaning no admin mutation
+        # ever refreshes the cache again.
+        broken = Mock()
+        broken.start.side_effect = RuntimeError("can't start new thread")
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=broken,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.trigger_background_refresh("admin@example.com")
+
+        self.assertFalse(self.service._background_refresh_active)
+
+        # A subsequent trigger must be able to start a fresh worker rather
+        # than hitting the wedged short-circuit path.
+        fresh = Mock()
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            return_value=fresh,
+        ) as thread_ctor:
+            self.service.trigger_background_refresh("admin@example.com")
+        thread_ctor.assert_called_once()
+        fresh.start.assert_called_once()
 
     def test_refresh_with_change_log_returns_when_snapshot_is_unchanged(self):
         self.service.cache = [{"id": "prop-1", "name": "Old"}]
@@ -667,17 +701,42 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
     def test_fetch_property_ids_rejects_non_dict_payload(self):
         # A misbehaving upstream that returns a top-level list/string must not
-        # silently iterate as characters or unrelated keys downstream.
+        # silently iterate as characters or unrelated keys downstream. It must
+        # also NOT be treated as "upstream has zero properties" — that would
+        # blank the public catalogue on any 200-OK error envelope. Raise
+        # UpstreamUnavailable so refresh_cache preserves the existing cache.
+        from somewheria_app.services.properties import UpstreamUnavailable
         for bogus in (["prop-1", "prop-2"], "prop-1", 42, None):
             response = Mock()
             response.json.return_value = bogus
             with patch("somewheria_app.services.properties.requests.get", return_value=response):
-                self.assertEqual(self.service._fetch_property_ids(), [])
+                with self.assertRaises(UpstreamUnavailable):
+                    self.service._fetch_property_ids()
 
     def test_fetch_property_ids_rejects_non_list_property_ids_field(self):
+        # Same reasoning as above: a wrong type on ``property_ids`` is an
+        # upstream fault, not an empty inventory.
+        from somewheria_app.services.properties import UpstreamUnavailable
         response = Mock()
         response.json.return_value = {"property_ids": "prop-1"}
 
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service._fetch_property_ids()
+
+    def test_fetch_property_ids_missing_key_is_unavailable(self):
+        # A 200 payload with no ``property_ids`` key at all (API Gateway error
+        # envelope, un-unwrapped Lambda-proxy response) must NOT blank the
+        # catalogue. An explicit empty list still returns [].
+        from somewheria_app.services.properties import UpstreamUnavailable
+        response = Mock()
+        response.json.return_value = {"message": "Internal server error"}
+        with patch("somewheria_app.services.properties.requests.get", return_value=response):
+            with self.assertRaises(UpstreamUnavailable):
+                self.service._fetch_property_ids()
+
+        response = Mock()
+        response.json.return_value = {"property_ids": []}
         with patch("somewheria_app.services.properties.requests.get", return_value=response):
             self.assertEqual(self.service._fetch_property_ids(), [])
 
@@ -1019,6 +1078,48 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
 
         self.assertIsNotNone(encoded)
         self.assertTrue(encoded.startswith("data:image/jpeg;base64,"))
+
+    def test_upload_image_downscales_full_res_phone_photo_instead_of_rejecting(self):
+        # Regression: a 3024x4032 portrait iPhone photo (12MP) sits within
+        # MAX_IMAGE_PIXELS/DIMENSION but its 16:9 letterbox at full source
+        # resolution overflows MAX_IMAGE_PIXELS, so the old upload_image()
+        # raised "aspect ratio would produce an oversized letterbox," bounced
+        # to the crash-handler notification, and failed the upload. The fix
+        # thumbnails the source down first, matching the sibling code path in
+        # get_base64_image_from_url().
+        file_bytes = io.BytesIO()
+        Image.new("RGB", (3024, 4032), color="white").save(file_bytes, format="JPEG")
+        file_payload = file_bytes.getvalue()
+
+        class UploadedFile:
+            filename = "phone.jpg"
+            stream = io.BytesIO(file_payload)
+
+        with patch(
+            "somewheria_app.services.properties.secrets.token_hex", return_value="phone1"
+        ), patch(
+            "somewheria_app.services.properties.url_for",
+            return_value="/static/uploads/prop-1_phone1.jpg",
+        ), patch(
+            "somewheria_app.services.properties.requests.post"
+        ), patch.object(self.service, "trigger_background_refresh"):
+            relative_url = self.service.upload_image(
+                "prop-1", UploadedFile(), "https://example.com/", "admin@example.com"
+            )
+
+        # A URL comes back (success), no crash-handler notification was fired,
+        # and the on-disk output stays within the pixel guard.
+        self.assertEqual(relative_url, "/static/uploads/prop-1_phone1.jpg")
+        self.notifications.log_and_notify_error.assert_not_called()
+        saved = self.upload_dir / "prop-1_phone1.jpg"
+        self.assertTrue(saved.exists())
+        # The saved image should sit comfortably inside MAX_IMAGE_PIXELS —
+        # the exact letterboxed dimensions depend on the aspect ratio of the
+        # thumbnailed source, so pixel count is the invariant that matters.
+        from somewheria_app.services.properties import MAX_IMAGE_PIXELS
+        with Image.open(saved) as saved_image:
+            width, height = saved_image.size
+        self.assertLessEqual(width * height, MAX_IMAGE_PIXELS)
 
     def test_upload_image_logs_association_failure(self):
         file_bytes = io.BytesIO()

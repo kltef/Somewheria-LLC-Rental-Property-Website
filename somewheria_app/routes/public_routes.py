@@ -204,10 +204,18 @@ def schedule_appointment(uuid):
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return jsonify(success=False, error="Invalid payload."), 400
-    name = (data.get("name") or "").strip()[:MAX_NAME_LEN]
-    date = (data.get("date") or "").strip()[:MAX_DATE_LEN]
-    contact_method = (data.get("contact_method") or "").strip().lower()[:32]
-    contact_info = (data.get("contact_info") or "").strip()[:MAX_CONTACT_LEN]
+    # JSON callers can smuggle non-string values (numbers, lists, dicts);
+    # ``5 or ""`` evaluates to ``5`` and ``.strip()`` on a non-string raises
+    # AttributeError, which would escape into the crash handler and turn a
+    # malformed payload into a blank 503 + crash email. Coerce first so bad
+    # input hits the ``if not name`` guard below and returns a clean 400.
+    def _as_str(value) -> str:
+        return value if isinstance(value, str) else ""
+
+    name = _as_str(data.get("name")).strip()[:MAX_NAME_LEN]
+    date = _as_str(data.get("date")).strip()[:MAX_DATE_LEN]
+    contact_method = _as_str(data.get("contact_method")).strip().lower()[:32]
+    contact_info = _as_str(data.get("contact_info")).strip()[:MAX_CONTACT_LEN]
 
     if not name or not contact_info:
         return jsonify(success=False, error="Name and contact info are required."), 400

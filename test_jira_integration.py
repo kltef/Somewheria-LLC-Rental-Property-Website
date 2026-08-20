@@ -275,6 +275,21 @@ class JiraWebhookRouteTestCase(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 401)
 
+    def test_rejects_non_ascii_secret_with_401_not_500(self):
+        # secrets.compare_digest raises TypeError on strings with codepoints
+        # > 0x7F. Before the byte-coercion fix, sending a non-ASCII secret
+        # escaped the endpoint into the global crash handler — an
+        # unauthenticated caller could turn the fail-closed 401 into a
+        # rate-limited crash email loop by pinging /webhooks/jira with any
+        # high-bit header byte.
+        resp = self.client.post(
+            "/webhooks/jira",
+            data=json.dumps({"issue": {"key": "STUB-1", "fields": {"status": {"name": "Done"}}}}),
+            content_type="application/json",
+            headers={"X-JIRA-Webhook-Secret": "wróng"},
+        )
+        self.assertEqual(resp.status_code, 401)
+
     def test_csrf_exempt_when_secret_correct(self):
         # No CSRF token in the request — the only thing keeping this from
         # being a 400 is the CSRF_EXEMPT_ENDPOINTS entry for jira_webhook.

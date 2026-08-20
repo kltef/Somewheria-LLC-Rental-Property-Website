@@ -396,7 +396,17 @@ class PropertyService:
                 return
             self._background_refresh_active = True
         thread = threading.Thread(target=self._refresh_with_change_log, args=(actor_email,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            # ``thread.start()`` can raise (``RuntimeError: can't start new thread``
+            # under fd/thread exhaustion) BEFORE the worker's finally clause runs.
+            # Without this, the flag stays set for the life of the process and
+            # every subsequent trigger short-circuits — meaning no admin
+            # mutation ever refreshes the cache again.
+            with self._background_refresh_flag_lock:
+                self._background_refresh_active = False
+            raise
 
     def _refresh_with_change_log(self, actor_email: str) -> None:
         # Serialize with refresh_cache so an admin-triggered refresh and a
@@ -557,10 +567,24 @@ class PropertyService:
         # transient failure, matching the prior behavior for valid-but-empty
         # responses.
         if not isinstance(payload, dict):
-            return []
-        ids = payload.get("property_ids", [])
+            raise UpstreamUnavailable(
+                f"property id listing returned non-object payload of type {type(payload).__name__}"
+            )
+        # Distinguish "key absent / wrong type" (upstream fault — API Gateway
+        # error body, or a Lambda-proxy misconfig returning the raw
+        # ``{"statusCode": 200, "body": "..."}``) from an explicit empty list
+        # ("upstream has zero properties"). The former must NOT blank the
+        # cache: refresh_cache treats UpstreamUnavailable as "keep what we
+        # have," which is what we want. An explicit ``[]`` still passes.
+        if "property_ids" not in payload:
+            raise UpstreamUnavailable(
+                "property id listing payload has no 'property_ids' key"
+            )
+        ids = payload["property_ids"]
         if not isinstance(ids, list):
-            return []
+            raise UpstreamUnavailable(
+                f"property id listing 'property_ids' is {type(ids).__name__}, not a list"
+            )
         # Dedupe while preserving first-seen order. If upstream ever returns
         # the same id twice (a transient replication artifact, or a bug in the
         # ID-listing Lambda), a plain pass-through fans out to the details
@@ -1096,7 +1120,15 @@ class PropertyService:
 
         try:
             with Image.open(BytesIO(raw)) as image:
-                processed = self.letterbox_to_16_9(ImageOps.exif_transpose(image).convert("RGB"))
+                oriented = ImageOps.exif_transpose(image).convert("RGB")
+                # Downscale big source photos BEFORE letterboxing: a portrait
+                # 3024x4032 phone photo (12MP) or a 6000x4000 24MP landscape
+                # each letterbox to a canvas that exceeds MAX_IMAGE_PIXELS,
+                # so the old code raised "aspect ratio would produce an
+                # oversized letterbox" and blocked ordinary admin uploads.
+                # Mirrors the fix already in get_base64_image_from_url().
+                oriented.thumbnail((MAX_GALLERY_EDGE, MAX_GALLERY_EDGE))
+                processed = self.letterbox_to_16_9(oriented)
                 processed.save(save_path, format="JPEG" if ext in ("jpg", "jpeg") else image.format or "PNG")
         except Exception as exc:
             try:

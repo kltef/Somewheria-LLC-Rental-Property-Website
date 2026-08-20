@@ -253,6 +253,27 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}],
         )
 
+    def test_remove_pending_registration_tolerates_null_email_entries(self):
+        # A row with ``"email": null`` (hand-edited file, or a legacy caller
+        # that skipped the guard) used to crash the admin registrations page:
+        # ``{"email": null}.get("email", "")`` returns None (not ""), so the
+        # subsequent ``.lower()`` raised AttributeError → 500. The filter
+        # must skip the null row and keep only the real ones.
+        with patch.object(
+            self.service,
+            "get_pending_registrations",
+            return_value=[
+                {"email": "keep@example.com"},
+                {"email": None},
+                {"email": "drop@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_registration("drop@example.com")
+        save_json_mock.assert_called_once_with(
+            self.config.registration_file,
+            [{"email": "keep@example.com"}, {"email": None}],
+        )
+
     def test_add_pending_lead_capture_appends_and_saves(self):
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
@@ -306,6 +327,35 @@ class FileStorageServiceTestCase(unittest.TestCase):
         save_json_mock.assert_called_once_with(
             self.config.lead_capture_file,
             [{"email": "keep@example.com"}],
+        )
+
+    def test_lead_capture_helpers_tolerate_null_email_entries(self):
+        # Same defensive coercion as remove_pending_registration: a stored
+        # ``"email": null`` row would otherwise crash both dedupe and removal
+        # with AttributeError, taking the admin lead-captures page down.
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[{"email": None}, {"email": "dup@example.com"}],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertFalse(
+                self.service.add_pending_lead_capture({"email": "dup@example.com"})
+            )
+        save_json_mock.assert_not_called()
+
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[
+                {"email": None},
+                {"email": "keep@example.com"},
+                {"email": "drop@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_lead_capture("DROP@example.com")
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [{"email": None}, {"email": "keep@example.com"}],
         )
 
     def test_set_user_role_lowercases_email_and_saves(self):
@@ -1864,6 +1914,67 @@ class CsrfTokenExtractionTestCase(unittest.TestCase):
             json={"_csrf_token": "json-token"},
         )
         self.assertEqual(token, "json-token")
+
+
+class CsrfComparisonNonAsciiTestCase(unittest.TestCase):
+    """``_csrf_before_request`` must reject a non-ASCII submitted token with a
+    clean 400 rather than letting ``secrets.compare_digest`` raise TypeError.
+    Before the fix, any POST carrying a header codepoint > 0x7F escaped the
+    before_request handler and hit the crash handler — a blank 503 plus a
+    rate-limited crash email, triggerable unauthenticated from any client."""
+
+    def _build_app(self):
+        from flask import Flask, jsonify
+
+        from somewheria_app.services.security import register_csrf
+
+        app = Flask(__name__)
+        app.secret_key = "test"
+        register_csrf(app)
+        # A working endpoint the successful path can hit; the failing paths
+        # never reach the handler because the before_request 400s first.
+        app.add_url_rule(
+            "/echo",
+            endpoint="echo",
+            view_func=lambda: jsonify({"ok": True}),
+            methods=["POST"],
+        )
+        return app
+
+    def test_non_ascii_submitted_token_is_400_not_500(self):
+        app = self._build_app()
+        client = app.test_client()
+        # Seed the session with a legitimate expected token so the check
+        # actually reaches secrets.compare_digest (rather than short-circuiting
+        # on ``not expected``).
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "expected-token"
+        # Submit a token containing a non-ASCII character. Header must be
+        # latin-1 encodable; the failure mode only requires codepoints > 0x7F
+        # in the string that reaches compare_digest.
+        response = client.post(
+            "/echo",
+            headers={"X-CSRF-Token": "é"},
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_ascii_expected_token_is_400_not_500(self):
+        # Defensive: if the stored token itself somehow contained a non-ASCII
+        # character (session bytes swapped between deployments, hand-set
+        # test fixture, etc.), compare_digest would raise the same TypeError.
+        app = self._build_app()
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess["_csrf_token"] = "expéctèd"
+        response = client.post(
+            "/echo",
+            headers={"X-CSRF-Token": "expected"},
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 class TourUrlSanitizationTestCase(unittest.TestCase):
