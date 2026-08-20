@@ -113,8 +113,13 @@ class FileStorageService:
 
     def remove_pending_registration(self, email: str) -> None:
         with self.file_lock:
+            # ``.get("email", "")`` returns None when the key is present with a
+            # null value (from a hand-edit or a future caller bypassing
+            # add_pending_registration's guard). Use ``(x or "")`` so
+            # ``.lower()`` cannot raise AttributeError — mirrors line 107 above.
             registrations = [
-                item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
+                item for item in self.get_pending_registrations()
+                if (item.get("email") or "").lower() != email.lower()
             ]
             self.save_json_file(self.config.registration_file, registrations)
 
@@ -166,7 +171,7 @@ class FileStorageService:
             leads = self.get_pending_lead_captures()
             # De-duplicate by email so a repeated submission doesn't bloat the file
             # or give the requester a way to flood the admin UI.
-            if any(item.get("email", "").lower() == target_email for item in leads):
+            if any((item.get("email") or "").lower() == target_email for item in leads):
                 return False
             leads.append(lead)
             self.save_json_file(self.config.lead_capture_file, leads)
@@ -174,9 +179,11 @@ class FileStorageService:
 
     def remove_pending_lead_capture(self, email: str) -> None:
         with self.file_lock:
+            # (x or "") handles a stored ``"email": null`` — see the matching
+            # comment on remove_pending_registration.
             leads = [
                 item for item in self.get_pending_lead_captures()
-                if item.get("email", "").lower() != email.lower()
+                if (item.get("email") or "").lower() != email.lower()
             ]
             self.save_json_file(self.config.lead_capture_file, leads)
 

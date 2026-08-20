@@ -66,7 +66,19 @@ def _csrf_before_request() -> None:
         return
     expected = session.get(CSRF_SESSION_KEY, "")
     submitted = _extract_submitted_token()
-    if not expected or not submitted or not secrets.compare_digest(expected, submitted):
+    # secrets.compare_digest raises TypeError on strings containing any
+    # codepoint > 0x7F. ``submitted`` comes straight from an attacker-controlled
+    # header / form / JSON body, so a single high-bit character would otherwise
+    # escape the before_request handler, hit the crash handler, and turn every
+    # POST into a blank 503 plus a crash email. Compare bytes instead.
+    if (
+        not expected
+        or not submitted
+        or not secrets.compare_digest(
+            expected.encode("utf-8", "replace"),
+            submitted.encode("utf-8", "replace"),
+        )
+    ):
         abort(400, description="CSRF token missing or invalid.")
 
 

@@ -60,8 +60,18 @@ def jira_webhook():
 
     # 401 covers both "we never configured a secret" and "wrong secret".
     # We never want this endpoint to be open if the operator forgot to set
-    # JIRA_WEBHOOK_SECRET — fail closed.
-    if not expected or not submitted or not secrets.compare_digest(expected, submitted):
+    # JIRA_WEBHOOK_SECRET — fail closed. Compare bytes because
+    # secrets.compare_digest raises TypeError on strings holding any codepoint
+    # > 0x7F — an unauthenticated caller could otherwise flip the fail-closed
+    # 401 into a 503 crash-email loop by sending a high-bit header byte.
+    if (
+        not expected
+        or not submitted
+        or not secrets.compare_digest(
+            expected.encode("utf-8", "replace"),
+            submitted.encode("utf-8", "replace"),
+        )
+    ):
         _logger.warning("Rejected JIRA webhook: bad or missing secret")
         return jsonify({"error": "unauthorized"}), 401
 
