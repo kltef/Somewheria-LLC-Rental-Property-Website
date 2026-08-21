@@ -124,6 +124,60 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         response = self.client.get("/", headers={"X-Request-Id": "trace-me-123"})
         self.assertEqual(response.headers.get("X-Request-Id"), "trace-me-123")
 
+    def test_inbound_request_id_strips_unsafe_characters(self):
+        # Werkzeug's own validation blocks CR/LF in header values, but plain
+        # spaces / colons / brackets pass through untouched. A raw value like
+        # "spoof]: FAKE log line [rid" would otherwise land verbatim in
+        # ConsoleFormatter's stdout line and let a client author fake audit
+        # entries; the sanitizer drops anything outside [A-Za-z0-9._-].
+        response = self.client.get(
+            "/",
+            headers={"X-Request-Id": "spoof]: FAKE injected [rid"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sanitized = response.headers.get("X-Request-Id", "")
+        self.assertTrue(sanitized)
+        for banned in (" ", ":", "[", "]"):
+            self.assertNotIn(banned, sanitized)
+        allowed = set(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        )
+        self.assertTrue(all(ch in allowed for ch in sanitized))
+
+    def test_inbound_request_id_fully_unsafe_falls_back_to_generated(self):
+        # If every character is stripped (spaces / punctuation only), the
+        # sanitized value is empty and we must mint a fresh id — an empty
+        # X-Request-Id header would leave downstream log tooling with nothing
+        # to correlate against.
+        response = self.client.get("/", headers={"X-Request-Id": "   :::   "})
+
+        self.assertEqual(response.status_code, 200)
+        sanitized = response.headers.get("X-Request-Id", "")
+        self.assertTrue(sanitized)
+        for banned in (" ", ":"):
+            self.assertNotIn(banned, sanitized)
+
+    def test_request_id_sanitizer_helper(self):
+        # Direct unit coverage for the helper — Werkzeug's test client refuses
+        # CR/LF in outbound headers, so the log-injection payload we most
+        # actually care about (a newline followed by a forged log line) can
+        # only be exercised at the function level, not through the client.
+        from somewheria_app import _sanitize_request_id
+
+        self.assertEqual(_sanitize_request_id("abc-123"), "abc-123")
+        self.assertEqual(_sanitize_request_id("safe.value_1"), "safe.value_1")
+        # Newline + forged log line: every unsafe char is stripped.
+        self.assertEqual(
+            _sanitize_request_id("hack\n[FAKE] injected"),
+            "hackFAKEinjected",
+        )
+        # Empty / non-string inputs collapse to "" (caller then generates one).
+        self.assertEqual(_sanitize_request_id(""), "")
+        self.assertEqual(_sanitize_request_id(None), "")
+        # Enforce the 64-char cap so a hostile client can't bloat log lines.
+        self.assertEqual(len(_sanitize_request_id("a" * 200)), 64)
+
     def test_auth_status_returns_authenticated_payload(self):
         self.login_as("renter", email="renter@example.com", name="Renter User")
 

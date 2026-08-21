@@ -242,7 +242,11 @@ def schedule_appointment(uuid):
         f"Contact info: {contact_info}\n"
         f"Requested at: {utcnow_iso()}"
     )
-    services.notifications.send_email("Viewing Appointment Request", message)
+    # Dispatch off the request thread: the booking is already persisted and
+    # the JSON response doesn't depend on delivery, so blocking the caller for
+    # up to SMTP_TIMEOUT_SECONDS (30 s) on a slow Gmail relay is pure user-
+    # facing latency. Same shape as the ticket-email async dispatch.
+    services.notifications.send_email_async("Viewing Appointment Request", message)
     return jsonify(success=True)
 
 
@@ -323,7 +327,9 @@ def report_issue():
     issue_description = (request.form.get("description") or "").strip()[:MAX_DESCRIPTION_LEN]
     if not user_name or not issue_description:
         return "Name and description are required fields.", 400
-    services.notifications.send_email(
+    # Async: the confirmation template is rendered regardless of delivery, so
+    # a slow SMTP relay must not stall the response. See send_email_async.
+    services.notifications.send_email_async(
         "User Reported Issue",
         f"Issue reported by {user_name}:\n\n{issue_description}",
     )
