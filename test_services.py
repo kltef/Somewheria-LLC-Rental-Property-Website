@@ -1,3 +1,4 @@
+import os
 import tempfile
 import time
 import unittest
@@ -1125,6 +1126,48 @@ class NotificationServiceTestCase(unittest.TestCase):
         send_email_mock.assert_called_once()
         self.assertEqual(send_email_mock.call_args[0][0], "Image Edited Notification")
         self.assertIn("https://example.com/a.jpg", send_email_mock.call_args[0][1])
+
+    def test_send_email_async_runs_inline_when_threads_disabled(self):
+        # DISABLE_BACKGROUND_THREADS=1 forces the wrapper to run send_email in
+        # the caller's thread so tests can assert against the delivery attempt
+        # directly (matches ticket-email + zillow-publish dispatch pattern).
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email"
+        ) as send_email_mock:
+            self.service.send_email_async("Subject", "Body", to="a@b.com")
+
+        send_email_mock.assert_called_once_with("Subject", "Body", to="a@b.com")
+
+    def test_send_email_async_swallows_inline_failures(self):
+        # A raise from send_email must NOT propagate to the caller — the
+        # wrapper's whole point is fire-and-forget dispatch. Same contract as
+        # TicketService._enqueue_email.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email", side_effect=RuntimeError("boom")
+        ):
+            # Must not raise.
+            self.service.send_email_async("Subject", "Body")
+
+    def test_send_email_async_dispatches_to_daemon_thread(self):
+        # With backgrounding enabled the wrapper must return without waiting
+        # on send_email, so a slow SMTP relay can't stall the request thread.
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure the env hatch is OFF for this test regardless of parent.
+            os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+            try:
+                with patch(
+                    "somewheria_app.services.notifications.threading.Thread"
+                ) as thread_ctor:
+                    thread_instance = Mock()
+                    thread_ctor.return_value = thread_instance
+                    self.service.send_email_async("S", "B")
+            finally:
+                os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+        thread_ctor.assert_called_once()
+        kwargs = thread_ctor.call_args.kwargs
+        self.assertTrue(kwargs.get("daemon"))
+        thread_instance.start.assert_called_once()
 
     def test_log_site_change_writes_json_line(self):
         handle = mock_open()

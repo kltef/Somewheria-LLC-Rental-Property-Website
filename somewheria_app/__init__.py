@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 import time
 import traceback
@@ -33,6 +34,21 @@ from .services.zillow import ZillowPublisher
 
 def _is_development() -> bool:
     return os.getenv("FLASK_ENV", "production").lower() in ("development", "dev", "local")
+
+
+# Anything outside this set is stripped from an inbound X-Request-Id. A raw
+# header value is otherwise pasted verbatim into stdout log lines by
+# ``ConsoleFormatter`` ("[timestamp] LEVEL component [request_id]: …") — a
+# hostile client could smuggle a newline plus a fake log record through and
+# forge audit trail entries visible to /logs. Restricting to a hostname-safe
+# alphabet also keeps the value valid as an outbound response header.
+_REQUEST_ID_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_request_id(raw: str) -> str:
+    if not isinstance(raw, str) or not raw:
+        return ""
+    return _REQUEST_ID_UNSAFE_CHARS.sub("", raw)[:64]
 
 
 def create_app() -> Flask:
@@ -119,8 +135,8 @@ def create_app() -> Flask:
     # X-Request-Id (e.g. from a future load balancer) is honored when present.
     @app.before_request
     def _assign_request_id():
-        incoming = request.headers.get("X-Request-Id", "")
-        g.request_id = (incoming[:64] or uuid.uuid4().hex[:8])
+        incoming = _sanitize_request_id(request.headers.get("X-Request-Id", ""))
+        g.request_id = incoming or uuid.uuid4().hex[:8]
 
     # The role is resolved once at login and cached in the session cookie, so
     # without this hook a promotion/demotion/revocation made in the admin UI

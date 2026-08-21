@@ -1,6 +1,7 @@
 import collections
 import html
 import json
+import os
 import re
 import smtplib
 import threading
@@ -63,6 +64,40 @@ class NotificationService:
         except Exception as exc:
             self.console.error("Failed to send email '%s': %s", subject, exc)
             return False
+
+    def send_email_async(self, subject: str, body: str, to: str | None = None) -> None:
+        """Dispatch ``send_email`` off the request thread.
+
+        ``send_email`` blocks up to ``SMTP_TIMEOUT_SECONDS`` (30 s) per call —
+        long enough for a slow Gmail relay to stall a request handler well past
+        the user's patience. Callers that don't rely on the return value
+        (appointment confirmations, report-issue notices, anything filed
+        fire-and-forget) should use this wrapper to keep the response snappy.
+
+        Honours ``DISABLE_BACKGROUND_THREADS=1`` so test runs stay synchronous
+        and can assert against a mocked ``send_email``. Mirrors the pattern
+        already in ``TicketService._enqueue_email``; the crash-handler's own
+        daemon-thread dispatch is left in place because it runs from an
+        ``errorhandler`` and needs its own per-fingerprint suppression state.
+        """
+        if os.getenv("DISABLE_BACKGROUND_THREADS") == "1":
+            try:
+                self.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.console.warning(
+                    "Inline async email send failed for %r: %s", subject, exc
+                )
+            return
+
+        def _worker() -> None:
+            try:
+                self.send_email(subject, body, to=to)
+            except Exception as exc:
+                self.console.warning(
+                    "Background async email send failed for %r: %s", subject, exc
+                )
+
+        threading.Thread(target=_worker, name="notify-email", daemon=True).start()
 
     def _html_email_body(self, subject: str, body: str) -> str:
         escaped_subject = html.escape(subject)
