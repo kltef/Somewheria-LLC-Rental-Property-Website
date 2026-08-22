@@ -1112,12 +1112,30 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertIn("Somewheria LLC", html_body)
         self.assertIn("https://example.com/a.jpg", html_body)
 
-    def test_log_and_notify_error_records_error_and_sends_email(self):
-        with patch.object(self.service, "send_email") as send_email_mock:
+    def test_log_and_notify_error_records_error_and_dispatches_async(self):
+        # log_and_notify_error must NOT block the caller on SMTP delivery — a
+        # slow Gmail relay would otherwise add up to SMTP_TIMEOUT_SECONDS (30 s)
+        # of latency to whichever request thread triggered the error. Assert
+        # the dispatch happens through send_email_async so the request-hot
+        # callsites (admin_routes, auth_routes, public_routes, ticket_routes,
+        # properties.upload_image) stay snappy.
+        with patch.object(self.service, "send_email_async") as async_mock:
             self.service.log_and_notify_error("Save Error", "Something broke")
 
         self.analytics.record_error.assert_called_once()
-        send_email_mock.assert_called_once_with("Save Error", "Something broke")
+        async_mock.assert_called_once_with("Save Error", "Something broke")
+
+    def test_log_and_notify_error_delivery_matches_disable_background_threads(self):
+        # Under DISABLE_BACKGROUND_THREADS=1 the async wrapper runs send_email
+        # inline in the caller's thread. This preserves the invariant tests
+        # rely on: mocking send_email is still enough to observe (or suppress)
+        # error-notification email delivery.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email"
+        ) as send_email_mock:
+            self.service.log_and_notify_error("Save Error", "Something broke")
+
+        send_email_mock.assert_called_once_with("Save Error", "Something broke", to=None)
 
     def test_notify_image_edit_sends_summary_email(self):
         with patch.object(self.service, "send_email") as send_email_mock:
