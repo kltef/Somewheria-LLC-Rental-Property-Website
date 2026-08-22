@@ -141,9 +141,20 @@ class NotificationService:
         return os.getenv("EMAIL_APP_PASSWORD", "")
 
     def log_and_notify_error(self, subject: str, error_message: str) -> None:
+        """Record an error and fire an admin notification without stalling the caller.
+
+        Analytics + console logging stay synchronous — those are in-memory
+        counters and stdout writes, and a background thread could be killed by
+        a shutdown before it runs. The SMTP send is dispatched through
+        ``send_email_async`` so a slow / unreachable Gmail relay can't add up
+        to ``SMTP_TIMEOUT_SECONDS`` (30 s) of latency to whatever request
+        thread triggered the failure. All 13+ callers (admin/public/auth/
+        ticket routes plus the zillow retry worker) ignore the return value,
+        so nothing depended on blocking until delivery finished.
+        """
         self.analytics.record_error()
         self.console.error("%s: %s", subject, error_message)
-        self.send_email(subject, error_message)
+        self.send_email_async(subject, error_message)
 
     def notify_image_edit(self, image_urls: list[str]) -> None:
         self.send_email("Image Edited Notification", "The following image(s) have been edited:\n" + "\n".join(image_urls))
