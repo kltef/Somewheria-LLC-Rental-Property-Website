@@ -634,7 +634,11 @@ def register():
             {"name": name, "email": email, "reason": reason}
         )
         if newly_added:
-            services.notifications.send_email(
+            # The submitter's response doesn't depend on delivery, and a slow
+            # or unreachable Gmail relay would otherwise stall the anonymous
+            # POST for up to ``SMTP_TIMEOUT_SECONDS`` (30 s) per attempt —
+            # already an obvious hang given the tight rate-limit budget.
+            services.notifications.send_email_async(
                 "New Registration Request",
                 f"Name: {name}\nEmail: {email}\nReason: {reason}\nApprove at /admin/registrations",
             )
@@ -694,7 +698,10 @@ def admin_registrations():
             services.notifications.log_site_change(
                 actor_email, "registration_approved", {"email": email}
             )
-            services.notifications.send_email(
+            # The admin action doesn't depend on delivery status, so keep the
+            # response snappy: a slow Gmail relay would otherwise stall each
+            # approve/reject POST for up to ``SMTP_TIMEOUT_SECONDS`` (30 s).
+            services.notifications.send_email_async(
                 "Registration Approved",
                 "Your registration for Somewheria has been approved. You can now log in.",
                 to=email,
@@ -704,7 +711,7 @@ def admin_registrations():
             services.notifications.log_site_change(
                 actor_email, "registration_rejected", {"email": email}
             )
-            services.notifications.send_email(
+            services.notifications.send_email_async(
                 "Registration Rejected",
                 "Your registration for Somewheria was not approved at this time.",
                 to=email,

@@ -572,6 +572,28 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             add_mock.assert_not_called()
             send_email_mock.assert_not_called()
 
+    def test_register_dispatches_admin_email_off_request_thread(self):
+        # The anonymous /register POST must not block on the SMTP relay --
+        # send_email_async wraps a background thread (or an inline shim under
+        # DISABLE_BACKGROUND_THREADS=1) so a slow Gmail can't stall the
+        # response for up to SMTP_TIMEOUT_SECONDS. Pin the wrapper is used
+        # so a future refactor can't quietly regress the request thread.
+        with patch.object(self.services.storage, "get_pending_registrations", return_value=[]), patch.object(
+            self.services.storage,
+            "add_pending_registration",
+        ), patch.object(
+            self.services.notifications,
+            "send_email_async",
+        ) as async_mock:
+            response = self.client.post(
+                "/register",
+                data={"name": "Jamie", "email": "jamie@example.com", "reason": "Need access"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async_mock.assert_called_once()
+        self.assertEqual(async_mock.call_args.args[0], "New Registration Request")
+
     def test_register_duplicate_does_not_send_email(self):
         # When storage reports the email is already pending (returns False),
         # the route must not fire a second admin notification.
@@ -727,6 +749,60 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         remove_pending_mock.assert_not_called()
         send_email_mock.assert_not_called()
+
+    def test_admin_registrations_approve_dispatches_email_off_request_thread(self):
+        # The approve/reject admin action must not block on the SMTP relay --
+        # send_email_async keeps the response snappy even when Gmail stalls
+        # right up to SMTP_TIMEOUT_SECONDS. Pin the wrapper is used on both
+        # branches so a future refactor can't quietly regress the request
+        # thread back to a 30 s hang per approval.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [],
+            ],
+        ), patch.object(self.services.storage, "set_user_role"), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ), patch.object(
+            self.services.notifications,
+            "send_email_async",
+        ) as async_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async_mock.assert_called_once()
+        self.assertEqual(async_mock.call_args.args[0], "Registration Approved")
+        self.assertEqual(async_mock.call_args.kwargs.get("to"), "pending@example.com")
+
+    def test_admin_registrations_reject_dispatches_email_off_request_thread(self):
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [],
+            ],
+        ), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ), patch.object(
+            self.services.notifications, "send_email_async"
+        ) as async_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "reject", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async_mock.assert_called_once()
+        self.assertEqual(async_mock.call_args.args[0], "Registration Rejected")
+        self.assertEqual(async_mock.call_args.kwargs.get("to"), "pending@example.com")
 
     def test_admin_registrations_approve_writes_audit_entry(self):
         self.login_as("admin")
