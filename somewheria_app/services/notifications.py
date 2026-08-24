@@ -157,7 +157,18 @@ class NotificationService:
         self.send_email_async(subject, error_message)
 
     def notify_image_edit(self, image_urls: list[str]) -> None:
-        self.send_email("Image Edited Notification", "The following image(s) have been edited:\n" + "\n".join(image_urls))
+        # Dispatched off the request thread: callers
+        # (``PropertyService.upload_image`` and the ``/image-edit-notify``
+        # admin endpoint) don't observe the return value and the response
+        # they render is unrelated to delivery, so blocking them for up to
+        # ``SMTP_TIMEOUT_SECONDS`` (30 s) on a slow Gmail relay is pure
+        # user-facing latency on top of the image-upload path (which already
+        # does an S3 associate + cache refresh). Mirrors the pattern in
+        # PRs #136-#138 for the other request-hot notification sites.
+        self.send_email_async(
+            "Image Edited Notification",
+            "The following image(s) have been edited:\n" + "\n".join(image_urls),
+        )
 
     def log_site_change(self, user_email: str, action: str, extra: dict | None = None) -> None:
         try:
