@@ -1137,9 +1137,29 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         send_email_mock.assert_called_once_with("Save Error", "Something broke", to=None)
 
-    def test_notify_image_edit_sends_summary_email(self):
-        with patch.object(self.service, "send_email") as send_email_mock:
+    def test_notify_image_edit_dispatches_async(self):
+        # notify_image_edit MUST NOT block the caller on SMTP delivery — its
+        # call sites (properties.upload_image + admin image_edit_notify) run
+        # on the request thread and would otherwise inherit up to
+        # SMTP_TIMEOUT_SECONDS (30 s) of Gmail-relay latency per upload.
+        # Assert dispatch happens through send_email_async so the pattern
+        # matches the other request-hot notification sites (PRs #136-#138).
+        with patch.object(self.service, "send_email_async") as async_mock:
             self.service.notify_image_edit(["https://example.com/a.jpg", "https://example.com/b.jpg"])
+
+        async_mock.assert_called_once()
+        self.assertEqual(async_mock.call_args[0][0], "Image Edited Notification")
+        self.assertIn("https://example.com/a.jpg", async_mock.call_args[0][1])
+
+    def test_notify_image_edit_delivery_matches_disable_background_threads(self):
+        # Under DISABLE_BACKGROUND_THREADS=1 the async wrapper runs send_email
+        # inline in the caller's thread, so mocking send_email is still enough
+        # to observe (or suppress) image-edit notifications — the invariant
+        # that other tests (e.g. properties.upload_image) rely on.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}), patch.object(
+            self.service, "send_email"
+        ) as send_email_mock:
+            self.service.notify_image_edit(["https://example.com/a.jpg"])
 
         send_email_mock.assert_called_once()
         self.assertEqual(send_email_mock.call_args[0][0], "Image Edited Notification")
