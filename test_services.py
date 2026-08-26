@@ -892,6 +892,33 @@ class PropertyServiceTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.service.delete_property("prop-1", "admin@example.com")
 
+    def test_delete_property_clears_hidden_listing_tombstone(self):
+        # Regression: an admin who deactivates (hides) a listing and then
+        # deletes it upstream previously left the id in hidden_listings
+        # forever. That set is materialized on every /for-rent render, and
+        # if the upstream ever re-issues the same UUID the "new" listing
+        # would be silently hidden from the public site.
+        self.service.cache = [{"id": "prop-1"}]
+        storage = Mock()
+        self.service.storage = storage
+        response = Mock(status_code=204, text="")
+        with patch("somewheria_app.services.properties.requests.delete", return_value=response):
+            self.service.delete_property("prop-1", "admin@example.com")
+
+        storage.set_listing_hidden.assert_called_once_with("prop-1", False)
+
+    def test_delete_property_without_storage_does_not_crash(self):
+        # ``storage`` is optional on PropertyService — the cleanup call must
+        # be guarded so a service configured without a storage backend still
+        # deletes correctly.
+        self.service.cache = [{"id": "prop-1"}]
+        self.service.storage = None
+        response = Mock(status_code=204, text="")
+        with patch("somewheria_app.services.properties.requests.delete", return_value=response):
+            self.service.delete_property("prop-1", "admin@example.com")
+
+        self.assertEqual(self.service.cache, [])
+
     def test_delete_property_rejects_invalid_id_before_outbound_call(self):
         # A traversal-style id must be rejected at the boundary so a
         # malformed value can't be smuggled into the outbound DELETE URL.
