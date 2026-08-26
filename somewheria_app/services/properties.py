@@ -1027,6 +1027,14 @@ class PropertyService:
             raise RuntimeError(f"Remote API responded {response.status_code}: {response.text}")
         with self.cache_lock:
             self.cache = [item for item in self.cache if item.get("id") != property_id]
+        # Clear any hidden-listing tombstone for this id. Without this a
+        # listing that was deactivated (set_listing_active) before deletion
+        # leaves a stale entry in hidden_listings; the id would then live
+        # forever in the set materialized on every /for-rent render, and if
+        # the upstream ever re-issues the same UUID the "new" listing would
+        # be silently hidden from the public site with no UI trace.
+        if self.storage is not None:
+            self.storage.set_listing_hidden(property_id, False)
         self.notifications.log_site_change(actor_email, "property_deleted", {"property_id": property_id})
         self._safe_zillow_publish("publish_delete", property_id)
 
