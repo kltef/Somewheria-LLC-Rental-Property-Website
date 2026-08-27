@@ -505,10 +505,19 @@ class PropertyService:
         changed = []
         current_by_id = by_id(current_properties)
         latest_by_id = by_id(latest_properties)
-        for property_id in old_ids & new_ids:
+        # Iterate the shared ids in sorted order and sort each property's
+        # diffed field list alphabetically so this log entry is deterministic
+        # across process runs. The output is written to site_changes.log and
+        # read back by admin audits + analytics, and unstable ordering (from
+        # iterating a set) makes two identical refreshes produce cosmetically
+        # different log lines — noise that defeats diffing and greppability.
+        for property_id in sorted(old_ids & new_ids):
             old = current_by_id[property_id]
             new = latest_by_id[property_id]
-            diffs = [key for key in set(old.keys()).union(new.keys()) if old.get(key) != new.get(key)]
+            diffs = sorted(
+                key for key in set(old.keys()) | set(new.keys())
+                if old.get(key) != new.get(key)
+            )
             if diffs:
                 changed.append({"id": property_id, "fields": diffs})
         return {

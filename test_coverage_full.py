@@ -393,6 +393,33 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(change_log["new_count"], 2)
         self.assertEqual(change_log["changed"][0]["id"], "prop-1")
 
+    def test_build_change_log_is_deterministic_across_runs(self):
+        # The change log lands in site_changes.log and drives admin audits +
+        # analytics. Iterating over ``set(...)`` for the shared-id walk and
+        # the per-property field diff gives an arbitrary order — two
+        # identical refreshes would emit cosmetically different lines and
+        # defeat diffing / greppability. Lock in the sorted contract so a
+        # regression that swaps back to raw set iteration is caught.
+        current = [
+            {"id": "prop-b", "name": "Bee", "rent": "1000", "beds": 2},
+            {"id": "prop-a", "name": "Ay",  "rent": "900",  "beds": 1},
+        ]
+        latest = [
+            {"id": "prop-b", "name": "Bee2", "rent": "1050", "beds": 2},
+            {"id": "prop-a", "name": "Ay2",  "rent": "950",  "beds": 1},
+        ]
+        change_log = self.service._build_change_log(current, latest)
+        # ``changed`` iterates the shared property ids in sorted order.
+        self.assertEqual(
+            [entry["id"] for entry in change_log["changed"]],
+            ["prop-a", "prop-b"],
+        )
+        # Each entry's ``fields`` list is sorted alphabetically.
+        for entry in change_log["changed"]:
+            self.assertEqual(entry["fields"], sorted(entry["fields"]))
+            self.assertIn("name", entry["fields"])
+            self.assertIn("rent", entry["fields"])
+
     def test_build_change_log_does_not_mutate_its_inputs(self):
         # ``_refresh_with_change_log`` hands the live cache directly to
         # ``_build_change_log`` (no defensive deep-copy) so it can avoid
