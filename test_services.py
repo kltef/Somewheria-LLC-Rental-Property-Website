@@ -1164,6 +1164,63 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         send_email_mock.assert_called_once_with("Save Error", "Something broke", to=None)
 
+    def test_log_and_notify_error_suppresses_repeat_email_within_cooldown(self):
+        # A sustained failure (Google OAuth outage, spam scan of the callback,
+        # a repeatedly-failing property save) MUST NOT mail-bomb the admin
+        # inbox or fan out a fresh 30s-timeout daemon thread per event. Only
+        # the SMTP send is suppressed on repeats; analytics + console still
+        # record every event so the incident is observable.
+        with patch.object(self.service, "send_email_async") as async_mock:
+            self.service.log_and_notify_error("Google OAuth Error", "invalid_grant")
+            self.service.log_and_notify_error("Google OAuth Error", "invalid_grant again")
+            self.service.log_and_notify_error("Google OAuth Error", "still broken")
+
+        # Analytics + console record every event; only the email is throttled.
+        self.assertEqual(self.analytics.record_error.call_count, 3)
+        async_mock.assert_called_once_with("Google OAuth Error", "invalid_grant")
+
+    def test_log_and_notify_error_different_subjects_send_independently(self):
+        # Suppression is per-subject: an OAuth outage should not mask a
+        # separate save-edit failure that happens moments later.
+        with patch.object(self.service, "send_email_async") as async_mock:
+            self.service.log_and_notify_error("Google OAuth Error", "boom")
+            self.service.log_and_notify_error("Save Edit Error", "different boom")
+
+        self.assertEqual(async_mock.call_count, 2)
+
+    def test_log_and_notify_error_dispatches_again_after_cooldown_elapses(self):
+        # Once the cooldown window passes, the next event dispatches again.
+        # Advance ``time.monotonic`` past the cooldown rather than sleeping
+        # so the test stays fast and deterministic.
+        with patch.object(self.service, "send_email_async") as async_mock, patch(
+            "somewheria_app.services.notifications.time.monotonic",
+            side_effect=[0.0, 1.0, 10_000.0, 10_000.0],
+        ):
+            self.service.log_and_notify_error("Save Error", "first")
+            self.service.log_and_notify_error("Save Error", "suppressed")
+            self.service.log_and_notify_error("Save Error", "after cooldown")
+
+        self.assertEqual(async_mock.call_count, 2)
+        self.assertEqual(async_mock.call_args_list[0].args, ("Save Error", "first"))
+        self.assertEqual(async_mock.call_args_list[1].args, ("Save Error", "after cooldown"))
+
+    def test_log_and_notify_error_prunes_stale_dedup_entries(self):
+        # A long-running process that trips many distinct subjects must not
+        # grow the dedup map without bound — anything older than the cooldown
+        # can no longer suppress a send and has no value. Prime the map with
+        # a stale entry, then send a fresh event and assert the stale key
+        # was evicted.
+        stale_key = "Zillow Sync Failure"
+        # A monotonic value in the deep past — guaranteed to be older than
+        # any cooldown window we'd pick.
+        self.service._error_email_last_sent[stale_key] = -10_000.0
+
+        with patch.object(self.service, "send_email_async"):
+            self.service.log_and_notify_error("Save Error", "fresh")
+
+        self.assertNotIn(stale_key, self.service._error_email_last_sent)
+        self.assertIn("Save Error", self.service._error_email_last_sent)
+
     def test_notify_image_edit_dispatches_async(self):
         # notify_image_edit MUST NOT block the caller on SMTP delivery — its
         # call sites (properties.upload_image + admin image_edit_notify) run

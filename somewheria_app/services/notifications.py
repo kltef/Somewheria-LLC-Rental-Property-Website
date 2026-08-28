@@ -5,6 +5,7 @@ import os
 import re
 import smtplib
 import threading
+import time
 from email.message import EmailMessage
 
 from .console import get_console_logger
@@ -19,6 +20,14 @@ from .validation import is_valid_email
 # sockets and file descriptors. 30s is generous for a real TLS+login+send
 # round trip while still bounding worst-case stalls.
 SMTP_TIMEOUT_SECONDS = 30
+
+# Suppress repeat ``log_and_notify_error`` emails for the same subject within
+# this window. Matches the 10-minute cooldown ``_send_crash_email_async`` in
+# ``somewheria_app/__init__.py`` already applies per (ExceptionType, path)
+# fingerprint. Analytics/console logging stay per-event; only the SMTP send
+# is throttled — a burst of the same failure shouldn't mail-bomb the admin
+# inbox or fan out one daemon thread per event.
+ERROR_EMAIL_COOLDOWN_SECONDS = 600
 
 
 class NotificationService:
@@ -35,6 +44,11 @@ class NotificationService:
         # interleave into the middle of it and corrupt the JSONL — which
         # ``analytics.recent_listing_activity`` then silently drops.
         self._change_log_lock = threading.Lock()
+        # Fingerprint -> monotonic timestamp of the last error-notification
+        # SMTP dispatch. Bounded because we prune every stale entry each
+        # time we admit a new one (see ``log_and_notify_error``).
+        self._error_email_lock = threading.Lock()
+        self._error_email_last_sent: dict[str, float] = {}
 
     def send_email(self, subject: str, body: str, to: str | None = None) -> bool:
         app_password = self._email_password()
@@ -151,10 +165,44 @@ class NotificationService:
         thread triggered the failure. All 13+ callers (admin/public/auth/
         ticket routes plus the zillow retry worker) ignore the return value,
         so nothing depended on blocking until delivery finished.
+
+        Repeat SMTP dispatches for the same ``subject`` are suppressed for
+        ``ERROR_EMAIL_COOLDOWN_SECONDS`` (10 min). Analytics + console still
+        run on every event; only the outbound email is throttled. Without
+        this a sustained failure (upstream outage, an OAuth callback under
+        a spam scan, a repeatedly-failing property save) would mail-bomb
+        the admin inbox and fan out one 30s-timeout daemon thread per
+        event. Mirrors the fingerprint-cooldown ``_send_crash_email_async``
+        in ``somewheria_app/__init__.py`` already applies to unhandled
+        exceptions.
         """
         self.analytics.record_error()
         self.console.error("%s: %s", subject, error_message)
-        self.send_email_async(subject, error_message)
+        if self._should_send_error_email(subject):
+            self.send_email_async(subject, error_message)
+
+    def _should_send_error_email(self, subject: str) -> bool:
+        # Fingerprint by subject: subjects are static strings in every caller
+        # (e.g. "Google OAuth Error", "Save Edit Error", "Zillow Sync
+        # Failure") — the varying detail lives in the body. Truncated so a
+        # hypothetical dynamic subject can't grow the dict key without
+        # bound.
+        key = (subject or "")[:200]
+        now = time.monotonic()
+        with self._error_email_lock:
+            last = self._error_email_last_sent.get(key)
+            if last is not None and now - last < ERROR_EMAIL_COOLDOWN_SECONDS:
+                return False
+            # Prune stale entries opportunistically: anything older than the
+            # cooldown window can no longer suppress a send, so it has no
+            # value in the map. Keeps the map bounded even under a
+            # long-running process that trips many distinct subjects.
+            cutoff = now - ERROR_EMAIL_COOLDOWN_SECONDS
+            stale = [k for k, ts in self._error_email_last_sent.items() if ts < cutoff]
+            for k in stale:
+                del self._error_email_last_sent[k]
+            self._error_email_last_sent[key] = now
+            return True
 
     def notify_image_edit(self, image_urls: list[str]) -> None:
         # Dispatched off the request thread: callers
