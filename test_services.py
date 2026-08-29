@@ -1,3 +1,4 @@
+import datetime
 import os
 import tempfile
 import time
@@ -1721,6 +1722,45 @@ class RecentListingActivityTestCase(unittest.TestCase):
         june_idx = result["months"].index("2026-06")
         self.assertEqual(result["created"][july_idx], 1)
         self.assertEqual(result["created"][june_idx], 1)
+
+    def test_survives_non_dict_json_lines_in_change_log(self):
+        # A row that parses as valid JSON but is not a dict (a bare number,
+        # string, list, or ``null``) used to crash the whole function with
+        # AttributeError on ``entry.get("action")`` — which the admin
+        # dashboard call site then served as a 503. The writer only ever
+        # emits dict rows, so this can only happen via a corrupted / hand-
+        # edited / externally-appended log, but a single bad line must not
+        # take out /admin/dashboard for everyone.
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as td:
+            tracker, change_log = self._tracker(Path(td))
+            today_iso = (
+                datetime.datetime.now(datetime.timezone.utc)
+                .date()
+                .isoformat()
+            )
+            rows = [
+                "42",
+                '"just a string"',
+                "null",
+                "[1, 2, 3]",
+                # A dict with a non-string timestamp shouldn't crash either.
+                _json.dumps({"timestamp": 12345, "action": "property_created"}),
+                _json.dumps(
+                    {
+                        "timestamp": f"{today_iso}T00:00:00Z",
+                        "action": "property_created",
+                        "extra": {},
+                    }
+                ),
+            ]
+            change_log.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            result = tracker.recent_listing_activity(months=1)
+        # The one valid ``property_created`` row still lands in this month's
+        # bucket; the malformed rows are silently skipped rather than crashing.
+        self.assertEqual(sum(result["created"]), 1)
+        self.assertEqual(sum(result["deleted"]), 0)
 
 
 class RateLimiterTestCase(unittest.TestCase):

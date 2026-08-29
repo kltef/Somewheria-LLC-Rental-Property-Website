@@ -251,12 +251,26 @@ class AnalyticsTracker:
                     entry = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
+                # Guard against non-dict JSON values (a bare number, string,
+                # list, or ``null``). The writer only ever emits dict rows,
+                # so in normal operation this is a no-op — but a corrupted /
+                # hand-edited / externally-appended row would otherwise
+                # raise AttributeError on ``.get`` and crash the admin
+                # dashboard (via the /admin/dashboard call site), which the
+                # crash handler then serves as a 503. Match the same isinstance
+                # guard ``NotificationService.read_logs`` already applies.
+                if not isinstance(entry, dict):
+                    continue
                 action = entry.get("action")
                 if action not in ("property_created", "property_deleted"):
                     continue
                 ts = entry.get("timestamp") or ""
                 # Timestamps are ISO 8601 from datetime.isoformat(); the
                 # YYYY-MM prefix is the first 7 chars and avoids parsing.
+                # Coerce a non-string timestamp to "" so ``ts[:7]`` can't
+                # TypeError on a corrupted row that stored a number here.
+                if not isinstance(ts, str):
+                    continue
                 key = ts[:7]
                 if key not in label_set:
                     continue
