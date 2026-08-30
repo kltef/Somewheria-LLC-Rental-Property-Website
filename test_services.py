@@ -1130,6 +1130,56 @@ class NotificationServiceTestCase(unittest.TestCase):
 
         self.assertFalse(result)
 
+    def test_send_email_sanitizes_newlines_in_subject(self):
+        # ``EmailMessage`` raises ValueError when a header value carries a CR
+        # or LF (its header-injection guard). Ticket titles ride into the
+        # Subject verbatim, so a title with a stray newline used to turn
+        # every downstream send into a swallowed failure. The sanitizer
+        # collapses CR/LF/NUL to spaces so the send still goes out, and the
+        # relay sees a single-line Subject.
+        smtp_instance = Mock()
+        smtp_context = Mock()
+        smtp_context.__enter__ = Mock(return_value=smtp_instance)
+        smtp_context.__exit__ = Mock(return_value=None)
+
+        with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
+            "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
+        ):
+            result = self.service.send_email(
+                "New Repair Ticket: leak\r\nBcc: attacker@evil.com",
+                "body",
+            )
+
+        self.assertTrue(result)
+        smtp_instance.send_message.assert_called_once()
+        sent_message = smtp_instance.send_message.call_args.args[0]
+        subject = sent_message["Subject"]
+        self.assertNotIn("\n", subject)
+        self.assertNotIn("\r", subject)
+        # The visible text is preserved so operators still see the title.
+        self.assertIn("New Repair Ticket: leak", subject)
+        self.assertIn("Bcc: attacker@evil.com", subject)
+
+    def test_send_email_truncates_absurdly_long_subject(self):
+        # A runaway subject (accidental paste, hostile POST) must not sail
+        # through to the relay unbounded. Truncate at the sanitizer so both
+        # the outbound header and the HTML preview stay a reasonable size.
+        smtp_instance = Mock()
+        smtp_context = Mock()
+        smtp_context.__enter__ = Mock(return_value=smtp_instance)
+        smtp_context.__exit__ = Mock(return_value=None)
+
+        long_subject = "x" * 5000
+        with patch.object(self.service, "_email_password", return_value="app-pass"), patch(
+            "somewheria_app.services.notifications.smtplib.SMTP", return_value=smtp_context
+        ):
+            self.service.send_email(long_subject, "body")
+
+        sent_message = smtp_instance.send_message.call_args.args[0]
+        subject = sent_message["Subject"]
+        # 200-char ceiling from _SUBJECT_MAX_LEN, so total <= 200.
+        self.assertLessEqual(len(subject), 200)
+
     def test_html_email_body_formats_subject_and_lines(self):
         html_body = self.service._html_email_body(
             "Image Edited Notification",
