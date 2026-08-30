@@ -29,6 +29,36 @@ SMTP_TIMEOUT_SECONDS = 30
 # inbox or fan out one daemon thread per event.
 ERROR_EMAIL_COOLDOWN_SECONDS = 600
 
+# Matches any run of CR/LF/NUL. ``EmailMessage`` rejects header values that
+# contain CR or LF with a hard ValueError (its guard against header
+# injection), so a subject built from user-supplied text — a ticket title,
+# an admin's status label — that happens to contain a stray newline would
+# otherwise turn every downstream send into a silent failure.
+_SUBJECT_UNSAFE_CHARS = re.compile(r"[\r\n\x00]+")
+
+# Upper bound on the outbound Subject header. RFC 5322 recommends 78 chars
+# per line and hard-caps at 998; long subjects still send, but many mail
+# clients truncate them awkwardly. Truncating here also keeps a hostile
+# multi-megabyte string from riding the header all the way to the relay.
+_SUBJECT_MAX_LEN = 200
+
+
+def _sanitize_subject(subject: str) -> str:
+    """Collapse header-hostile characters so ``EmailMessage`` never rejects
+    the subject. Callers pass ``subject`` values that are sometimes built from
+    user input (ticket titles); a CR or LF in that string turns the entire
+    send into a hard ValueError inside ``EmailMessage.__setitem__``, which
+    the outer try/except in :meth:`NotificationService.send_email` then
+    swallows as "failed to send" — silently dropping every ticket / update
+    / note notification whose title happened to contain a newline. Also
+    bounds the length so a runaway subject can't blow past mail-relay
+    limits."""
+    text = str(subject or "")
+    text = _SUBJECT_UNSAFE_CHARS.sub(" ", text).strip()
+    if len(text) > _SUBJECT_MAX_LEN:
+        text = text[: _SUBJECT_MAX_LEN - 1].rstrip() + "…"
+    return text
+
 
 class NotificationService:
     def __init__(self, config, analytics) -> None:
@@ -61,12 +91,13 @@ class NotificationService:
             self.console.warning("No valid recipient for email '%s' (to=%r); skipping.", subject, to)
             return False
 
+        safe_subject = _sanitize_subject(subject)
         message = EmailMessage()
-        message["Subject"] = subject
+        message["Subject"] = safe_subject
         message["From"] = self.config.email_sender
         message["To"] = recipient
         message.set_content(body)
-        message.add_alternative(self._html_email_body(subject, body), subtype="html")
+        message.add_alternative(self._html_email_body(safe_subject, body), subtype="html")
 
         try:
             with smtplib.SMTP("smtp.gmail.com", 587, timeout=SMTP_TIMEOUT_SECONDS) as server:
