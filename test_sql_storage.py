@@ -95,6 +95,27 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         # The original payload is preserved; the duplicate does not overwrite it.
         self.assertEqual(rows[0]["name"], "First")
 
+    def test_get_pending_registrations_drops_non_dict_payloads(self):
+        # A payload column that deserializes to something other than a dict
+        # (e.g. hand-edited row storing ``"null"``, ``"42"``, or a JSON array)
+        # must not crash the admin UI when it iterates ``.get("email")`` on
+        # each entry. Matches the isinstance(dict) guard on the file backend
+        # and the same-shape guard PR #144 added to ``recent_listing_activity``.
+        self.storage.add_pending_registration({"email": "keep@example.com"})
+        # Bypass the service so we can insert a deliberately malformed payload
+        # into the underlying table without the API path rejecting it.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("garbage@example.com", '"not a dict"'),
+            )
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("null@example.com", "null"),
+            )
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual(rows, [{"email": "keep@example.com"}])
+
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):
@@ -179,6 +200,19 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
         self.storage.remove_pending_lead_capture("DROP@Example.com")
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual({lead["email"] for lead in leads}, {"keep@example.com"})
+
+    def test_get_pending_lead_captures_drops_non_dict_payloads(self):
+        # Same isinstance(dict) guard as pending registrations: a payload
+        # column corrupted to a non-object JSON value must not crash the
+        # dedup/remove paths with AttributeError on ``.get("email")``.
+        self.storage.add_pending_lead_capture({"email": "keep@example.com"})
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
+                ("garbage@example.com", '"not a dict"'),
+            )
+        leads = self.storage.get_pending_lead_captures()
+        self.assertEqual(leads, [{"email": "keep@example.com"}])
 
     def test_remove_pending_lead_capture_no_op_on_empty_email(self):
         self.storage.add_pending_lead_capture({"email": "keep@example.com"})
