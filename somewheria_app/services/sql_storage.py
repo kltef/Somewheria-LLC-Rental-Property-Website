@@ -135,7 +135,15 @@ class SqlStorageService:
     def get_pending_registrations(self) -> list[dict]:
         with self.db.read() as conn:
             rows = conn.execute("SELECT payload FROM pending_registrations").fetchall()
-        return [loads(row["payload"]) for row in rows]
+        # Filter out any row whose stored ``payload`` doesn't deserialize to
+        # a dict. ``add_pending_registration`` / ``_replace_pending_registrations``
+        # only ever write dicts, so in normal operation this is a no-op — but a
+        # hand-edited row could hold anything, and every downstream caller
+        # (dedup, admin_registrations render, remove) calls ``.get("email")``
+        # on each item, which would AttributeError and 503 the admin UI via
+        # the crash handler. Matches the FileStorageService guard added
+        # alongside this change.
+        return [payload for payload in (loads(row["payload"]) for row in rows) if isinstance(payload, dict)]
 
     def add_pending_registration(self, registration: dict) -> bool:
         email = (registration.get("email") or "").strip().lower()
@@ -278,7 +286,11 @@ class SqlStorageService:
             rows = conn.execute(
                 "SELECT payload FROM lead_captures ORDER BY email"
             ).fetchall()
-        return [loads(row["payload"]) for row in rows]
+        # Same isinstance(dict) guard as ``get_pending_registrations`` — a
+        # payload column corrupted to non-object JSON would otherwise crash
+        # the dedup check in ``add_pending_lead_capture`` and the filter in
+        # ``remove_pending_lead_capture`` with AttributeError.
+        return [payload for payload in (loads(row["payload"]) for row in rows) if isinstance(payload, dict)]
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
         # Mirror FileStorageService: de-duplicate by email so a repeated

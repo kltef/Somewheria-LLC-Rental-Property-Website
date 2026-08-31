@@ -310,6 +310,95 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}],
         )
 
+    def test_get_pending_registrations_drops_non_dict_entries(self):
+        # ``expected_type=list`` verifies the top-level container but not each
+        # item's shape. A corrupted / hand-edited file that slips a bare
+        # string, number, ``null``, or list into the array would otherwise
+        # crash ``add_pending_registration``'s dedup check and the
+        # ``admin_registrations`` route's iteration with AttributeError on
+        # ``.get("email")``, and the crash handler serves the admin UI as an
+        # empty 503. Matches the isinstance(dict) guard PR #144 added to
+        # ``recent_listing_activity`` for the change-log JSONL.
+        raw = [
+            {"email": "keep@example.com"},
+            "garbage",
+            None,
+            42,
+            ["not", "a", "dict"],
+            {"email": "also@example.com"},
+        ]
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_pending_registrations()
+        self.assertEqual(
+            loaded,
+            [{"email": "keep@example.com"}, {"email": "also@example.com"}],
+        )
+
+    def test_add_pending_registration_survives_non_dict_row_in_file(self):
+        # Exercise the actual crash path: a stray non-dict row must not
+        # AttributeError inside the dedup ``any(...)`` walk. Without the load
+        # guard the whole call raises and the admin never sees the new row.
+        with patch.object(
+            self.service,
+            "load_json_file",
+            return_value=[
+                {"email": "existing@example.com"},
+                "corrupt",
+                None,
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_registration({"email": "new@example.com"})
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.registration_file,
+            [
+                {"email": "existing@example.com"},
+                {"email": "new@example.com"},
+            ],
+        )
+
+    def test_get_pending_lead_captures_drops_non_dict_entries(self):
+        # Same isinstance(dict) filter as pending registrations — protects the
+        # dedup / remove paths and the admin UI from a hand-edited lead
+        # capture file that carries a stray non-dict row.
+        raw = [
+            {"email": "keep@example.com"},
+            "garbage",
+            None,
+            {"email": "also@example.com"},
+        ]
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_pending_lead_captures()
+        self.assertEqual(
+            loaded,
+            [{"email": "keep@example.com"}, {"email": "also@example.com"}],
+        )
+
+    def test_add_pending_lead_capture_survives_non_dict_row_in_file(self):
+        # Exercise the actual crash path: a non-dict row must not
+        # AttributeError inside the dedup ``any(...)`` walk.
+        with patch.object(
+            self.service,
+            "load_json_file",
+            return_value=[
+                {"email": "existing@example.com"},
+                42,
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_lead_capture(
+                    {"email": "new@example.com", "submitted_at": "2026-01-01"}
+                )
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [
+                {"email": "existing@example.com"},
+                {"email": "new@example.com", "submitted_at": "2026-01-01"},
+            ],
+        )
+
     def test_set_user_role_lowercases_email_and_saves(self):
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,

@@ -77,7 +77,17 @@ class FileStorageService:
             self.logger.error("Failed to save %s: %s", path, exc)
 
     def get_pending_registrations(self) -> list[dict]:
-        return self.load_json_file(self.config.registration_file, [], expected_type=list)
+        raw = self.load_json_file(self.config.registration_file, [], expected_type=list)
+        # Drop non-dict entries defensively. ``expected_type=list`` only
+        # verifies the top-level container; a corrupted / hand-edited file
+        # can still slip a bare string, number, ``null``, or list into the
+        # array. Every downstream caller (``add_pending_registration`` dedup,
+        # ``remove_pending_registration`` filter, the ``admin_registrations``
+        # route iteration, the admin template render) calls ``.get("email")``
+        # on each item, which would AttributeError and take out the admin
+        # UI via the crash handler's 503. Mirrors the isinstance(dict) guard
+        # ``recent_listing_activity`` added in PR #144 for the change log.
+        return [item for item in raw if isinstance(item, dict)]
 
     def add_pending_registration(self, registration: dict) -> bool:
         """Append a pending registration, skipping duplicate emails.
@@ -146,7 +156,12 @@ class FileStorageService:
         self.save_json_file(self.config.renter_profile_file, profiles)
 
     def get_pending_lead_captures(self) -> list[dict]:
-        return self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
+        raw = self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
+        # Same isinstance(dict) guard as ``get_pending_registrations``. Without
+        # it, a stray non-dict row (corrupted or hand-edited file) crashes the
+        # dedup check in ``add_pending_lead_capture`` and the filter in
+        # ``remove_pending_lead_capture`` with AttributeError.
+        return [item for item in raw if isinstance(item, dict)]
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
         # Returns True when the lead was newly persisted, False when the
