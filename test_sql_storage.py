@@ -155,6 +155,38 @@ class TicketsTestCase(SqlStorageBaseTestCase):
         loaded = self.storage.load_json_file(self.config.tickets_file, [])
         self.assertEqual(sorted(t["id"] for t in loaded), ["t1", "t2"])
 
+    def test_load_tickets_drops_non_dict_payloads(self):
+        # A payload column that deserializes to something other than a dict
+        # (a hand-edited row storing ``"null"``, ``"42"``, or a JSON array)
+        # must not crash TicketService callers when they iterate
+        # ``.get(...)`` on each ticket. Matches the isinstance(dict) guard
+        # ``TicketService._load`` applies for the file backend and the same
+        # shape guard added for pending registrations in PR #146.
+        self.storage.save_json_file(
+            self.config.tickets_file,
+            [{"id": "t1", "title": "leak", "created_at": "2026-01-01"}],
+        )
+        # Bypass the service so we can insert a deliberately malformed payload
+        # straight into the underlying table.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO tickets(id, payload, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("bad-string", '"not a dict"', "2026-01-02", None),
+            )
+            conn.execute(
+                "INSERT INTO tickets(id, payload, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("bad-null", "null", "2026-01-03", None),
+            )
+            conn.execute(
+                "INSERT INTO tickets(id, payload, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                ("bad-list", "[1, 2, 3]", "2026-01-04", None),
+            )
+        loaded = self.storage.load_json_file(self.config.tickets_file, [])
+        self.assertEqual([t["id"] for t in loaded], ["t1"])
+
 
 class LeadCapturesTestCase(SqlStorageBaseTestCase):
     """Regression coverage for the lead-capture flow under SQLite."""

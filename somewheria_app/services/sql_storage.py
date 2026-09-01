@@ -259,7 +259,14 @@ class SqlStorageService:
             rows = conn.execute(
                 "SELECT payload FROM tickets ORDER BY COALESCE(updated_at, created_at) DESC"
             ).fetchall()
-        return [loads(row["payload"]) for row in rows]
+        # Filter out any payload that doesn't deserialize to a dict. The
+        # write path (``_save_tickets``) only stores dicts, so in normal
+        # operation this is a no-op — but a hand-edited row could hold
+        # anything, and every downstream caller in ``TicketService`` calls
+        # ``.get(...)`` on each entry, which would AttributeError and 503
+        # the ticket / dashboard routes via the crash handler. Matches the
+        # same guard ``TicketService._load`` applies for the file backend.
+        return [payload for payload in (loads(row["payload"]) for row in rows) if isinstance(payload, dict)]
 
     def _save_tickets(self, tickets: list[dict]) -> None:
         with self.db.transaction() as conn:

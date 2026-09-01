@@ -89,7 +89,21 @@ class TicketService:
 
     def _load(self) -> list[dict]:
         data = self.storage.load_json_file(self.config.tickets_file, [])
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        # Drop non-dict rows defensively. Everything the service writes back
+        # is a dict, but a hand-edited tickets.json / a corrupted SQLite
+        # ``tickets.payload`` column can slip a bare string, number, ``null``,
+        # or list into the list. Every downstream caller (``list_tickets``,
+        # ``get_ticket``, ``summary``, ``status_counts``, ``update_ticket``,
+        # ``add_note``, ``add_photo``, ``set_email_updates``,
+        # ``find_by_jira_key``, ``_attempt_jira_create_once``) reaches into
+        # each entry with ``.get(...)``, which would AttributeError on a
+        # non-dict and take out the admin dashboard / renter dashboard /
+        # ticket routes via the crash handler's empty 503. Matches the
+        # isinstance(dict) guard added for pending registrations / lead
+        # captures in PR #146 and for the change-log JSONL in PR #144.
+        return [item for item in data if isinstance(item, dict)]
 
     def _save(self, tickets: list[dict]) -> None:
         self.storage.save_json_file(self.config.tickets_file, tickets)

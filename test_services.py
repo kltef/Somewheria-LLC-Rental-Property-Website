@@ -2729,5 +2729,77 @@ class TicketSetEmailUpdatesTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_not_called()
 
 
+class TicketLoadNonDictRowGuardTestCase(unittest.TestCase):
+    """Regression: a stray non-dict row in tickets.json must not crash the
+    ticket service.
+
+    Everything the service writes back through ``_save`` is a dict, but a
+    corrupted / hand-edited tickets.json can slip in a bare string, number,
+    ``null``, or list. Every read path (``list_tickets``, ``get_ticket``,
+    ``summary``, ``status_counts``, ``find_by_jira_key``) reaches into each
+    entry with ``.get(...)``, which would AttributeError on a non-dict and
+    take out the admin dashboard / renter dashboard / ticket routes via the
+    crash handler's empty 503. Matches the isinstance(dict) guard added for
+    pending registrations / lead captures in PR #146 and for the change-log
+    JSONL in PR #144.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # Interleave valid ticket dicts with malformed rows the writer would
+        # never emit — a bare string, a bare number, ``null``, and a list.
+        self.tickets_path.write_text(
+            '['
+            '{"id": "t1", "status": "open", "priority": "urgent", '
+            '"jira_key": "OPS-1", "submitted_by": "renter@example.com"},'
+            '"garbage",'
+            'null,'
+            '42,'
+            '["not", "a", "dict"],'
+            '{"id": "t2", "status": "resolved", "priority": "normal", '
+            '"submitted_by": "other@example.com"}'
+            ']',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_list_tickets_skips_non_dict_rows(self):
+        tickets = self.service.list_tickets()
+        self.assertEqual({t["id"] for t in tickets}, {"t1", "t2"})
+
+    def test_list_tickets_submitter_filter_skips_non_dict_rows(self):
+        tickets = self.service.list_tickets(submitter="renter@example.com")
+        self.assertEqual([t["id"] for t in tickets], ["t1"])
+
+    def test_get_ticket_skips_non_dict_rows(self):
+        # A ``for ticket in self._load(): ticket.get("id")`` walk that hit a
+        # non-dict before finding the target would AttributeError. The guard
+        # must let ``get_ticket`` reach the real row.
+        self.assertEqual(self.service.get_ticket("t2")["status"], "resolved")
+
+    def test_summary_and_status_counts_ignore_non_dict_rows(self):
+        summary = self.service.summary()
+        # Only the two real dicts count toward totals.
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["open"], 1)
+        self.assertEqual(summary["urgent"], 1)
+        counts = self.service.status_counts()
+        # Every allowed status key is zero-filled; only "open" and
+        # "resolved" carry the real dicts.
+        self.assertEqual(counts["open"], 1)
+        self.assertEqual(counts["resolved"], 1)
+        self.assertEqual(counts["in_progress"], 0)
+
+    def test_find_by_jira_key_skips_non_dict_rows(self):
+        self.assertEqual(self.service.find_by_jira_key("OPS-1")["id"], "t1")
+
+
 if __name__ == "__main__":
     unittest.main()
