@@ -150,7 +150,17 @@ class FileStorageService:
         return previous is not None and previous != "revoked"
 
     def get_renter_profiles(self) -> dict:
-        return self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)
+        raw = self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)
+        # Drop non-dict profile values defensively. ``expected_type=dict`` only
+        # verifies the top-level container; a corrupted / hand-edited file can
+        # still slip a bare string, number, ``null``, or list under an email
+        # key. Every downstream caller (``renter_profile`` route mutating
+        # ``profile["name"]``, ``ticket_routes._renter_email_default`` calling
+        # ``.get("email_status_updates", True)``) would otherwise TypeError /
+        # AttributeError and take out the page via the crash handler's 503.
+        # Mirrors the isinstance(dict) guard PRs #146 / #147 added for pending
+        # registrations, lead captures, and tickets.
+        return {email: profile for email, profile in raw.items() if isinstance(profile, dict)}
 
     def save_renter_profiles(self, profiles: dict) -> None:
         self.save_json_file(self.config.renter_profile_file, profiles)
@@ -218,7 +228,23 @@ class FileStorageService:
             self.save_json_file(self.config.hidden_listings_file, ids)
 
     def get_renter_contracts(self) -> dict:
-        return self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
+        raw = self.load_json_file(self.config.contracts_file, {}, expected_type=dict)
+        # Drop non-list values and non-dict contract items defensively.
+        # ``expected_type=dict`` only verifies the top-level container; a
+        # corrupted / hand-edited file can still slip a scalar or a list of
+        # non-dict entries under an email key. Every downstream caller
+        # (``admin_contracts`` doing ``setdefault(...).append(...)``,
+        # ``_backfill_contract_ids`` iterating with ``.get("id")``, the CSV
+        # export walking ``.get(...)`` per row) would otherwise crash and
+        # take out the admin UI via the crash handler's 503. Matches the
+        # isinstance(dict) guard PRs #146 / #147 added for pending
+        # registrations, lead captures, and tickets.
+        cleaned: dict = {}
+        for email, contracts in raw.items():
+            if not isinstance(contracts, list):
+                continue
+            cleaned[email] = [item for item in contracts if isinstance(item, dict)]
+        return cleaned
 
     def save_renter_contracts(self, contracts: dict) -> None:
         self.save_json_file(self.config.contracts_file, contracts)

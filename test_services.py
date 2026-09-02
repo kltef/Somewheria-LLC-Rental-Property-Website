@@ -399,6 +399,63 @@ class FileStorageServiceTestCase(unittest.TestCase):
             ],
         )
 
+    def test_get_renter_profiles_drops_non_dict_values(self):
+        # ``expected_type=dict`` on load_json_file only verifies the top-level
+        # container shape. A corrupted / hand-edited file that stores a
+        # scalar or a list under an email key would otherwise reach the
+        # ``renter_profile`` POST handler as ``profile["name"] = ...`` (which
+        # TypeErrors on a string) or the ``ticket_routes._renter_email_default``
+        # helper as ``profile.get(...)`` (which AttributeErrors on a list), and
+        # the crash handler serves the page as an empty 503. Matches the
+        # isinstance(dict) guards added for pending registrations, lead
+        # captures, and tickets in PRs #146 / #147.
+        raw = {
+            "renter@example.com": {"name": "Renter R"},
+            "corrupt-string@example.com": "not a dict",
+            "corrupt-null@example.com": None,
+            "corrupt-list@example.com": ["not", "a", "dict"],
+            "renter2@example.com": {"name": "Renter Two"},
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_profiles()
+        self.assertEqual(
+            loaded,
+            {
+                "renter@example.com": {"name": "Renter R"},
+                "renter2@example.com": {"name": "Renter Two"},
+            },
+        )
+
+    def test_get_renter_contracts_drops_non_list_values_and_non_dict_items(self):
+        # Same shape guard, one level deeper: ``expected_type=dict`` verifies
+        # the outer email->contracts map but leaves the inner shape unchecked.
+        # A hand-edited file that stores a scalar (instead of a list) under an
+        # email key, or a list containing bare strings / nulls, would otherwise
+        # crash ``admin_contracts`` (``setdefault(...).append`` on a non-list),
+        # ``_backfill_contract_ids`` (``.get("id")`` on a non-dict), and the
+        # CSV export (``.get(...)`` per row). The crash handler then serves
+        # the admin UI as an empty 503.
+        raw = {
+            "renter@example.com": [
+                {"id": "c1"},
+                "not a dict",
+                None,
+                {"id": "c2"},
+            ],
+            "corrupt-scalar@example.com": "not a list",
+            "corrupt-null@example.com": None,
+            "renter2@example.com": [{"id": "c3"}],
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_contracts()
+        self.assertEqual(
+            loaded,
+            {
+                "renter@example.com": [{"id": "c1"}, {"id": "c2"}],
+                "renter2@example.com": [{"id": "c3"}],
+            },
+        )
+
     def test_set_user_role_lowercases_email_and_saves(self):
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,
