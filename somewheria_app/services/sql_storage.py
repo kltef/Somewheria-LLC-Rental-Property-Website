@@ -218,7 +218,22 @@ class SqlStorageService:
     def get_renter_profiles(self) -> dict:
         with self.db.read() as conn:
             rows = conn.execute("SELECT email, profile FROM renter_profiles").fetchall()
-        return {row["email"]: loads(row["profile"]) for row in rows}
+        # Drop rows whose ``profile`` column doesn't deserialize to a dict.
+        # The write path only stores dicts, so in normal operation this is a
+        # no-op — but a hand-edited row could hold anything, and every
+        # downstream caller (the ``renter_profile`` POST mutating
+        # ``profile["name"]``, ``ticket_routes._renter_email_default``
+        # calling ``.get("email_status_updates", True)``) would otherwise
+        # TypeError / AttributeError and take out the page via the crash
+        # handler's 503. Matches the guard the FileStorageService counterpart
+        # applies and the same-shape guards on the tickets / lead-captures
+        # tables landed in PRs #146 / #147.
+        out: dict = {}
+        for row in rows:
+            profile = loads(row["profile"])
+            if isinstance(profile, dict):
+                out[row["email"]] = profile
+        return out
 
     def save_renter_profiles(self, profiles: dict) -> None:
         with self.db.transaction() as conn:
@@ -236,9 +251,20 @@ class SqlStorageService:
             rows = conn.execute(
                 "SELECT email, idx, contract FROM renter_contracts ORDER BY email, idx"
             ).fetchall()
+        # Drop rows whose ``contract`` column doesn't deserialize to a dict.
+        # The write path only stores dicts, so in normal operation this is a
+        # no-op — but a hand-edited row could hold anything, and every
+        # downstream caller (``admin_contracts`` doing ``.append``,
+        # ``_backfill_contract_ids`` iterating with ``.get("id")``, the CSV
+        # export walking ``.get(...)`` per row) would otherwise crash and
+        # take out the admin UI via the crash handler's 503. Matches the
+        # FileStorageService counterpart and the guards PRs #146 / #147
+        # added for tickets and lead captures.
         out: dict[str, list] = {}
         for row in rows:
-            out.setdefault(row["email"], []).append(loads(row["contract"]))
+            contract = loads(row["contract"])
+            if isinstance(contract, dict):
+                out.setdefault(row["email"], []).append(contract)
         return out
 
     def save_renter_contracts(self, contracts: dict) -> None:

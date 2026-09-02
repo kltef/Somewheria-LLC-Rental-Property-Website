@@ -125,6 +125,35 @@ class RenterProfilesTestCase(SqlStorageBaseTestCase):
         profiles = self.storage.get_renter_profiles()
         self.assertEqual(profiles, {"renter@example.com": {"name": "Renter R"}})
 
+    def test_get_renter_profiles_drops_non_dict_payloads(self):
+        # A ``profile`` column that deserializes to something other than a
+        # dict (a hand-edited row storing ``"null"``, a JSON array, or a
+        # scalar) must not crash the ``renter_profile`` route or the
+        # ``_renter_email_default`` helper, both of which call ``.get(...)``
+        # / mutate keys on each value. Matches the FileStorageService guard
+        # and the same-shape guard on the tickets / lead-captures tables
+        # landed in PRs #146 / #147.
+        self.storage.save_renter_profiles(
+            {"keep@example.com": {"name": "Renter R"}}
+        )
+        # Bypass the service so we can insert deliberately malformed payloads
+        # into the underlying table.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("garbage@example.com", '"not a dict"'),
+            )
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("null@example.com", "null"),
+            )
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("list@example.com", "[1, 2, 3]"),
+            )
+        profiles = self.storage.get_renter_profiles()
+        self.assertEqual(profiles, {"keep@example.com": {"name": "Renter R"}})
+
 
 class RenterContractsTestCase(SqlStorageBaseTestCase):
     def test_save_and_get_preserves_order(self):
@@ -141,6 +170,42 @@ class RenterContractsTestCase(SqlStorageBaseTestCase):
             [c["contract_id"] for c in out["renter@example.com"]],
             ["a", "b", "c"],
         )
+
+    def test_get_renter_contracts_drops_non_dict_payloads(self):
+        # A ``contract`` column that deserializes to something other than a
+        # dict (a hand-edited row storing ``"null"``, a JSON array, or a
+        # scalar) must not crash the admin contracts UI, the CSV export, or
+        # ``_backfill_contract_ids`` — all iterate with ``.get(...)`` per
+        # entry. Matches the FileStorageService guard and the same-shape
+        # guards on the tickets / lead-captures tables landed in PRs #146 /
+        # #147.
+        self.storage.save_renter_contracts(
+            {"renter@example.com": [{"id": "c1"}]}
+        )
+        # Bypass the service so we can insert deliberately malformed
+        # contract rows straight into the underlying table.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("renter@example.com", 1, '"not a dict"'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("renter@example.com", 2, "null"),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("renter@example.com", 3, "[1, 2, 3]"),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("other@example.com", 0, '"junk"'),
+            )
+        out = self.storage.get_renter_contracts()
+        # Only the well-formed contract survives; ``other@example.com`` has no
+        # dict rows and shouldn't appear at all so downstream lookups don't
+        # accidentally see an empty renter entry.
+        self.assertEqual(out, {"renter@example.com": [{"id": "c1"}]})
 
 
 class TicketsTestCase(SqlStorageBaseTestCase):
