@@ -122,9 +122,19 @@ class FileStorageService:
             return True
 
     def remove_pending_registration(self, email: str) -> None:
+        target = (email or "").lower()
         with self.file_lock:
+            # ``(item.get("email") or "")`` — not ``item.get("email", "")`` —
+            # because ``.get`` returns the stored value (even ``None``) when
+            # the key is present, so a corrupted / hand-edited row of
+            # ``{"email": null, ...}`` would otherwise crash the comparison
+            # with ``AttributeError: 'NoneType' object has no attribute
+            # 'lower'`` and take out /admin/registrations approve/reject via
+            # the crash handler's empty 503. Same idiom
+            # ``add_pending_registration`` already uses on the dedup path.
             registrations = [
-                item for item in self.get_pending_registrations() if item.get("email", "").lower() != email.lower()
+                item for item in self.get_pending_registrations()
+                if (item.get("email") or "").lower() != target
             ]
             self.save_json_file(self.config.registration_file, registrations)
 
@@ -191,17 +201,25 @@ class FileStorageService:
             leads = self.get_pending_lead_captures()
             # De-duplicate by email so a repeated submission doesn't bloat the file
             # or give the requester a way to flood the admin UI.
-            if any(item.get("email", "").lower() == target_email for item in leads):
+            # ``(item.get("email") or "")`` — see ``remove_pending_registration``:
+            # a stored ``{"email": null}`` row would otherwise crash the dedup
+            # walk with AttributeError on ``None.lower()``.
+            if any((item.get("email") or "").lower() == target_email for item in leads):
                 return False
             leads.append(lead)
             self.save_json_file(self.config.lead_capture_file, leads)
             return True
 
     def remove_pending_lead_capture(self, email: str) -> None:
+        target = (email or "").lower()
         with self.file_lock:
+            # ``(item.get("email") or "")`` — see ``remove_pending_registration``:
+            # a stored ``{"email": null}`` row would otherwise crash the filter
+            # with AttributeError on ``None.lower()`` and swallow the admin
+            # response via the crash handler's empty 503.
             leads = [
                 item for item in self.get_pending_lead_captures()
-                if item.get("email", "").lower() != email.lower()
+                if (item.get("email") or "").lower() != target
             ]
             self.save_json_file(self.config.lead_capture_file, leads)
 
