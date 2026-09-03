@@ -255,6 +255,32 @@ class FileStorageServiceTestCase(unittest.TestCase):
             [{"email": "keep@example.com"}],
         )
 
+    def test_remove_pending_registration_survives_null_email_row(self):
+        # A stored ``{"email": null}`` row is a dict (so the isinstance filter
+        # in ``get_pending_registrations`` keeps it) but the value is None. The
+        # prior ``.get("email", "").lower()`` returned ``None`` — ``.get``'s
+        # default only applies when the key is absent, not when the stored
+        # value is None — and then crashed the filter with AttributeError,
+        # taking out the /admin/registrations approve/reject POST via the
+        # crash handler's empty 503.
+        with patch.object(
+            self.service,
+            "get_pending_registrations",
+            return_value=[
+                {"email": None, "name": "corrupt"},
+                {"email": "drop@example.com"},
+                {"email": "keep@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_registration("drop@example.com")
+        save_json_mock.assert_called_once_with(
+            self.config.registration_file,
+            [
+                {"email": None, "name": "corrupt"},
+                {"email": "keep@example.com"},
+            ],
+        )
+
     def test_add_pending_lead_capture_appends_and_saves(self):
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
@@ -308,6 +334,49 @@ class FileStorageServiceTestCase(unittest.TestCase):
         save_json_mock.assert_called_once_with(
             self.config.lead_capture_file,
             [{"email": "keep@example.com"}],
+        )
+
+    def test_add_pending_lead_capture_survives_null_email_row(self):
+        # Same class of crash as
+        # ``test_remove_pending_registration_survives_null_email_row``: a
+        # ``{"email": null}`` row is a dict, slips past the isinstance filter,
+        # then AttributeErrors inside the dedup ``any(...)`` walk because
+        # ``.get("email", "")`` returned ``None`` and ``None.lower()`` raises.
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[{"email": None, "name": "corrupt"}],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_lead_capture(
+                    {"email": "new@example.com", "submitted_at": "2026-01-01"}
+                )
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [
+                {"email": None, "name": "corrupt"},
+                {"email": "new@example.com", "submitted_at": "2026-01-01"},
+            ],
+        )
+
+    def test_remove_pending_lead_capture_survives_null_email_row(self):
+        with patch.object(
+            self.service,
+            "get_pending_lead_captures",
+            return_value=[
+                {"email": None, "name": "corrupt"},
+                {"email": "drop@example.com"},
+                {"email": "keep@example.com"},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.service.remove_pending_lead_capture("DROP@example.com")
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [
+                {"email": None, "name": "corrupt"},
+                {"email": "keep@example.com"},
+            ],
         )
 
     def test_get_pending_registrations_drops_non_dict_entries(self):
