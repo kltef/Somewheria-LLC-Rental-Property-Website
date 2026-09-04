@@ -291,22 +291,16 @@ def contact_submit():
     form = {"name": name, "email": email, "message": message}
     if not name or not message or not is_valid_email(email):
         return contact(error="Name, a valid email, and a message are required.", form=form), 400
-    delivered = services.notifications.send_email(
+    # Dispatch off the request thread: send_email blocks up to
+    # SMTP_TIMEOUT_SECONDS (30 s), long enough for a slow Gmail relay to pin
+    # a gunicorn worker per POST on this unauthenticated endpoint. The 5/600s
+    # per-IP rate limit is thin cover against an IP-rotating client. Same
+    # shape as the report_issue / appointment / registration dispatches; a
+    # delivery failure is logged inside send_email itself.
+    services.notifications.send_email_async(
         "Contact Form Message",
         f"From: {name} <{email}>\n\n{message}",
     )
-    if not delivered:
-        services.notifications.log_and_notify_error(
-            "Contact Form Delivery Failure",
-            f"Contact message from {name} <{email}> could not be emailed.",
-        )
-        return contact(
-            error=(
-                "Sorry — we couldn't send your message just now. "
-                "Please call or email us directly."
-            ),
-            form=form,
-        ), 503
     return contact(sent=True)
 
 

@@ -448,6 +448,54 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Contact", response.data)
 
+    def test_contact_submit_requires_name_email_and_message(self):
+        for payload in (
+            {"name": "", "email": "a@example.com", "message": "Hi"},
+            {"name": "Jamie", "email": "not-an-email", "message": "Hi"},
+            {"name": "Jamie", "email": "a@example.com", "message": ""},
+        ):
+            with patch.object(
+                self.services.notifications, "send_email_async"
+            ) as async_mock, patch.object(
+                self.services.notifications, "send_email"
+            ) as sync_mock:
+                response = self.client.post("/contact", data=payload)
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(
+                b"Name, a valid email, and a message are required.", response.data
+            )
+            async_mock.assert_not_called()
+            sync_mock.assert_not_called()
+
+    def test_contact_submit_dispatches_email_off_request_thread(self):
+        # send_email blocks up to SMTP_TIMEOUT_SECONDS (30 s); the async
+        # wrapper keeps this unauthenticated POST from being an easy way to
+        # pin a gunicorn worker on a slow Gmail relay. Pin the wrapper so a
+        # future refactor can't quietly regress it back onto the request
+        # thread.
+        with patch.object(
+            self.services.notifications, "send_email_async"
+        ) as async_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as sync_mock:
+            response = self.client.post(
+                "/contact",
+                data={
+                    "name": "Jamie",
+                    "email": "jamie@example.com",
+                    "message": "Interested in a viewing.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        sync_mock.assert_not_called()
+        async_mock.assert_called_once()
+        self.assertEqual(async_mock.call_args.args[0], "Contact Form Message")
+        body = async_mock.call_args.args[1]
+        self.assertIn("Jamie", body)
+        self.assertIn("jamie@example.com", body)
+        self.assertIn("Interested in a viewing.", body)
+
     def test_logs_page_loads(self):
         self.login_as("high_admin")
         with patch.object(self.services.notifications, "read_logs", return_value=[]):
