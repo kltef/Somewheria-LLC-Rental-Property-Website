@@ -17,8 +17,19 @@ import re
 # "local@domain.tld" shape we want to accept and rejects the obvious
 # junk the previous "@ in value" check let through ("@", "a@", "@b",
 # "a@b", "a b@c.com"). RFC 5321 caps the total length at 254 bytes.
+#
+# The local part is modeled as an RFC 5322 dot-atom: one or more atoms
+# separated by single dots. Writing it as a single ``[...]+`` class
+# (as an earlier revision did) silently accepted a leading dot
+# (``.alice@…``), a trailing dot (``alice.@…``), and consecutive dots
+# (``a..b@…``) — all forbidden by the standard and rejected by real
+# SMTP servers, and worse a case-preserving mismatch: an admin approves
+# ``.alice@example.com`` from the pending list, but a Google login for
+# that account returns ``alice@example.com``, so the freshly-approved
+# role key never matches the login and the user can never sign in.
 _EMAIL_REGEX = re.compile(
-    r"^[A-Za-z0-9._%+\-!#$&'*/=?^`{|}~]+"
+    r"^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+"
+    r"(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*"
     r"@"
     r"[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)+$"

@@ -2795,6 +2795,21 @@ class EmailValidationTestCase(unittest.TestCase):
         ):
             self.assertFalse(is_valid_email(value), value)
 
+    def test_rejects_invalid_local_part_dots(self):
+        # RFC 5321 / 5322 model the local part as a dot-atom: one or more
+        # atoms separated by single dots, no empty atoms. Every real SMTP
+        # server rejects the shapes below, and accepting them here made an
+        # admin-approved ``.alice@example.com`` unmatchable against the
+        # ``alice@example.com`` Google would actually return at login.
+        for value in (
+            ".alice@example.com",   # leading dot in local
+            "alice.@example.com",   # trailing dot in local
+            "a..b@example.com",     # consecutive dots in local
+            ".@example.com",        # only-dot local
+            "a...b@example.com",    # runs of dots
+        ):
+            self.assertFalse(is_valid_email(value), value)
+
     def test_rejects_non_strings(self):
         self.assertFalse(is_valid_email(None))
         self.assertFalse(is_valid_email(12345))
