@@ -525,6 +525,37 @@ class FileStorageServiceTestCase(unittest.TestCase):
             },
         )
 
+    def test_get_user_roles_drops_non_string_keys_and_values(self):
+        # ``expected_type=dict`` on load_json_file only verifies the top-level
+        # container. A corrupted / hand-edited ``user_roles.json`` can still
+        # slip a non-string key (an integer, ``null``) or a non-string value
+        # (a nested dict, a list, a bool) into the mapping. Every downstream
+        # caller — ``AuthService.all_user_roles`` calling ``email.lower()``,
+        # ``admin_dashboard_combined`` iterating ``.items()``, the /admin/users
+        # role tally — would otherwise AttributeError / TypeError on the
+        # non-string and take out the admin UI via the crash handler's
+        # empty 503. Matches the isinstance guards PRs #146 / #147 / #148
+        # added for pending registrations, tickets, and renter profiles.
+        raw = {
+            "admin@example.com": "admin",
+            "renter@example.com": "renter",
+            "corrupt-value-dict@example.com": {"role": "admin"},
+            "corrupt-value-list@example.com": ["admin"],
+            "corrupt-value-null@example.com": None,
+            "corrupt-value-bool@example.com": True,
+            123: "admin",
+            None: "renter",
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                "admin@example.com": "admin",
+                "renter@example.com": "renter",
+            },
+        )
+
     def test_set_user_role_lowercases_email_and_saves(self):
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,
