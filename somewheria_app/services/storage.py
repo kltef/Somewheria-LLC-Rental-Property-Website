@@ -139,7 +139,23 @@ class FileStorageService:
             self.save_json_file(self.config.registration_file, registrations)
 
     def get_user_roles(self) -> dict:
-        return self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)
+        raw = self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)
+        # Drop entries whose email key or role value isn't a string.
+        # ``expected_type=dict`` only verifies the top-level container; a
+        # corrupted / hand-edited file can still slip a non-string key (an
+        # integer, ``null``) or a non-string value (a nested dict, list, or
+        # bool) into the mapping. Every downstream caller (``AuthService.
+        # all_user_roles`` calling ``email.lower()``, ``admin_dashboard_combined``
+        # iterating ``.items()`` and comparing ``role != "revoked"``, the
+        # /admin/users role tally) would otherwise AttributeError / TypeError
+        # on the non-string and take out the admin UI via the crash handler's
+        # empty 503. Mirrors the isinstance guards PRs #146 / #147 / #148
+        # added for pending registrations, tickets, and renter profiles.
+        return {
+            email: role
+            for email, role in raw.items()
+            if isinstance(email, str) and isinstance(role, str)
+        }
 
     def set_user_role(self, email: str, role: str) -> None:
         with self.file_lock:
