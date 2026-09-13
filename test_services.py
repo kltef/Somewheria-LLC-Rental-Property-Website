@@ -854,6 +854,38 @@ class AppointmentServiceTestCase(unittest.TestCase):
         self.assertEqual(loaded, {"prop-1": {"2030-01-10"}})
         self.assertNotIn("", loaded)
 
+    def test_load_merges_duplicate_property_id_lines(self):
+        # A hand-edited / externally-appended appointments file can hold two
+        # lines for the same property id. Prior behavior let the second line
+        # clobber the first — silently dropping every booking on the earlier
+        # line and rewriting the file with only the survivors on the next
+        # save(). Merge them into one set so no booking is lost.
+        self.appointments_path.write_text(
+            "prop-1:2030-01-10\nprop-1:2030-01-11,2030-01-12\n",
+            encoding="utf-8",
+        )
+        loaded = self.service.load()
+        self.assertEqual(loaded, {"prop-1": {"2030-01-10", "2030-01-11", "2030-01-12"}})
+
+    def test_load_strips_whitespace_from_date_tokens(self):
+        # A file line like ``prop-1:2030-01-10, 2030-01-11 ,2030-01-12``
+        # (extra spaces around comma separators) used to seed the in-memory
+        # set with ``" 2030-01-11 "`` — a distinct string from the clean
+        # ``"2030-01-11"`` that the route handler passes to book(). The
+        # double-booking guard compares by exact match, so the second
+        # booking would slip through and both entries would sit on the
+        # same property/date. Strip each token at load so the set holds
+        # only canonical values.
+        self.appointments_path.write_text(
+            "prop-1:2030-01-10, 2030-01-11 ,2030-01-12,\n",
+            encoding="utf-8",
+        )
+        loaded = self.service.load()
+        self.assertEqual(loaded, {"prop-1": {"2030-01-10", "2030-01-11", "2030-01-12"}})
+        # book() must reject a second attempt for a whitespace-padded date
+        # already in the file — otherwise the same date would be booked twice.
+        self.assertFalse(self.service.book("prop-1", "2030-01-11"))
+
     def test_load_does_not_log_at_info_on_every_call(self):
         # load() is called on every /property/<uuid> page render; routine
         # traces must sit at DEBUG so real-user traffic doesn't dominate
