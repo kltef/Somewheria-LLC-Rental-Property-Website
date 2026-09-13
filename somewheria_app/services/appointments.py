@@ -53,7 +53,32 @@ class AppointmentService:
                     # a bogus "" key that gets re-written on the next save().
                     if not property_id:
                         continue
-                    appointments[property_id] = {item for item in dates.split(",") if item}
+                    # Strip whitespace around each date and drop empty tokens
+                    # so a hand-edited / externally-corrupted file with
+                    # ``prop-1:2030-01-10, 2030-01-11`` doesn't seed the
+                    # in-memory set with ``" 2030-01-11"`` (leading space).
+                    # book() compares the raw date string against the set for
+                    # its double-booking check; a whitespace-padded token
+                    # never matches the clean value the request handler
+                    # passes, so the second booking would slip through and
+                    # both entries — the padded original and the new clean
+                    # one — would sit on the same property/date.
+                    parsed_dates = {token.strip() for token in dates.split(",")}
+                    parsed_dates.discard("")
+                    # Merge duplicate property_id lines instead of letting the
+                    # later line clobber the earlier one. The service itself
+                    # only ever writes a single line per property, so in
+                    # normal operation this is a no-op — but a hand-edited /
+                    # partially-appended file with two ``prop-1:`` lines
+                    # would otherwise silently drop every date on the first
+                    # line, and the next save() would rewrite the file with
+                    # only the survivors. Same defensive shape the recent
+                    # storage / analytics guards apply to malformed rows.
+                    existing = appointments.get(property_id)
+                    if existing is None:
+                        appointments[property_id] = parsed_dates
+                    else:
+                        existing.update(parsed_dates)
         return appointments
 
     def save(self, appointments: dict[str, set[str]]) -> None:
