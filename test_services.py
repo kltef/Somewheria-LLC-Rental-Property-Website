@@ -2941,6 +2941,17 @@ class EmailValidationTestCase(unittest.TestCase):
         long_local = "a" * 255
         self.assertFalse(is_valid_email(f"{long_local}@example.com"))
 
+    def test_rejects_oversized_local_part(self):
+        # RFC 5321 caps the local part at 64 chars regardless of the total
+        # length. A 65-char local part with a short domain is well under
+        # the 254-byte total-length limit but real SMTP relays refuse it
+        # with 501-too-long — accepting it here just means the admin
+        # approval and Google-login match paths both dead-end at delivery.
+        self.assertFalse(is_valid_email("a" * 65 + "@example.com"))
+        # Exactly 64 chars is still legal per the standard, so it must
+        # continue to pass — the boundary is inclusive.
+        self.assertTrue(is_valid_email("a" * 64 + "@example.com"))
+
 
 class TicketSetEmailUpdatesTestCase(unittest.TestCase):
     """Guard the no-op short-circuit in ``TicketService.set_email_updates``.

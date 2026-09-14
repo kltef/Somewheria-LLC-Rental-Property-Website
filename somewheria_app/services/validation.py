@@ -50,4 +50,19 @@ def is_valid_email(value) -> bool:
         return False
     if len(value) < 3 or len(value) > 254:
         return False
+    # Enforce the RFC 5321 local-part length cap (64 chars) too: the
+    # 254-byte total-length gate above lets a >64-char local part slip
+    # through as long as the domain is short enough, but every real SMTP
+    # relay rejects anything past that limit. Accepting such an address
+    # here just means an admin approves it, the Google login can never
+    # match it, and every outbound send fails at the relay with a
+    # ``501 too long``. ``rpartition`` handles a "no @" input safely
+    # (returns ``("", "", value)``) so the empty-local check catches it
+    # before the length check runs. (RFC also caps the domain at 253
+    # chars, but with a required local part ≥ 1 and total ≤ 254 that's
+    # already implied by the total-length check above — no separate
+    # domain-length guard needed here.)
+    local, _, _ = value.rpartition("@")
+    if not local or len(local) > 64:
+        return False
     return _EMAIL_REGEX.match(value) is not None
