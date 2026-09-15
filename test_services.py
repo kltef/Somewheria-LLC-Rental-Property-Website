@@ -3074,5 +3074,88 @@ class TicketLoadNonDictRowGuardTestCase(unittest.TestCase):
         self.assertEqual(self.service.find_by_jira_key("OPS-1")["id"], "t1")
 
 
+class TicketNonStringFieldGuardTestCase(unittest.TestCase):
+    """Regression: a dict-shaped ticket row whose fields hold non-string
+    values (a corrupted / hand-edited tickets.json that put an integer under
+    ``submitted_by`` / ``updated_at``, or a non-list under ``notes``) must
+    not crash any of the read paths or the ``add_note`` write path.
+
+    The row-level ``isinstance(dict)`` filter added in PR #147 handled bare
+    non-dict entries; this test class covers the next layer down —
+    per-field non-string values inside an otherwise valid dict — matching
+    the same defensive shape ``_contract_str_field`` uses in
+    ``admin_routes.py`` (PR #158).
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # Every row is a valid dict, but its per-field types are hostile:
+        # non-string ``submitted_by``, non-string ``updated_at`` /
+        # ``created_at``, a non-list ``notes`` value.
+        self.tickets_path.write_text(
+            '['
+            '{"id": "t1", "status": "open", "priority": "normal", '
+            '"submitted_by": 123, "updated_at": 20240101, '
+            '"created_at": null, "notes": "not-a-list"},'
+            '{"id": "t2", "status": "open", "priority": "normal", '
+            '"submitted_by": "renter@example.com", '
+            '"updated_at": "2024-01-01T00:00:00Z", '
+            '"notes": []}'
+            ']',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_list_tickets_sort_survives_non_string_timestamps(self):
+        # Without the guard, sort raises ``TypeError: '<' not supported
+        # between 'int' and 'str'`` — mixing the int ``20240101`` from t1
+        # with the string ``"2024-01-01T00:00:00Z"`` from t2 — and takes
+        # out /admin/tickets / /renter-dashboard via the crash handler.
+        tickets = self.service.list_tickets()
+        self.assertEqual({t["id"] for t in tickets}, {"t1", "t2"})
+
+    def test_list_tickets_submitter_filter_survives_non_string_submitted_by(self):
+        # Without the guard, ``(t.get("submitted_by") or "").lower()``
+        # raises ``AttributeError: 'int' object has no attribute 'lower'``
+        # on t1 (submitted_by=123). The filter must reach t2 without
+        # crashing on the earlier row.
+        tickets = self.service.list_tickets(submitter="renter@example.com")
+        self.assertEqual([t["id"] for t in tickets], ["t2"])
+
+    def test_add_note_survives_non_list_notes_field(self):
+        # Without the guard, ``ticket.setdefault("notes", []).append(...)``
+        # returns the stored string ``"not-a-list"`` and ``.append`` on it
+        # raises ``AttributeError: 'str' object has no attribute 'append'``,
+        # 503'ing the ticket-note POST via the crash handler.
+        result = self.service.add_note("t1", "hello", "actor@example.com")
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result["notes"], list)
+        self.assertEqual(len(result["notes"]), 1)
+        self.assertEqual(result["notes"][0]["text"], "hello")
+
+    def test_maybe_email_submitter_survives_non_string_submitted_by(self):
+        # ``_maybe_email_submitter`` did ``(ticket.get("submitted_by") or
+        # "").strip()`` — the int ``123`` on t1 was truthy so ``.strip()``
+        # ran on the raw int and raised AttributeError. The route that
+        # called this (create_ticket / update_ticket / add_note) then 503'd.
+        # After the guard, a non-string is treated as no submitter and the
+        # method returns silently without calling ``send_email``.
+        ticket = {
+            "id": "tX",
+            "email_updates": True,
+            "submitted_by": 42,
+            "submitter_name": "X",
+        }
+        self.service._maybe_email_submitter(ticket, subject="s", body="b")
+        self.notifications.send_email.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
