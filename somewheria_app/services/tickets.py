@@ -105,6 +105,26 @@ class TicketService:
         # captures in PR #146 and for the change-log JSONL in PR #144.
         return [item for item in data if isinstance(item, dict)]
 
+    @staticmethod
+    def _string_field(ticket: dict, key: str) -> str:
+        """Return ``ticket[key]`` as a string, or ``""`` if absent / non-string.
+
+        The row-level ``isinstance(dict)`` guard in ``_load`` filters non-dict
+        entries, but a hand-edited / externally-migrated row that is a valid
+        dict can still carry a non-string under any given field — an integer
+        timestamp under ``updated_at`` / ``created_at``, an int under
+        ``submitted_by``, a JSON ``null`` under ``status``. Callers that
+        reached for ``.lower()`` / ``.strip()`` directly (``list_tickets``
+        submitter filter, ``_maybe_email_submitter`` recipient normalization)
+        or that sorted by these values would AttributeError / TypeError and
+        take out the admin ticket list / renter dashboard / ticket detail via
+        the crash handler's empty 503. Mirrors ``_contract_str_field`` in
+        ``admin_routes.py`` (PR #158) and the isinstance guards PRs #144-#159
+        applied elsewhere.
+        """
+        value = ticket.get(key)
+        return value if isinstance(value, str) else ""
+
     def _save(self, tickets: list[dict]) -> None:
         self.storage.save_json_file(self.config.tickets_file, tickets)
 
@@ -119,13 +139,29 @@ class TicketService:
         tickets = self._load()
         if submitter:
             submitter_lc = submitter.lower()
-            tickets = [t for t in tickets if (t.get("submitted_by") or "").lower() == submitter_lc]
+            # ``_string_field`` guards against a hand-edited row whose
+            # ``submitted_by`` is a non-string (e.g. an integer) — the old
+            # ``(t.get("submitted_by") or "").lower()`` would AttributeError
+            # on ``.lower()`` and 503 the renter dashboard / admin ticket
+            # list via the crash handler.
+            tickets = [
+                t for t in tickets
+                if self._string_field(t, "submitted_by").lower() == submitter_lc
+            ]
         if statuses:
             status_set = {s for s in statuses if s in ALLOWED_STATUSES}
             if status_set:
                 tickets = [t for t in tickets if t.get("status") in status_set]
-        # Most recently updated first.
-        tickets.sort(key=lambda t: t.get("updated_at") or t.get("created_at") or "", reverse=True)
+        # Most recently updated first. Coerce the sort keys through
+        # ``_string_field`` so a corrupted row that stored an integer
+        # timestamp under ``updated_at`` / ``created_at`` doesn't mix types
+        # with the string values on other tickets and raise TypeError
+        # ("'<' not supported between 'int' and 'str'") inside ``sort``.
+        tickets.sort(
+            key=lambda t: self._string_field(t, "updated_at")
+            or self._string_field(t, "created_at"),
+            reverse=True,
+        )
         return tickets
 
     def get_ticket(self, ticket_id: str) -> dict | None:
@@ -419,7 +455,14 @@ class TicketService:
     def _maybe_email_submitter(self, ticket: dict, *, subject: str, body: str) -> None:
         if not ticket.get("email_updates"):
             return
-        recipient = (ticket.get("submitted_by") or "").strip()
+        # ``_string_field`` avoids ``.strip()`` on a non-string that a
+        # corrupted / hand-edited tickets row could put under
+        # ``submitted_by`` — the old ``(ticket.get("submitted_by") or "")``
+        # returned the raw value when it was a non-falsy non-string (e.g.
+        # an integer), then ``.strip()`` raised AttributeError inside a
+        # code path called from ``create_ticket`` / ``update_ticket`` /
+        # ``add_note`` and 503'd the enclosing route via the crash handler.
+        recipient = self._string_field(ticket, "submitted_by").strip()
         if not is_valid_email(recipient):
             return
         # Fire-and-forget: dispatched off the request thread so a slow SMTP
@@ -632,7 +675,19 @@ class TicketService:
             for ticket in tickets:
                 if ticket.get("id") != ticket_id:
                     continue
-                ticket.setdefault("notes", []).append({
+                # ``setdefault`` returns the stored value when the key
+                # exists — so a corrupted / hand-edited row that put a
+                # non-list under ``notes`` (a string, an int, ``null``)
+                # would surface here and ``.append`` on that non-list
+                # would raise AttributeError, 503'ing the ticket-note
+                # POST via the crash handler. Reset to an empty list
+                # before appending; the same isinstance(list) shape the
+                # ``add_photo`` path already applies to ``photos``.
+                notes = ticket.get("notes")
+                if not isinstance(notes, list):
+                    notes = []
+                    ticket["notes"] = notes
+                notes.append({
                     "at": _now_iso(),
                     "by": actor,
                     "text": text,
@@ -645,7 +700,11 @@ class TicketService:
             return None
 
         ticket = target
-        submitter = (ticket.get("submitted_by") or "").lower()
+        # ``_string_field`` guards against a non-string ``submitted_by`` a
+        # hand-edited row could carry; the old ``.lower()`` on the raw value
+        # would AttributeError and 503 the note-add POST via the crash
+        # handler.
+        submitter = self._string_field(ticket, "submitted_by").lower()
         if actor != submitter:
             # Note from someone other than the submitter (typically admin);
             # send a heads-up email if the submitter opted in.
