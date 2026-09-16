@@ -41,6 +41,23 @@ def _is_admin() -> bool:
     return role in ("admin", "high_admin")
 
 
+def _ticket_str(ticket: dict, key: str) -> str:
+    """Return a string for ``ticket[key]`` or ``""`` if absent / non-string.
+
+    ``admin_ticket_list``'s search filter used to reach for ``.lower()``
+    directly on ``(t.get(key, "") or "")`` — the ``or ""`` only coerces when
+    the stored value is falsy, so a hand-edited / externally-migrated ticket
+    row that put a non-string under ``title`` / ``description`` /
+    ``submitted_by`` / ``property_name`` (an integer, a JSON ``true``) would
+    sail past that guard, then raise ``AttributeError: 'int' object has no
+    attribute 'lower'`` and take out /admin/tickets via the crash handler's
+    empty 503. Mirrors ``TicketService._string_field`` (PR #162) and
+    ``_contract_str_field`` in ``admin_routes.py`` (PR #158).
+    """
+    value = ticket.get(key)
+    return value if isinstance(value, str) else ""
+
+
 # ---------------------------------------------------------------- submit / list
 
 def _renter_email_default(services, email: str) -> bool:
@@ -237,10 +254,10 @@ def admin_ticket_list():
     if search:
         tickets = [
             t for t in tickets
-            if search in (t.get("title", "") or "").lower()
-            or search in (t.get("description", "") or "").lower()
-            or search in (t.get("submitted_by", "") or "").lower()
-            or search in (t.get("property_name", "") or "").lower()
+            if search in _ticket_str(t, "title").lower()
+            or search in _ticket_str(t, "description").lower()
+            or search in _ticket_str(t, "submitted_by").lower()
+            or search in _ticket_str(t, "property_name").lower()
         ]
 
     summary = services.tickets.summary()

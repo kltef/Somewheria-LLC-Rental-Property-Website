@@ -2048,6 +2048,51 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/tickets/abc123", response.headers["Location"])
 
+    def test_admin_ticket_list_search_survives_non_string_fields(self):
+        # PR #162 guarded ``TicketService`` against non-string ticket fields,
+        # but ``admin_ticket_list``'s search filter still reached for
+        # ``.lower()`` directly on ``(t.get("title", "") or "")`` — the
+        # ``or ""`` only coerces falsy values, so a hand-edited row where
+        # ``title`` / ``description`` / ``submitted_by`` / ``property_name``
+        # is a non-string (int, bool) sailed past the guard and 503'd
+        # /admin/tickets via the crash handler's empty response.
+        self.login_as("admin")
+        hostile_tickets = [
+            {
+                "id": "t-bad",
+                "title": 42,
+                "description": True,
+                "submitted_by": 99,
+                "property_name": ["nested"],
+                "status": "open",
+                "priority": "normal",
+                "created_at": "2030-01-01T00:00:00Z",
+                "updated_at": "2030-01-02T00:00:00Z",
+            },
+            {
+                "id": "t-good",
+                "title": "Leaky faucet",
+                "description": "Water everywhere",
+                "submitted_by": "renter@example.com",
+                "property_name": "Maple House",
+                "status": "open",
+                "priority": "normal",
+                "created_at": "2030-01-01T00:00:00Z",
+                "updated_at": "2030-01-02T00:00:00Z",
+            },
+        ]
+        with patch.object(
+            self.services.tickets, "list_tickets", return_value=hostile_tickets
+        ):
+            response = self.client.get("/admin/tickets?q=leaky")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Leaky faucet", body)
+        # The hostile row is filtered out (its non-string fields don't match
+        # the search) but its presence in the list did not crash the route.
+        self.assertNotIn("t-bad", body)
+
     def test_admin_contracts_export_csv_neutralizes_formula_injection(self):
         # A malicious admin or hand-edited storage could record a property
         # name beginning with `=` (or `+`, `-`, `@`). When the resulting CSV
