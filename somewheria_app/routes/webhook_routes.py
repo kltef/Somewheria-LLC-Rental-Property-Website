@@ -28,14 +28,25 @@ def _extract_jira_status(payload: dict) -> str:
     JIRA emits several shapes; the two we care about:
       * issue_updated/transitioned: ``issue.fields.status.name``
       * automation/manual: top-level ``status`` for testability
+
+    ``isinstance(..., str)`` on the nested ``name`` value — not ``str(...)``
+    coercion — matches the top-level fallback's contract. A hand-crafted
+    (or replay-corrupted) payload that stores a dict/list/number under
+    ``status.name`` would otherwise be coerced to a Python repr string
+    (``"{'foo': 'bar'}"``), which flows into ``map_jira_status`` as a
+    never-matching junk string and into the webhook's response as
+    ``ignored_status``. Returning ``""`` instead lets the webhook fall
+    through to the same "ignored" path without echoing the garbage back.
     """
     if not isinstance(payload, dict):
         return ""
     issue = payload.get("issue") or {}
     fields = (issue.get("fields") or {}) if isinstance(issue, dict) else {}
     status = (fields.get("status") or {}) if isinstance(fields, dict) else {}
-    if isinstance(status, dict) and status.get("name"):
-        return str(status["name"])
+    if isinstance(status, dict):
+        name = status.get("name")
+        if isinstance(name, str) and name:
+            return name
     # Fallback for hand-rolled / test payloads.
     if isinstance(payload.get("status"), str):
         return payload["status"]
@@ -43,11 +54,21 @@ def _extract_jira_status(payload: dict) -> str:
 
 
 def _extract_jira_key(payload: dict) -> str:
+    """Pull the issue key out of a JIRA webhook payload.
+
+    See ``_extract_jira_status``: the nested ``issue.key`` path is
+    isinstance-checked so a non-string value (dict/list/number from a
+    malformed payload) can't be ``str(...)``-coerced into a junk key that
+    ``find_by_jira_key``'s linear scan would then miss with a misleading
+    404 whose ``jira_key`` echoes the Python repr back to the caller.
+    """
     if not isinstance(payload, dict):
         return ""
     issue = payload.get("issue") or {}
-    if isinstance(issue, dict) and issue.get("key"):
-        return str(issue["key"])
+    if isinstance(issue, dict):
+        key = issue.get("key")
+        if isinstance(key, str) and key:
+            return key
     if isinstance(payload.get("key"), str):
         return payload["key"]
     return ""

@@ -308,6 +308,47 @@ class JiraWebhookRouteTestCase(unittest.TestCase):
             updated = self.services.tickets.get_ticket(self.ticket["id"])
         self.assertEqual(updated["status"], "in_progress")
 
+    def test_non_string_nested_issue_key_returns_400(self):
+        # A hand-crafted / replay-corrupted payload that stores a dict under
+        # ``issue.key`` used to be silently ``str(...)``-coerced into a
+        # Python repr string ("{'malicious': 'x'}"), which would then miss
+        # every stored ticket in ``find_by_jira_key`` and return a 404 whose
+        # body echoed the garbage repr back to the caller. The extractor now
+        # rejects non-string nested values, matching the top-level fallback,
+        # so the request cleanly fails as "missing issue key" (400) instead.
+        resp = self.client.post(
+            "/webhooks/jira",
+            data=json.dumps({"issue": {"key": {"malicious": "x"},
+                                        "fields": {"status": {"name": "Done"}}}}),
+            content_type="application/json",
+            headers={"X-JIRA-Webhook-Secret": "shhh"},
+        )
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()
+        self.assertEqual(body["error"], "missing issue key")
+
+    def test_non_string_nested_status_name_treated_as_unmapped(self):
+        # A non-string ``issue.fields.status.name`` used to become a Python
+        # repr string via ``str(...)``, which then rode back to the caller
+        # in the ``ignored_status`` response field. Now the extractor
+        # returns "" for non-string values, so we still ack the webhook
+        # (JIRA doesn't retry) but the echoed value is the empty string —
+        # never the repr of the payload's inner shape.
+        resp = self.client.post(
+            "/webhooks/jira",
+            data=json.dumps({"issue": {"key": "STUB-1",
+                                        "fields": {"status": {"name": {"nested": True}}}}}),
+            content_type="application/json",
+            headers={"X-JIRA-Webhook-Secret": "shhh"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(body.get("ignored_status"), "")
+        # Ticket status must not have changed.
+        with self.app.app_context():
+            still = self.services.tickets.get_ticket(self.ticket["id"])
+        self.assertEqual(still["status"], "open")
+
 
 if __name__ == "__main__":
     unittest.main()
