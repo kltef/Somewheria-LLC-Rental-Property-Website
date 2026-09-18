@@ -603,6 +603,11 @@ class FileStorageServiceTestCase(unittest.TestCase):
         save_json_mock.assert_called_once_with(self.config.user_roles_file, {"admin@example.com": "revoked"})
 
     def test_delete_user_role_returns_false_when_missing(self):
+        # A truly unknown email (no file entry and not in any env role list)
+        # must NOT accumulate a phantom tombstone. Previously the write
+        # happened unconditionally, so every mistyped delete grew the
+        # user_roles file with entries for emails that had no active role
+        # to override.
         with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
             self.service,
             "save_json_file",
@@ -610,7 +615,39 @@ class FileStorageServiceTestCase(unittest.TestCase):
             removed = self.service.delete_user_role("missing@example.com")
 
         self.assertFalse(removed)
-        save_json_mock.assert_called_once_with(self.config.user_roles_file, {"missing@example.com": "revoked"})
+        save_json_mock.assert_not_called()
+
+    def test_delete_user_role_tombstones_env_only_user(self):
+        # Deleting an admin listed only in the ADMIN_USERS env var used to
+        # write the tombstone but return False (no file row pre-write), so
+        # the /admin/users route showed the misleading "User not found"
+        # message even though the tombstone had just cut off their env-var
+        # access. The env-membership check now surfaces that as a real
+        # deactivation.
+        self.config.admin_users = ["env-admin@example.com"]
+        with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
+            self.service,
+            "save_json_file",
+        ) as save_json_mock:
+            removed = self.service.delete_user_role("env-admin@example.com")
+
+        self.assertTrue(removed)
+        save_json_mock.assert_called_once_with(
+            self.config.user_roles_file, {"env-admin@example.com": "revoked"}
+        )
+
+    def test_delete_user_role_returns_false_when_already_revoked(self):
+        # Idempotent delete: re-clicking "Deactivate" on an already-tombstoned
+        # user shouldn't rewrite the file or claim a new deactivation.
+        with patch.object(
+            self.service,
+            "get_user_roles",
+            return_value={"gone@example.com": "revoked"},
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            removed = self.service.delete_user_role("gone@example.com")
+
+        self.assertFalse(removed)
+        save_json_mock.assert_not_called()
 
     def test_save_renter_profiles_delegates_to_save_json_file(self):
         profiles = {"renter@example.com": {"name": "Jamie"}}

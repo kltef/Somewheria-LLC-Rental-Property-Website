@@ -238,14 +238,28 @@ class SqlStorageService:
 
     def delete_user_role(self, email: str) -> bool:
         email = (email or "").lower()
+        # See FileStorageService.delete_user_role: an env-only admin used to
+        # get tombstoned but the caller was told "User not found"; a genuinely
+        # unknown email used to leave a phantom tombstone behind. Both are
+        # fixed by treating env membership as "known" and skipping the write
+        # for truly unknown users.
+        env_known = (
+            email in (getattr(self.config, "authorized_users", None) or [])
+            or email in (getattr(self.config, "admin_users", None) or [])
+            or email in (getattr(self.config, "high_admin_users", None) or [])
+        )
         with self.db.transaction() as conn:
             row = conn.execute("SELECT role FROM user_roles WHERE email = ?", (email,)).fetchone()
             previous = row["role"] if row else None
+            if previous is None and not env_known:
+                return False
+            if previous == "revoked":
+                return False
             conn.execute(
                 "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
                 (email, "revoked"),
             )
-        return previous is not None and previous != "revoked"
+        return True
 
     def _replace_user_roles(self, data: dict) -> None:
         with self.db.transaction() as conn:

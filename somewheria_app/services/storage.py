@@ -165,15 +165,32 @@ class FileStorageService:
 
     def delete_user_role(self, email: str) -> bool:
         email = email.lower()
+        # A user is "known" if they have a non-revoked file entry OR appear in
+        # any of the env-var role lists. Deleting an env-only admin previously
+        # wrote a tombstone but returned False (no file entry existed pre-write),
+        # so the /admin/users and /admin/dashboard routes showed the misleading
+        # "User not found" message even though the tombstone had just revoked
+        # the env-var access. A truly unknown email (not in file, not in env)
+        # now leaves the file untouched instead of accumulating a phantom
+        # tombstone that has no active role to override.
+        env_known = (
+            email in (getattr(self.config, "authorized_users", None) or [])
+            or email in (getattr(self.config, "admin_users", None) or [])
+            or email in (getattr(self.config, "high_admin_users", None) or [])
+        )
         with self.file_lock:
             roles = self.get_user_roles()
             previous = roles.get(email)
+            if previous is None and not env_known:
+                return False
+            if previous == "revoked":
+                return False
             # Store a tombstone ("revoked") instead of removing the key outright
             # so that env-var fallbacks in AuthService.get_user_role cannot
             # silently restore a deleted user's access on their next login.
             roles[email] = "revoked"
             self.save_json_file(self.config.user_roles_file, roles)
-        return previous is not None and previous != "revoked"
+        return True
 
     def get_renter_profiles(self) -> dict:
         raw = self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)

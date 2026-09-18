@@ -64,6 +64,31 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
     def test_delete_user_role_returns_false_when_absent(self):
         existed = self.storage.delete_user_role("ghost@example.com")
         self.assertFalse(existed)
+        # A truly unknown email must NOT leave a phantom tombstone: the
+        # user_roles table stays empty so the file doesn't grow every time
+        # an admin mistypes a delete target.
+        self.assertEqual(self.storage.get_user_roles(), {})
+
+    def test_delete_user_role_tombstones_env_only_user(self):
+        # An admin listed only in ADMIN_USERS used to be tombstoned but the
+        # route was told "User not found" because no pre-write file row
+        # existed. Env membership now counts as "known", so the route sees
+        # the deactivation reflected accurately.
+        self.config.admin_users = ["env-admin@example.com"]
+        existed = self.storage.delete_user_role("env-admin@example.com")
+        self.assertTrue(existed)
+        self.assertEqual(
+            self.storage.get_user_roles(), {"env-admin@example.com": "revoked"}
+        )
+
+    def test_delete_user_role_returns_false_when_already_revoked(self):
+        self.storage.set_user_role("user@example.com", "renter")
+        self.assertTrue(self.storage.delete_user_role("user@example.com"))
+        # Second delete: already tombstoned, so no new deactivation to report.
+        self.assertFalse(self.storage.delete_user_role("user@example.com"))
+        self.assertEqual(
+            self.storage.get_user_roles(), {"user@example.com": "revoked"}
+        )
 
     def test_get_user_roles_drops_non_string_email_or_role(self):
         # SQLite's TEXT affinity coerces numeric inserts to text, but a raw
