@@ -24,10 +24,24 @@ def _int_env(name: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _secret_key_from_env() -> str:
+    # ``os.getenv("SECRET_KEY", default)`` only returns ``default`` when the
+    # variable is UNSET — a ``SECRET_KEY=`` line in .env (or `unset`ing it via
+    # ``export SECRET_KEY=``) leaves it set to ``""``, which Flask would then
+    # accept and use to HMAC-sign session cookies with no key material. Fall
+    # back to a random per-process key whenever the value is missing OR blank
+    # so an empty configuration can never silently produce insecure sessions;
+    # matches the ``_int_env`` contract for the numeric env vars.
+    raw = os.getenv("SECRET_KEY")
+    if raw is None or not raw.strip():
+        return secrets.token_hex(32)
+    return raw
+
+
 @dataclass
 class AppConfig:
     base_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
-    secret_key: str = field(default_factory=lambda: os.getenv("SECRET_KEY", secrets.token_hex(32)))
+    secret_key: str = field(default_factory=_secret_key_from_env)
     google_client_id: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_ID", ""))
     google_client_secret: str = field(default_factory=lambda: os.getenv("GOOGLE_CLIENT_SECRET", ""))
     google_redirect_uri: str = field(
