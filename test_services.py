@@ -2442,6 +2442,74 @@ class CacheRefreshIntervalConfigTestCase(unittest.TestCase):
         self.assertEqual(self._load_interval("120"), 120)
 
 
+class SecretKeyConfigTestCase(unittest.TestCase):
+    """``SECRET_KEY`` must fall back to a random per-process key whenever the
+    env var is missing OR blank. ``os.getenv("SECRET_KEY", default)`` alone
+    only returns the default when the variable is UNSET — a ``SECRET_KEY=``
+    line in .env (or an ``export SECRET_KEY=``) leaves it set to ``""``,
+    which Flask would then accept and use to HMAC-sign session cookies with
+    no key material. Fail closed at construction so an empty configuration
+    can never silently produce insecure sessions.
+    """
+
+    def _load_secret_key(self, raw):
+        import os
+        from importlib import reload
+
+        import somewheria_app.config as cfg
+
+        previous = os.environ.get("SECRET_KEY")
+        if raw is None:
+            os.environ.pop("SECRET_KEY", None)
+        else:
+            os.environ["SECRET_KEY"] = raw
+        try:
+            reload(cfg)
+            return cfg.AppConfig().secret_key
+        finally:
+            if previous is None:
+                os.environ.pop("SECRET_KEY", None)
+            else:
+                os.environ["SECRET_KEY"] = previous
+            reload(cfg)
+
+    def test_unset_generates_random_key(self):
+        key = self._load_secret_key(None)
+        self.assertIsInstance(key, str)
+        # ``secrets.token_hex(32)`` returns 64 hex chars.
+        self.assertEqual(len(key), 64)
+
+    def test_empty_string_generates_random_key(self):
+        # The critical case: ``SECRET_KEY=`` in .env sets the var to "",
+        # which ``os.getenv("SECRET_KEY", default)`` would return as-is.
+        # A random fallback is used instead so Flask never signs sessions
+        # with an empty HMAC key.
+        key = self._load_secret_key("")
+        self.assertIsInstance(key, str)
+        self.assertNotEqual(key, "")
+        self.assertEqual(len(key), 64)
+
+    def test_blank_string_generates_random_key(self):
+        # An operator setting ``SECRET_KEY=   `` (whitespace) is either a
+        # typo or a placeholder; treat it the same as unset.
+        key = self._load_secret_key("   ")
+        self.assertIsInstance(key, str)
+        self.assertNotEqual(key.strip(), "")
+        self.assertEqual(len(key), 64)
+
+    def test_configured_value_is_used_verbatim(self):
+        key = self._load_secret_key("my-configured-secret-key")
+        self.assertEqual(key, "my-configured-secret-key")
+
+    def test_random_fallback_differs_per_process(self):
+        # Each construction with no ``SECRET_KEY`` set gets a fresh random
+        # value — leaving the fallback deterministic across processes would
+        # defeat the whole point of the guard.
+        first = self._load_secret_key(None)
+        second = self._load_secret_key(None)
+        self.assertNotEqual(first, second)
+
+
 class CsrfTokenExtractionTestCase(unittest.TestCase):
     """``_extract_submitted_token`` must always return a string so the
     ``secrets.compare_digest`` check in ``_csrf_before_request`` can never
