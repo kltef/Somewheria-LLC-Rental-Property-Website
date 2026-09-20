@@ -436,6 +436,65 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "That date is already booked.")
         send_email_mock.assert_not_called()
 
+    def test_schedule_appointment_rejects_hidden_listing_for_public(self):
+        # Mirrors ``property_details``: a deactivated listing is unpublished
+        # from the public site, so a POST to /property/<uuid>/schedule (via a
+        # cached URL, bookmark, or hand-crafted request) must not still fire
+        # an admin email for a listing meant to be off-market.
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "is_listing_hidden", return_value=True
+        ), patch.object(
+            self.services.properties, "fetch_live_property_name", return_value="Maple House"
+        ), patch.object(
+            self.services.appointments, "book", return_value=True
+        ) as book_mock, patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock, patch.object(
+            self.services.notifications, "send_email_async"
+        ) as send_email_async_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["error"], "Property not found.")
+        book_mock.assert_not_called()
+        send_email_mock.assert_not_called()
+        send_email_async_mock.assert_not_called()
+
+    def test_schedule_appointment_allows_hidden_listing_for_admin(self):
+        self.login_as("admin")
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "is_listing_hidden", return_value=True
+        ), patch.object(
+            self.services.properties, "fetch_live_property_name", return_value="Maple House"
+        ), patch.object(
+            self.services.appointments, "book", return_value=True
+        ) as book_mock, patch.object(
+            self.services.notifications, "send_email_async"
+        ) as send_email_async_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        book_mock.assert_called_once_with("prop-1", future_date)
+        send_email_async_mock.assert_called_once()
+
     def test_about_page_loads(self):
         response = self.client.get("/about")
 

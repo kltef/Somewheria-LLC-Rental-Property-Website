@@ -201,6 +201,16 @@ def property_details(uuid):
 @rate_limit(limit=5, window_seconds=600)
 def schedule_appointment(uuid):
     services = get_services()
+    # A deactivated (hidden) listing is unpublished — the ``/property/<uuid>``
+    # page already 404s the public view. Mirror the same gate here so a
+    # visitor who obtained the URL before deactivation (bookmark, shared link,
+    # crawler cache) can't still POST a booking that fires an admin email for
+    # a listing meant to be off-market. Admins retain the ability to schedule
+    # against a hidden listing so they can exercise the flow when previewing.
+    if services.properties.is_listing_hidden(uuid):
+        role = (get_current_user() or {}).get("role", "")
+        if role not in ("admin", "high_admin"):
+            return jsonify(success=False, error="Property not found."), 404
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return jsonify(success=False, error="Invalid payload."), 400
