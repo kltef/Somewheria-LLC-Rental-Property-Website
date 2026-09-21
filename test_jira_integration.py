@@ -67,6 +67,40 @@ class JiraClientTestCase(unittest.TestCase):
                 "category": "other",
             }), "STUB-1")
 
+    def test_create_issue_survives_non_string_fields(self):
+        # A hand-edited / externally-migrated tickets row that put a
+        # non-string under any of ``title`` / ``description`` /
+        # ``property_name`` / ``submitted_by`` / ``priority`` / ``category``
+        # used to raise ``AttributeError`` inside ``.strip()`` / ``.lower()``,
+        # blow up the JIRA mirror thread three retry attempts in a row, and
+        # trip the admin error notification. Coerce non-strings to the
+        # documented default instead. Matches the isinstance guards PRs
+        # #158 / #162 already applied elsewhere for the same class of
+        # hand-edited-JSON row.
+        client = JiraClient(self._make_config(), notifications=MagicMock())
+        for field, value in (
+            ("title", 42),
+            ("description", [1, 2, 3]),
+            ("priority", 5),
+            ("category", True),
+            ("property_name", 3.14),
+            ("submitted_by", 12345),
+        ):
+            ticket = {
+                "title": "t",
+                "description": "d",
+                "priority": "high",
+                "category": "other",
+                "property_name": "Maple House",
+                "submitted_by": "renter@example.com",
+                field: value,
+            }
+            self.assertEqual(
+                client.create_issue(ticket),
+                "STUB-1",
+                msg=f"non-string {field}={value!r} broke create_issue",
+            )
+
 
 class NowIsoFormatTestCase(unittest.TestCase):
     """Lock the on-disk timestamp shape so the move off the deprecated
