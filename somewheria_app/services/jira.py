@@ -64,6 +64,30 @@ class JiraClient:
     def is_configured(self) -> bool:
         return bool(self.base_url and self.project_key and self.api_token and self.user_email)
 
+    @staticmethod
+    def _string_field(ticket: dict, key: str, default: str = "") -> str:
+        """Return ``ticket[key]`` as a stripped string, falling back to ``default``.
+
+        The row-level ``isinstance(dict)`` guard in ``TicketService._load``
+        filters non-dict entries, but a hand-edited / externally-migrated
+        row that is a valid dict can still carry a non-string under any
+        given field — an integer under ``priority``, a JSON ``null`` /
+        ``true`` under ``category`` / ``property_name`` /
+        ``submitted_by``. The old ``(ticket.get(key) or default).strip()``
+        only coerced falsy values, so a truthy non-string (an int, a
+        bool, a list) sailed past that guard and then raised
+        ``AttributeError: 'int' object has no attribute 'strip'`` inside
+        ``create_issue`` — retried three times by ``TicketService.
+        _jira_create_with_retries`` before being logged as a hard error.
+        Mirrors ``TicketService._string_field`` (PR #162) and
+        ``_contract_str_field`` in ``admin_routes.py`` (PR #158).
+        """
+        value = ticket.get(key)
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped if stripped else default
+        return default
+
     # ------------------------------------------------------------------ create
 
     def create_issue(self, ticket: dict) -> Optional[str]:
@@ -75,14 +99,14 @@ class JiraClient:
         if not self.is_configured():
             return None
 
-        title = (ticket.get("title") or "").strip()
-        description = (ticket.get("description") or "").strip()
-        property_name = (ticket.get("property_name") or "(not specified)").strip()
-        submitter = (ticket.get("submitted_by") or "anonymous").strip()
+        title = self._string_field(ticket, "title")
+        description = self._string_field(ticket, "description")
+        property_name = self._string_field(ticket, "property_name", "(not specified)")
+        submitter = self._string_field(ticket, "submitted_by", "anonymous")
         priority_name = _PRIORITY_MAP.get(
-            (ticket.get("priority") or "normal").lower(), "Medium"
+            self._string_field(ticket, "priority", "normal").lower(), "Medium"
         )
-        category = (ticket.get("category") or "other").lower()
+        category = self._string_field(ticket, "category", "other").lower()
 
         payload = {
             "fields": {
