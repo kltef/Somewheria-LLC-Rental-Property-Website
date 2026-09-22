@@ -1345,6 +1345,47 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
 
         self.assertEqual(sum(self.analytics.site_visits.values()), 2)
 
+    def test_mixed_case_email_collapses_into_one_visitor(self):
+        # ``record_login`` writes ``user["email"].lower()`` into ``unique_users``,
+        # while the session stores the raw email from Google's id_token. Under
+        # the old ``visitor = user.get("email") or ...`` a mixed-case address
+        # landed under one set key while the lowercase login entry landed under
+        # another — inflating "unique users" by one per genuinely-active login.
+        # Also verifies the session-window gate: repeat hits from the same
+        # mixed-case address count as ONE visit, not two.
+        for email in ("Alice@Example.com", "alice@example.com"):
+            with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+                from flask import session
+
+                session["user"] = {"email": email}
+                self.analytics.before_request()
+
+        self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+        self.assertEqual(sum(len(s) for s in self.analytics.unique_users.values()), 1)
+        # And the stored key is the lowercased form so it will collide with the
+        # entry ``record_login`` writes after this request finishes.
+        seen = next(iter(self.analytics.unique_users.values()))
+        self.assertEqual(seen, {"alice@example.com"})
+
+    def test_non_string_session_email_falls_back_to_remote_addr(self):
+        # A corrupted / hand-crafted session that stored a non-string under
+        # ``user["email"]`` must not AttributeError inside ``.lower()`` and
+        # take out every request via the crash handler's empty 503. Mirrors
+        # the isinstance-guarded defensive shape the storage-layer PRs
+        # (#152 / #153 / #161 / #162 …) apply on the read path.
+        with self.app.test_request_context(
+            "/hello",
+            headers={"User-Agent": self.BROWSER_UA},
+            environ_base={"REMOTE_ADDR": "203.0.113.7"},
+        ):
+            from flask import session
+
+            session["user"] = {"email": 42}
+            self.analytics.before_request()
+
+        seen = next(iter(self.analytics.unique_users.values()))
+        self.assertEqual(seen, {"203.0.113.7"})
+
     def test_visit_counts_again_after_session_gap(self):
         from somewheria_app.services.analytics import VISIT_SESSION_GAP_SECONDS
 

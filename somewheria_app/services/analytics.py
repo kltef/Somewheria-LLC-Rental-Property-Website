@@ -100,7 +100,22 @@ class AnalyticsTracker:
             return
         today = datetime.date.today().isoformat()
         user = session.get("user") or {}
-        visitor = user.get("email") or request.remote_addr or "anonymous"
+        # Normalize the email casing before it becomes a set key. ``record_login``
+        # already stores the lowercased address, so a session whose stored
+        # ``user["email"]`` retained its original mixed case (Google's id_token
+        # is canonical lowercase today but the login path preserves whatever
+        # id_info carried) would otherwise land in ``unique_users`` under a
+        # DIFFERENT string than the ``.lower()``-normalized entry ``record_login``
+        # writes moments earlier — inflating the "unique users" metric by one
+        # per genuinely-active login. The isinstance guard mirrors the defensive
+        # shape recent PRs applied on the storage layer: a corrupted session
+        # value under this key must not AttributeError inside ``.lower()`` and
+        # take out every request via the crash handler's empty 503.
+        raw_email = user.get("email")
+        if isinstance(raw_email, str) and raw_email.strip():
+            visitor = raw_email.strip().lower()
+        else:
+            visitor = request.remote_addr or "anonymous"
         now = time.monotonic()
         with self._lock:
             self._prune_old_buckets(today)
