@@ -1692,12 +1692,54 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
-            return_value={"email": "stranger@gmail.com"},
+            return_value={"email": "stranger@gmail.com", "email_verified": True},
         ), patch.object(self.services.auth, "get_user_role", return_value="guest"):
             response = self.client.get("/google/callback?state=test-state")
 
         self.assertEqual(response.status_code, 401)
         self.assertIn(b"Access denied", response.data)
+
+    def test_google_callback_rejects_unverified_email(self):
+        # Google's OpenID Connect guidance: don't trust the ``email`` claim
+        # when ``email_verified`` isn't True. An id_token with an unverified
+        # address for a normally-authorized user must NOT sign them in — that
+        # would let anyone whose Google account merely claimed the address
+        # impersonate them.
+        self.configure_google()
+        self._set_oauth_state()
+        self.services.config.authorized_users = ["user@ekbergproperties.com"]
+        flow = self.make_flow()
+        with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
+            "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
+            return_value={
+                "sub": "42",
+                "email": "user@ekbergproperties.com",
+                "email_verified": False,
+                "name": "Impersonator",
+            },
+        ), patch.object(self.services.auth, "login_user") as login_mock:
+            response = self.client.get("/google/callback?state=test-state")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn(b"not verified", response.data)
+        login_mock.assert_not_called()
+
+    def test_google_callback_rejects_missing_email_claim(self):
+        # An id_token with no ``email`` claim (or a non-string one) must fail
+        # closed with a user-facing message rather than propagate a KeyError /
+        # AttributeError through the outer try/except and email the admin.
+        self.configure_google()
+        self._set_oauth_state()
+        flow = self.make_flow()
+        with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
+            "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
+            return_value={"sub": "42", "email_verified": True},
+        ), patch.object(self.services.auth, "login_user") as login_mock:
+            response = self.client.get("/google/callback?state=test-state")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"no accessible email", response.data)
+        login_mock.assert_not_called()
 
     def test_google_callback_allows_approved_external_email(self):
         # An approved applicant (Gmail/Outlook) whose role was set to "renter"
@@ -1708,7 +1750,12 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
-            return_value={"sub": "9", "email": "approved@gmail.com", "name": "Approved"},
+            return_value={
+                "sub": "9",
+                "email": "approved@gmail.com",
+                "email_verified": True,
+                "name": "Approved",
+            },
         ), patch.object(self.services.auth, "get_user_role", return_value="renter"), patch.object(
             self.services.auth, "login_user", return_value={"email": "approved@gmail.com"}
         ) as login_mock, patch.object(self.services.analytics, "record_login"):
@@ -1724,7 +1771,10 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
-            return_value={"email": "blocked@ekbergproperties.com"},
+            return_value={
+                "email": "blocked@ekbergproperties.com",
+                "email_verified": True,
+            },
         ), patch.object(self.services.notifications, "log_and_notify_error") as notify_mock:
             response = self.client.get("/google/callback?state=test-state")
 
@@ -1739,7 +1789,12 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
         flow = self.make_flow()
         with patch("somewheria_app.routes.auth_routes.Flow.from_client_config", return_value=flow), patch(
             "somewheria_app.routes.auth_routes.id_token.verify_oauth2_token",
-            return_value={"sub": "123", "email": "user@ekbergproperties.com", "name": "User"},
+            return_value={
+                "sub": "123",
+                "email": "user@ekbergproperties.com",
+                "email_verified": True,
+                "name": "User",
+            },
         ), patch.object(self.services.auth, "get_user_role", return_value="renter"), patch.object(
             self.services.auth, "login_user", return_value={"email": "user@ekbergproperties.com"}
         ) as login_mock, patch.object(

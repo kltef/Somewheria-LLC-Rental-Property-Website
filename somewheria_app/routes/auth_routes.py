@@ -131,7 +131,42 @@ def google_callback():
             google_requests.Request(),
             config.google_client_id,
         )
-        user_email = id_info["email"].lower()
+        # Reject an id_token that doesn't carry a usable string email. In
+        # normal Google flows this always ships, but a hand-rolled /
+        # replayed / partially-formed token can produce a payload where
+        # ``email`` is absent or a non-string; ``id_info["email"].lower()``
+        # would then KeyError / AttributeError and the outer try/except
+        # would swallow it as a generic "Google OAuth callback error" —
+        # emailing the admin and giving the user an opaque failure. Fail
+        # closed with a clear message instead.
+        raw_email = id_info.get("email") if isinstance(id_info, dict) else None
+        if not isinstance(raw_email, str) or not raw_email.strip():
+            logger.warning("OAuth id_token missing email claim")
+            return render_template(
+                "login.html",
+                title="Login",
+                error="Authentication failed: your Google account has no accessible email address.",
+            ), 400
+        # Only trust the ``email`` claim when Google itself confirms it verified
+        # the address. Per Google's OpenID Connect guidance, ``email_verified``
+        # distinguishes a Google-verified address from one the user or a
+        # Workspace admin merely asserted; treating an unverified value as
+        # ground truth lets anyone whose Google account claims
+        # ``alice@ekbergproperties.com`` sign in as Alice. Missing / falsy
+        # closes the door — real Google tokens always carry this claim.
+        if id_info.get("email_verified") is not True:
+            logger.warning(
+                "Rejecting OAuth login with unverified email %r", raw_email
+            )
+            return render_template(
+                "login.html",
+                title="Login",
+                error=(
+                    "Access denied. Your Google account's email address is "
+                    "not verified. Verify it with Google and try again."
+                ),
+            ), 401
+        user_email = raw_email.strip().lower()
         role = services.auth.get_user_role(user_email)
         # Two ways in: a company-domain account, OR an account that has been
         # explicitly approved — a renter admitted through the registration
