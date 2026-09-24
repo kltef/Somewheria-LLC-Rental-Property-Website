@@ -76,6 +76,23 @@ class FileStorageService:
         except Exception as exc:
             self.logger.error("Failed to save %s: %s", path, exc)
 
+    @staticmethod
+    def _has_valid_email_field(item: dict) -> bool:
+        # ``email`` is optional (a row with a missing / ``null`` field is
+        # unreachable but harmless — every ``.lower()`` site is guarded by
+        # ``(item.get("email") or "")`` which turns ``None`` into ``""``).
+        # A truthy non-string, however — an integer email like ``5`` or a
+        # bool from a corrupted / hand-edited file — sails past that
+        # ``or ""`` idiom (``5 or ""`` is ``5``, not ``""``) and raises
+        # ``AttributeError: 'int' object has no attribute 'lower'`` inside
+        # ``add_pending_registration`` dedup, ``remove_pending_registration``
+        # filter, and the ``admin_registrations`` route's approve/reject
+        # match. Drop those rows here so every caller sees only
+        # ``None``-or-string emails. Same defensive shape ``get_user_roles``
+        # already applies to its key/value pair (PR #152).
+        email = item.get("email")
+        return email is None or isinstance(email, str)
+
     def get_pending_registrations(self) -> list[dict]:
         raw = self.load_json_file(self.config.registration_file, [], expected_type=list)
         # Drop non-dict entries defensively. ``expected_type=list`` only
@@ -87,7 +104,12 @@ class FileStorageService:
         # on each item, which would AttributeError and take out the admin
         # UI via the crash handler's 503. Mirrors the isinstance(dict) guard
         # ``recent_listing_activity`` added in PR #144 for the change log.
-        return [item for item in raw if isinstance(item, dict)]
+        # ``_has_valid_email_field`` closes the same gap on the value side —
+        # see its docstring.
+        return [
+            item for item in raw
+            if isinstance(item, dict) and self._has_valid_email_field(item)
+        ]
 
     def add_pending_registration(self, registration: dict) -> bool:
         """Append a pending registration, skipping duplicate emails.
@@ -213,8 +235,14 @@ class FileStorageService:
         # Same isinstance(dict) guard as ``get_pending_registrations``. Without
         # it, a stray non-dict row (corrupted or hand-edited file) crashes the
         # dedup check in ``add_pending_lead_capture`` and the filter in
-        # ``remove_pending_lead_capture`` with AttributeError.
-        return [item for item in raw if isinstance(item, dict)]
+        # ``remove_pending_lead_capture`` with AttributeError. The
+        # ``_has_valid_email_field`` guard closes the same gap on the value
+        # side — a truthy non-string ``email`` (an integer, a bool) sails past
+        # the ``or ""`` idiom in those same call sites.
+        return [
+            item for item in raw
+            if isinstance(item, dict) and self._has_valid_email_field(item)
+        ]
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
         # Returns True when the lead was newly persisted, False when the

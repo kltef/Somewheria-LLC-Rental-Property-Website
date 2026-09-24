@@ -185,6 +185,49 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         rows = self.storage.get_pending_registrations()
         self.assertEqual(rows, [{"email": "keep@example.com"}])
 
+    def test_get_pending_registrations_drops_non_string_email_field(self):
+        # The payload deserializes to a dict, but its ``email`` field is a
+        # truthy non-string (an integer, a bool). Every caller then reaches
+        # for ``(item.get("email") or "").lower()`` — the ``or ""`` idiom
+        # only rescues falsy values, so a hand-edited row like
+        # ``{"email": 5}`` sails past it and raises AttributeError inside
+        # ``.lower()``, 503'ing the /admin/registrations approve/reject POST
+        # via the crash handler. Mirrors the same-shape guard on the file
+        # backend added in this change.
+        self.storage.add_pending_registration({"email": "keep@example.com"})
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("int@example.com", '{"email": 12345}'),
+            )
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("bool@example.com", '{"email": true}'),
+            )
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("list@example.com", '{"email": ["a@b.com"]}'),
+            )
+            # A missing key or ``null`` email is unreachable but harmless —
+            # keep both so the admin can still see and hand-repair them.
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("nullv@example.com", '{"email": null, "name": "N"}'),
+            )
+            conn.execute(
+                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                ("miss@example.com", '{"name": "M"}'),
+            )
+        rows = self.storage.get_pending_registrations()
+        self.assertIn({"email": "keep@example.com"}, rows)
+        self.assertIn({"email": None, "name": "N"}, rows)
+        self.assertIn({"name": "M"}, rows)
+        # Non-string-email rows dropped.
+        emails = [r.get("email") for r in rows]
+        self.assertNotIn(12345, emails)
+        self.assertNotIn(True, emails)
+        self.assertNotIn(["a@b.com"], emails)
+
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):
@@ -459,6 +502,24 @@ class LeadCapturesTestCase(SqlStorageBaseTestCase):
             conn.execute(
                 "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
                 ("text@example.com", "no json here"),
+            )
+        leads = self.storage.get_pending_lead_captures()
+        self.assertEqual(leads, [{"email": "keep@example.com"}])
+
+    def test_get_pending_lead_captures_drops_non_string_email_field(self):
+        # Same non-string email-field guard as pending registrations. A
+        # dict payload whose ``email`` value is a truthy non-string (an
+        # integer, a bool) crashes ``add_pending_lead_capture``'s dedup
+        # walk with AttributeError on ``.lower()``.
+        self.storage.add_pending_lead_capture({"email": "keep@example.com"})
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
+                ("int@example.com", '{"email": 9}'),
+            )
+            conn.execute(
+                "INSERT INTO lead_captures(email, payload) VALUES (?, ?)",
+                ("bool@example.com", '{"email": false}'),
             )
         leads = self.storage.get_pending_lead_captures()
         self.assertEqual(leads, [{"email": "keep@example.com"}])

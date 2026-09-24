@@ -154,6 +154,14 @@ class SqlStorageService:
 
     # ----------------------------------------------------- pending_registrations
 
+    @staticmethod
+    def _has_valid_email_field(item: dict) -> bool:
+        # See ``FileStorageService._has_valid_email_field``. Kept on this
+        # class rather than importing from the file backend so the sqlite
+        # path has no runtime dependency on the file-backend module.
+        email = item.get("email")
+        return email is None or isinstance(email, str)
+
     def get_pending_registrations(self) -> list[dict]:
         with self.db.read() as conn:
             rows = conn.execute("SELECT payload FROM pending_registrations").fetchall()
@@ -166,11 +174,15 @@ class SqlStorageService:
         # the crash handler. Matches the FileStorageService guard added
         # alongside this change. ``_safe_loads`` also swallows malformed JSON
         # so an on-disk-corrupted row can't take the caller down with a
-        # ``JSONDecodeError`` before the dict filter even runs.
+        # ``JSONDecodeError`` before the dict filter even runs. The
+        # ``_has_valid_email_field`` guard drops rows whose ``email`` value
+        # is a truthy non-string — the ``or ""`` idiom in the callers only
+        # rescues falsy values, so ``{"email": 5}`` would otherwise still
+        # crash ``.lower()`` inside the dedup / remove / admin lookups.
         return [
             payload
             for payload in (self._safe_loads(row["payload"], source="pending_registrations") for row in rows)
-            if isinstance(payload, dict)
+            if isinstance(payload, dict) and self._has_valid_email_field(payload)
         ]
 
     def add_pending_registration(self, registration: dict) -> bool:
@@ -388,11 +400,14 @@ class SqlStorageService:
         # the dedup check in ``add_pending_lead_capture`` and the filter in
         # ``remove_pending_lead_capture`` with AttributeError. ``_safe_loads``
         # also swallows malformed JSON so a truncated / corrupted row can't
-        # take the caller down before the dict filter runs.
+        # take the caller down before the dict filter runs. The
+        # ``_has_valid_email_field`` guard closes the truthy-non-string gap
+        # (an integer email like ``5`` sails past the ``or ""`` idiom in the
+        # dedup / remove callers and crashes ``.lower()``).
         return [
             payload
             for payload in (self._safe_loads(row["payload"], source="lead_captures") for row in rows)
-            if isinstance(payload, dict)
+            if isinstance(payload, dict) and self._has_valid_email_field(payload)
         ]
 
     def add_pending_lead_capture(self, lead: dict) -> bool:
