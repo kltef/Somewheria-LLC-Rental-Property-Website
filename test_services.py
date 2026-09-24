@@ -427,6 +427,62 @@ class FileStorageServiceTestCase(unittest.TestCase):
             ],
         )
 
+    def test_get_pending_registrations_drops_non_string_email_field(self):
+        # The row-level ``isinstance(dict)`` guard admits a dict whose
+        # ``email`` field is a truthy non-string (an integer, a bool). Every
+        # caller then reaches for ``(item.get("email") or "").lower()`` —
+        # ``or ""`` only rescues falsy values, so ``5 or ""`` returns ``5``
+        # and ``.lower()`` raises AttributeError, 503'ing the
+        # /admin/registrations approve/reject POST via the crash handler.
+        # Rows with a missing key or ``null`` value are unreachable but
+        # harmless and stay in the list so an admin can still see them.
+        raw = [
+            {"email": "keep@example.com"},
+            {"email": 12345, "name": "int-email"},
+            {"email": True, "name": "bool-email"},
+            {"email": ["a@b.com"], "name": "list-email"},
+            {"email": None, "name": "null-email"},
+            {"name": "missing-email"},
+            {"email": "also@example.com"},
+        ]
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_pending_registrations()
+        self.assertEqual(
+            loaded,
+            [
+                {"email": "keep@example.com"},
+                {"email": None, "name": "null-email"},
+                {"name": "missing-email"},
+                {"email": "also@example.com"},
+            ],
+        )
+
+    def test_add_pending_registration_survives_integer_email_row_in_file(self):
+        # The concrete crash path: a stored row of ``{"email": 5}`` sails
+        # past the ``(email or "")`` idiom (``5`` is truthy so ``or ""``
+        # doesn't coerce it) and raises AttributeError inside ``.lower()``
+        # inside the dedup ``any(...)`` walk. The email-field load guard
+        # must drop the row so the walk sees only string-typed emails.
+        with patch.object(
+            self.service,
+            "load_json_file",
+            return_value=[
+                {"email": "existing@example.com"},
+                {"email": 5},
+                {"email": True},
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_registration({"email": "new@example.com"})
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.registration_file,
+            [
+                {"email": "existing@example.com"},
+                {"email": "new@example.com"},
+            ],
+        )
+
     def test_get_pending_lead_captures_drops_non_dict_entries(self):
         # Same isinstance(dict) filter as pending registrations — protects the
         # dedup / remove paths and the admin UI from a hand-edited lead
@@ -453,6 +509,57 @@ class FileStorageServiceTestCase(unittest.TestCase):
             return_value=[
                 {"email": "existing@example.com"},
                 42,
+            ],
+        ), patch.object(self.service, "save_json_file") as save_json_mock:
+            self.assertTrue(
+                self.service.add_pending_lead_capture(
+                    {"email": "new@example.com", "submitted_at": "2026-01-01"}
+                )
+            )
+        save_json_mock.assert_called_once_with(
+            self.config.lead_capture_file,
+            [
+                {"email": "existing@example.com"},
+                {"email": "new@example.com", "submitted_at": "2026-01-01"},
+            ],
+        )
+
+    def test_get_pending_lead_captures_drops_non_string_email_field(self):
+        # Same email-field guard as ``get_pending_registrations``: a truthy
+        # non-string ``email`` value sails past the ``or ""`` idiom in the
+        # dedup / remove call sites and raises AttributeError inside
+        # ``.lower()``.
+        raw = [
+            {"email": "keep@example.com", "submitted_at": "2026-01-01"},
+            {"email": 12345, "submitted_at": "2026-01-02"},
+            {"email": False, "submitted_at": "2026-01-03"},
+            {"email": None, "submitted_at": "2026-01-04"},
+            {"submitted_at": "2026-01-05"},
+            {"email": "also@example.com", "submitted_at": "2026-01-06"},
+        ]
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_pending_lead_captures()
+        self.assertEqual(
+            loaded,
+            [
+                {"email": "keep@example.com", "submitted_at": "2026-01-01"},
+                {"email": None, "submitted_at": "2026-01-04"},
+                {"submitted_at": "2026-01-05"},
+                {"email": "also@example.com", "submitted_at": "2026-01-06"},
+            ],
+        )
+
+    def test_add_pending_lead_capture_survives_integer_email_row_in_file(self):
+        # Concrete crash path: a stored ``{"email": 5}`` row must not
+        # AttributeError inside the dedup walk on ``5.lower()``. The
+        # email-field load guard drops the row so the walk sees only
+        # string-typed emails.
+        with patch.object(
+            self.service,
+            "load_json_file",
+            return_value=[
+                {"email": "existing@example.com"},
+                {"email": 5},
             ],
         ), patch.object(self.service, "save_json_file") as save_json_mock:
             self.assertTrue(
