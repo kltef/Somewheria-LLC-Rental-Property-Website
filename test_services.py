@@ -1056,6 +1056,26 @@ class AppointmentServiceTestCase(unittest.TestCase):
         info_mock.assert_not_called()
         print_check_mock.assert_not_called()
 
+    def test_load_does_not_raise_on_invalid_utf8_bytes(self):
+        # A corrupted / partially-written / externally-modified appointments
+        # file with stray invalid UTF-8 bytes must NOT raise UnicodeDecodeError
+        # out of load(). The prior open() had no ``errors=`` parameter, so a
+        # single bad byte anywhere in the file crashed load() and 503'd both
+        # /property/<uuid> and /property/<uuid>/schedule-appointment (the
+        # only two callers) via the crash handler's empty response.
+        # ``errors="replace"`` mirrors the defensive shape ``notifications.read_logs``
+        # and ``analytics.recent_listing_activity`` already apply to their
+        # log-file reads.
+        self.appointments_path.write_bytes(
+            b"prop-1:2030-01-10\nprop-\xff-bad:2030-02-01\nprop-2:2030-03-01\xfe\n"
+        )
+        loaded = self.service.load()
+        # Legitimate lines around the corrupted byte must still land in the
+        # returned map; a stray U+FFFD in a date token is harmless because it
+        # can never match a legitimate ISO date the request handler passes.
+        self.assertEqual(loaded.get("prop-1"), {"2030-01-10"})
+        self.assertIn("prop-2", loaded)
+
 
 class PropertyServiceTestCase(unittest.TestCase):
     def setUp(self):

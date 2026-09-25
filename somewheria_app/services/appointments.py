@@ -38,7 +38,18 @@ class AppointmentService:
                 self.logger.debug("Appointments file does not exist yet: %s", path.resolve())
                 return appointments
             self.logger.debug("Loading appointments from %s", path.resolve())
-            with path.open("r", encoding="utf-8") as handle:
+            # ``errors="replace"`` so a corrupted / partially-written /
+            # externally-modified appointments file with invalid UTF-8 bytes
+            # (a stray binary byte from a disk error, an aborted write) can't
+            # raise ``UnicodeDecodeError`` inside the read loop and take out
+            # ``/property/<uuid>`` and ``/property/<uuid>/schedule-appointment``
+            # via the crash handler's empty 503. Any byte the codec can't
+            # decode is substituted with U+FFFD, so the corrupted date token
+            # simply never matches a legitimate ISO date on the double-booking
+            # check — no crash, no user-facing 503. Matches the same defensive
+            # shape ``notifications.read_logs`` and ``analytics.recent_listing_activity``
+            # already apply to their log-file reads.
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
                 for raw_line in handle:
                     line = raw_line.strip()
                     if not line:
