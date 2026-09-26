@@ -76,6 +76,23 @@ class AuthServiceTestCase(unittest.TestCase):
 
         self.assertEqual(role, "guest")
 
+    def test_get_user_role_returns_guest_for_non_string_email(self):
+        # ``_refresh_session_role`` in ``create_app`` calls this on every
+        # request with whatever ``session["user"]["email"]`` holds. A legacy
+        # or hand-written session that carried a non-string value under
+        # that key used to crash ``email.lower()``, taking the request out
+        # via the crash handler's empty 503; because the same before_request
+        # hook runs on every subsequent request, the visitor was soft-locked
+        # until they cleared cookies. Return the "unknown address" fallback
+        # instead so the request proceeds and the visitor lands on login.
+        self.storage.get_user_roles.return_value = {}
+
+        for bad in (None, 5, True, ["a@b.com"], {"email": "a@b.com"}, b"user@example.com"):
+            self.assertEqual(self.service.get_user_role(bad), "guest", bad)
+        # Storage must not have been consulted on the bail-out path — the
+        # non-string never had a chance to become a lookup key.
+        self.storage.get_user_roles.assert_not_called()
+
     def test_all_user_roles_includes_env_configured_admins(self):
         # On a fresh deploy user_roles.json is empty, but the .env-configured
         # admins must still show up on the user-management page.
