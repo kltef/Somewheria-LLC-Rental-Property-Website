@@ -20,6 +20,21 @@ class AuthService:
         return bool(self.config.authorized_users)
 
     def get_user_role(self, email: str) -> str:
+        # ``_refresh_session_role`` in ``create_app`` calls this on every
+        # request with whatever ``session["user"]["email"]`` happens to hold.
+        # In current code the OAuth callback validates ``email`` is a string
+        # before ``login_user`` writes it, but a legacy session issued by a
+        # pre-validation build (or a hand-written test harness that skipped
+        # the OAuth path) can still carry a non-string value under that key.
+        # ``email.lower()`` on an int / bool / None then AttributeErrors,
+        # the crash handler serves an empty 503, and — because the same
+        # before_request hook runs on every subsequent request — the visitor
+        # is soft-locked out of the site until they clear cookies. Return
+        # "guest" for anything that isn't a string, matching the "unknown
+        # address" fallback below. Mirrors the isinstance guards PRs
+        # #144-#171 added elsewhere for corrupted / hand-edited state.
+        if not isinstance(email, str):
+            return "guest"
         email = email.lower()
         user_roles = self.storage.get_user_roles()
         if email in user_roles:
