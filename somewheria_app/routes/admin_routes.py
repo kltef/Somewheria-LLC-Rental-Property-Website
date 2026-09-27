@@ -889,14 +889,25 @@ def _validate_contract_pdf(uploaded_file) -> bytes | None:
     return raw
 
 
-def _safe_contract_pdf_path(services, pdf_filename: str):
+def _safe_contract_pdf_path(services, pdf_filename):
     """Resolve a stored contract PDF filename to an absolute path inside the
     upload directory, or return None if the name is missing or escapes the
     upload root. Filenames are generated server-side as ``<uuid>.pdf`` and
     should never contain separators, but ``renter_contracts.json`` can be
     hand-edited, so this re-validates before any filesystem op (download or
-    delete) to prevent path traversal."""
-    if not pdf_filename:
+    delete) to prevent path traversal.
+
+    The isinstance guard rejects a hand-edited / externally-migrated row that
+    stored a non-string under ``pdf_filename`` (a JSON ``true``, a bare
+    number, a nested dict). The two call sites pass
+    ``contract.get("pdf_filename") or ""``, which only coerces falsy values,
+    so a truthy non-string sails past that guard and then raises ``TypeError:
+    argument of type 'int' is not iterable`` inside ``"/" in pdf_filename``,
+    taking out ``/contracts/<id>/download`` and the ``/admin/contracts``
+    delete POST via the crash handler's empty 503. Same defensive shape the
+    tickets / contracts services already apply on their string fields
+    (PRs #158 / #162)."""
+    if not isinstance(pdf_filename, str) or not pdf_filename:
         return None
     if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
         return None

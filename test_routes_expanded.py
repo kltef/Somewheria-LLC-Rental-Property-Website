@@ -2503,6 +2503,67 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             response = self.client.get("/contracts/does-not-exist/download")
         self.assertEqual(response.status_code, 404)
 
+    def test_contract_download_survives_non_string_pdf_filename(self):
+        # Regression: a hand-edited / externally-migrated ``renter_contracts``
+        # row that stored a truthy non-string under ``pdf_filename`` (a JSON
+        # ``true``, a bare number, a nested dict) sailed past the ``(value or
+        # "")`` guard at the call site — the raw value flowed into
+        # ``_safe_contract_pdf_path`` where ``"/" in pdf_filename`` raised
+        # ``TypeError`` and took out /contracts/<id>/download via the crash
+        # handler's empty 503. The isinstance guard in
+        # ``_safe_contract_pdf_path`` must treat the value as "no PDF" and
+        # 404 cleanly instead.
+        self.login_as("renter", email="renter@example.com")
+        contract_id = "contract-nonstring"
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": contract_id,
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": 42,
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get(f"/contracts/{contract_id}/download")
+        self.assertEqual(response.status_code, 404)
+
+    def test_admin_contracts_delete_survives_non_string_pdf_filename(self):
+        # Regression companion to
+        # ``test_contract_download_survives_non_string_pdf_filename``: the
+        # /admin/contracts delete path reads ``pdf_filename`` from the stored
+        # row and passes it through ``_safe_contract_pdf_path``, so the same
+        # non-string value would 503 the admin POST via ``"/" in <int>``
+        # before the guard. The delete must still succeed (removing the row)
+        # and never call into the filesystem for that bogus filename.
+        self.login_as("admin")
+        contracts = {
+            "renter@example.com": [
+                {"property_name": "Maple House", "pdf_filename": {"tampered": True}}
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts
+        ), patch.object(self.services.storage, "save_renter_contracts"), patch.object(
+            self.services.storage, "delete_file"
+        ) as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "delete",
+                    "renter_email": "renter@example.com",
+                    "contract_index": "0",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract removed for renter@example.com.", response.data)
+        delete_file_mock.assert_not_called()
+
     def test_contract_pdfs_stored_outside_static_tree(self):
         """Regression: contract PDFs must not live under ``static/`` because
         Flask's static handler would serve them at /static/uploads/contracts/...
