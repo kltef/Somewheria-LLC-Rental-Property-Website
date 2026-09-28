@@ -153,11 +153,30 @@ def create_app() -> Flask:
         if app.config.get("TESTING"):
             return
         user = session.get("user")
-        if user and user.get("email"):
+        if not user or not user.get("email"):
+            return
+        # A storage-layer failure inside ``get_user_role`` (SQLite corruption,
+        # a transient JSON-file read error, a permission flip on the roles
+        # file) must NOT cascade into the crash handler here: this hook runs
+        # on EVERY request, so a raise would 503 every page across the whole
+        # site — including ``/admin/status``, the one place an operator would
+        # go to diagnose the outage. Fall back to the cached role on the
+        # session and keep serving; the session-cookie copy is already the
+        # documented up-to-8-hour staleness bound, so a brief additional lag
+        # while storage is unhealthy is an accepted cost of not soft-locking
+        # the site. Next successful ``get_user_role`` refreshes normally.
+        try:
             role = auth.get_user_role(user["email"])
-            if user.get("role") != role:
-                user["role"] = role
-                session["user"] = user
+        except Exception as exc:
+            app.logger.warning(
+                "Session role refresh failed for %r; keeping cached role: %s",
+                user.get("email"),
+                exc,
+            )
+            return
+        if user.get("role") != role:
+            user["role"] = role
+            session["user"] = user
 
     # Surface a dead email pipeline at startup instead of only as a per-send
     # WARNING: with EMAIL_APP_PASSWORD unset every notification (registration,

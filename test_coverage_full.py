@@ -1542,6 +1542,74 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         time_module.sleep(0.1)  # give any racing extra threads a chance to land
         self.assertEqual(len(send_calls), 1)
 
+    def test_session_role_refresh_survives_storage_failure(self):
+        # ``_refresh_session_role`` runs as a before_request on EVERY page.
+        # A raise from ``auth.get_user_role`` (SQLite corruption, a transient
+        # roles-file read error, a permission flip) would otherwise be caught
+        # by the global Exception handler and served as an empty 503 — on
+        # every request, including ``/admin/status``, the very page an
+        # operator would open to diagnose the outage. The hook must degrade
+        # to the session-cached role instead of soft-locking the whole site.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/probe")
+        def probe():
+            return "ok"
+
+        services = app.extensions["somewheria_services"]
+        with patch.object(
+            services.auth,
+            "get_user_role",
+            side_effect=RuntimeError("storage exploded"),
+        ):
+            client = app.test_client()
+            with client.session_transaction() as flask_session:
+                flask_session["user"] = {
+                    "email": "renter@example.com",
+                    "name": "Renter",
+                    "role": "renter",
+                }
+            response = client.get("/probe")
+
+            # Request completes normally — no cascade to the crash handler.
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data, b"ok")
+
+            # The cached role is preserved so decorators keep enforcing it.
+            with client.session_transaction() as flask_session:
+                self.assertEqual(flask_session["user"]["role"], "renter")
+
+    def test_session_role_refresh_updates_role_on_success(self):
+        # Positive path: a promotion in the admin UI (or an .env change) is
+        # picked up on the next request. The session-cookie copy is rewritten
+        # so templates reading ``session['user']['role']`` agree with what
+        # the decorators enforce — without this the demoted / promoted user
+        # would run with the stale role for up to the session lifetime.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/probe")
+        def probe():
+            return "ok"
+
+        services = app.extensions["somewheria_services"]
+        with patch.object(services.auth, "get_user_role", return_value="admin"):
+            client = app.test_client()
+            with client.session_transaction() as flask_session:
+                flask_session["user"] = {
+                    "email": "user@example.com",
+                    "name": "User",
+                    "role": "renter",
+                }
+            response = client.get("/probe")
+
+            self.assertEqual(response.status_code, 200)
+            with client.session_transaction() as flask_session:
+                self.assertEqual(flask_session["user"]["role"], "admin")
+
     def test_before_request_skips_static_endpoint(self):
         with self.app.test_client() as client:
             client.get("/static/missing.css")
