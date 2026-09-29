@@ -58,6 +58,40 @@ def _ticket_str(ticket: dict, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _is_ticket_submitter(ticket: dict, actor_email: str) -> bool:
+    """True when ``actor_email`` matches the ticket's stored submitter,
+    case-insensitively.
+
+    ``create_ticket`` lower-cases ``submitted_by`` on write, and
+    ``_actor_email`` returns a lower-cased address, so a byte-for-byte
+    equality check ``(ticket.get("submitted_by") or "") == _actor_email()``
+    is correct for tickets filed since that normalization landed. It fails
+    for two rows the guard here now covers:
+
+      * A legacy ticket written before ``submitted_by`` was lower-cased on
+        write, or a hand-edited row that stored the address with its
+        original casing (``Alice@Example.com``). The direct comparison
+        against ``alice@example.com`` returns False and the real submitter
+        gets a 403 on their own ticket — the ``ticket_detail`` /
+        ``ticket_toggle_email`` / ``ticket_add_note`` gates all rely on
+        that same check.
+      * A hand-edited row whose ``submitted_by`` isn't a string at all
+        (a JSON ``true``, a bare number). ``(value or "")`` returns the
+        truthy non-string verbatim, and comparing it to the actor's
+        lowered address is always ``!=`` — which happens to fail closed
+        (403), but for the wrong reason. Coercing through ``_ticket_str``
+        turns it into ``""`` deterministically so the check is authoritative.
+
+    An empty ``actor_email`` (unauthenticated caller reaching a
+    ``@login_required`` view is unreachable; a session with a blank email is
+    the residual case) never matches a real submitter here, matching the
+    prior byte-for-byte check's behavior.
+    """
+    if not actor_email:
+        return False
+    return _ticket_str(ticket, "submitted_by").lower() == actor_email
+
+
 # ---------------------------------------------------------------- submit / list
 
 def _renter_email_default(services, email: str) -> bool:
@@ -192,7 +226,7 @@ def ticket_detail(ticket_id: str):
         return render_template("404.html", title="Ticket Not Found"), 404
 
     # Renters can only see their own tickets; admins can see anything.
-    if not _is_admin() and (ticket.get("submitted_by") or "") != _actor_email():
+    if not _is_admin() and not _is_ticket_submitter(ticket, _actor_email()):
         return render_template("403.html", title="Forbidden"), 403
 
     return render_template(
@@ -212,7 +246,7 @@ def ticket_toggle_email(ticket_id: str):
     ticket = services.tickets.get_ticket(ticket_id)
     if not ticket:
         return render_template("404.html", title="Ticket Not Found"), 404
-    if not _is_admin() and (ticket.get("submitted_by") or "") != _actor_email():
+    if not _is_admin() and not _is_ticket_submitter(ticket, _actor_email()):
         return render_template("403.html", title="Forbidden"), 403
     enabled = bool(request.form.get("email_updates"))
     services.tickets.set_email_updates(ticket_id, enabled, _actor_email())
@@ -226,7 +260,7 @@ def ticket_add_note(ticket_id: str):
     ticket = services.tickets.get_ticket(ticket_id)
     if not ticket:
         return render_template("404.html", title="Ticket Not Found"), 404
-    if not _is_admin() and (ticket.get("submitted_by") or "") != _actor_email():
+    if not _is_admin() and not _is_ticket_submitter(ticket, _actor_email()):
         return render_template("403.html", title="Forbidden"), 403
 
     text = request.form.get("note", "")
