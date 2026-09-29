@@ -2922,5 +2922,137 @@ class PropertyMetaDescriptionTestCase(unittest.TestCase):
         self.assertNotIn(" in .", desc)
 
 
+class TicketRouteAuthorizationTestCase(unittest.TestCase):
+    """The renter-facing ticket routes (``ticket_detail`` / ``ticket_toggle_email``
+    / ``ticket_add_note``) gate on the ticket's ``submitted_by`` field matching
+    the caller. ``create_ticket`` lower-cases ``submitted_by`` on write and
+    ``_actor_email`` returns a lower-cased address, but a legacy row (written
+    before that normalization landed) or a hand-edited row can carry a
+    mixed-case string. The direct byte-for-byte equality check the routes used
+    previously locked the real submitter out of their own ticket in that case
+    — a 403 on ``/tickets/<id>`` for someone who did in fact file it. The
+    ``_is_ticket_submitter`` helper compares case-insensitively through
+    ``_ticket_str`` so a mixed-case (or hand-edited non-string) stored value
+    can't cause that mistaken denial.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        website_app.app.config.update(TESTING=True)
+
+    def setUp(self):
+        self.app = website_app.app
+        self.client = self.app.test_client()
+        self.services = self.app.extensions["somewheria_services"]
+
+    def login_as(self, role="renter", email="renter@example.com"):
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": f"{role}-id",
+                "email": email,
+                "name": "Test User",
+                "role": role,
+            }
+
+    def _mixed_case_ticket(self):
+        return {
+            "id": "legacy-1",
+            "title": "Leaky faucet",
+            "description": "Water everywhere",
+            "status": "open",
+            "priority": "normal",
+            "category": "plumbing",
+            # Mixed case — a hand-edited row, or one written before
+            # ``create_ticket`` normalized ``submitted_by`` to ``.lower()``.
+            "submitted_by": "Renter@Example.COM",
+            "property_name": "Maple House",
+            "created_at": "2030-01-01T00:00:00Z",
+            "updated_at": "2030-01-02T00:00:00Z",
+            "email_updates": False,
+            "notes": [],
+        }
+
+    def test_ticket_detail_allows_mixed_case_submitter(self):
+        self.login_as(email="renter@example.com")
+        ticket = self._mixed_case_ticket()
+        with patch.object(self.services.tickets, "get_ticket", return_value=ticket):
+            response = self.client.get(f"/tickets/{ticket['id']}")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_ticket_detail_still_forbids_other_renter(self):
+        # The case-insensitive match must not weaken the authorization gate:
+        # a different renter still gets 403 on someone else's ticket.
+        self.login_as(email="other@example.com")
+        ticket = self._mixed_case_ticket()
+        with patch.object(self.services.tickets, "get_ticket", return_value=ticket):
+            response = self.client.get(f"/tickets/{ticket['id']}")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_ticket_toggle_email_allows_mixed_case_submitter(self):
+        self.login_as(email="renter@example.com")
+        ticket = self._mixed_case_ticket()
+        with patch.object(
+            self.services.tickets, "get_ticket", return_value=ticket
+        ), patch.object(
+            self.services.tickets, "set_email_updates", return_value=ticket
+        ) as mock_toggle:
+            response = self.client.post(
+                f"/tickets/{ticket['id']}/email-updates",
+                data={"email_updates": "on"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        mock_toggle.assert_called_once()
+
+    def test_ticket_add_note_allows_mixed_case_submitter(self):
+        self.login_as(email="renter@example.com")
+        ticket = self._mixed_case_ticket()
+        with patch.object(
+            self.services.tickets, "get_ticket", return_value=ticket
+        ), patch.object(
+            self.services.tickets, "add_note", return_value=ticket
+        ) as mock_add:
+            response = self.client.post(
+                f"/tickets/{ticket['id']}/notes",
+                data={"note": "Followup from renter."},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        mock_add.assert_called_once()
+
+    def test_ticket_detail_forbids_when_submitted_by_is_non_string(self):
+        # A hand-edited ticket whose ``submitted_by`` is a truthy non-string
+        # (a JSON ``true``, a bare number) previously sailed past the
+        # ``(value or "")`` idiom and made the equality check compare a bool
+        # / int to a string — always ``!=``, so the check happened to fail
+        # closed. Keep that fail-closed behavior authoritatively: the helper
+        # coerces through ``_ticket_str`` to ``""``, which never matches a
+        # real actor email, so the real submitter still gets 403 rather than
+        # a coincidental lockout that could regress on a future refactor.
+        self.login_as(email="renter@example.com")
+        ticket = self._mixed_case_ticket()
+        ticket["submitted_by"] = True
+        with patch.object(self.services.tickets, "get_ticket", return_value=ticket):
+            response = self.client.get(f"/tickets/{ticket['id']}")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_ticket_detail_admin_bypasses_submitter_check(self):
+        # Admins can view any ticket, including one whose ``submitted_by`` is
+        # a stray non-string that trips the coercion path. The submitter
+        # check is skipped entirely for admins, so this must not regress.
+        self.login_as(role="admin", email="admin@example.com")
+        ticket = self._mixed_case_ticket()
+        ticket["submitted_by"] = 42
+        with patch.object(self.services.tickets, "get_ticket", return_value=ticket):
+            response = self.client.get(f"/tickets/{ticket['id']}")
+
+        self.assertEqual(response.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
