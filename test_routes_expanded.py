@@ -1339,6 +1339,71 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         kwargs = render_mock.call_args.kwargs
         self.assertEqual(kwargs["metrics"]["known_users"], 2)
 
+    def test_admin_dashboard_includes_env_configured_admins_in_summary(self):
+        # ``/admin/users`` merges env-configured admins (AUTHORIZED_USERS /
+        # ADMIN_USERS / HIGH_ADMIN_USERS) with file entries via
+        # ``all_user_roles``. The combined dashboard used to read
+        # ``get_user_roles`` directly, so an env admin who had never been
+        # rewritten through the UI didn't appear in the Users summary and
+        # the role tally reported the wrong totals — the two admin pages
+        # silently disagreed on how many users the site had. Both must
+        # surface the same merged view.
+        self.login_as("high_admin", email="owner@example.com")
+        merged_view = [
+            {"email": "env-admin@example.com", "role": "admin", "source": "config"},
+            {"email": "file-renter@example.com", "role": "renter", "source": "file"},
+        ]
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.auth,
+            "all_user_roles",
+            return_value=merged_view,
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        users = render_mock.call_args.kwargs["users"]
+        self.assertEqual(
+            sorted(users),
+            sorted([("env-admin@example.com", "admin"), ("file-renter@example.com", "renter")]),
+        )
+
+    def test_admin_status_includes_env_configured_admins_in_known_users(self):
+        # Mirror of the dashboard fix on ``/admin/status``: the
+        # ``known_users`` metric used to be the size of the file/DB
+        # ``user_roles`` map, so a deploy configured entirely through the
+        # ADMIN_USERS / HIGH_ADMIN_USERS env vars (no UI-assigned roles
+        # yet) reported "0 known users" here while /admin/users showed
+        # the env admins. Both must count the same merged view.
+        self.login_as("high_admin", email="owner@example.com")
+        merged_view = [
+            {"email": "env-admin@example.com", "role": "admin", "source": "config"},
+            {"email": "env-owner@example.com", "role": "high_admin", "source": "config"},
+            {"email": "file-renter@example.com", "role": "renter", "source": "file"},
+        ]
+        with patch.object(
+            self.services.auth,
+            "all_user_roles",
+            return_value=merged_view,
+        ), patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[],
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(render_mock.call_args.kwargs["metrics"]["known_users"], 3)
+
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(

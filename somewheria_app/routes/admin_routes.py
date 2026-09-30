@@ -335,17 +335,20 @@ def admin_status():
     config = services.config
     property_count = services.properties.property_count()
     pending_registrations = services.storage.get_pending_registrations()
-    user_roles = services.storage.get_user_roles()
     registered_routes = set(current_app.view_functions.keys())
 
     def route_ready(*endpoints):
         return all(endpoint in registered_routes for endpoint in endpoints)
 
-    # Exclude "revoked" tombstones from the count: they're deleted users
-    # kept only so an .env-based role can't silently restore access on the
-    # next login. Counting them here would show a growing "known users"
-    # total that includes people with no access.
-    active_user_count = sum(1 for role in user_roles.values() if role != "revoked")
+    # ``all_user_roles`` merges the env-configured admin lists
+    # (AUTHORIZED_USERS / ADMIN_USERS / HIGH_ADMIN_USERS) with the file/DB
+    # entries and drops "revoked" tombstones. Reading ``get_user_roles``
+    # directly used to undercount by every env-configured admin who had
+    # never been rewritten through the UI — a fresh deploy with two env
+    # admins and no file entries reported "0 known users" on this page
+    # while /admin/users listed them correctly. The list is already
+    # deduped and revoked-filtered.
+    active_user_count = len(services.auth.all_user_roles())
     metrics = {
         "properties_cached": property_count,
         "pending_registrations": len(pending_registrations),
@@ -584,13 +587,17 @@ def admin_dashboard_combined():
     ticket_summary = services.tickets.summary()
     ticket_status_counts = services.tickets.status_counts()
     listing_activity = services.analytics.recent_listing_activity(months=12)
-    # Skip "revoked" tombstones: they represent deleted users whose access
-    # is gone. Left in the list, the template's role tally counts them as
-    # renters (its else branch is renter) and inflates the total user count.
+    # ``all_user_roles`` merges env-configured admins (AUTHORIZED_USERS /
+    # ADMIN_USERS / HIGH_ADMIN_USERS) with the file/DB entries and drops
+    # "revoked" tombstones. Reading ``get_user_roles`` directly used to
+    # undercount every env admin who had never been rewritten through the
+    # UI — the "Users" summary card and role tally on this page silently
+    # disagreed with /admin/users (which already reads the merged view).
+    # The template still expects (email, role) tuples; project the shape
+    # here so it doesn't need to know about the merged dict format.
     active_user_roles = [
-        (email, role)
-        for email, role in services.storage.get_user_roles().items()
-        if role != "revoked"
+        (user["email"], user["role"])
+        for user in services.auth.all_user_roles()
     ]
     return render_template(
         "admin_dashboard.html",
