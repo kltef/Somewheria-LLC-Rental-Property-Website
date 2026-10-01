@@ -85,11 +85,19 @@ class AuthService:
             else:
                 roles[email] = role
 
+        # The ``source`` tag below asks "does this account have a file entry?".
+        # ``set_user_role`` lowercases on write, but a legacy / hand-edited
+        # ``user_roles.json`` (or a direct SQL insert) can still carry a
+        # mixed-case key like ``Admin@Example.com``. Comparing the lowered
+        # email against ``file_roles`` directly then misses that entry and
+        # mis-labels the row as "config" even though the file override is what
+        # produced the role above. Compare against a lowered key set instead.
+        file_role_emails = {email.lower() for email in file_roles}
         merged = [
             {
                 "email": email,
                 "role": role,
-                "source": "config" if email in env_emails and email not in file_roles else "file",
+                "source": "config" if email in env_emails and email not in file_role_emails else "file",
             }
             for email, role in roles.items()
         ]
