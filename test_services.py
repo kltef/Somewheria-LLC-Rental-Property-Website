@@ -131,6 +131,24 @@ class AuthServiceTestCase(unittest.TestCase):
         self.assertEqual(by_email["new@example.com"]["role"], "renter")
         self.assertEqual(by_email["new@example.com"]["source"], "file")
 
+    def test_all_user_roles_marks_source_as_file_for_legacy_mixed_case_key(self):
+        # ``set_user_role`` lowercases on write, so new entries always key
+        # the file dict by a lowered email. But a legacy / hand-edited
+        # ``user_roles.json`` (or a direct SQL insert) can still carry a
+        # mixed-case key like ``Admin@Example.com``. The lowering loop in
+        # ``all_user_roles`` already normalizes the merged role (file wins
+        # over env), but the previous ``source`` check compared the lowered
+        # email against the raw file_roles dict — which missed the legacy
+        # key and mis-labeled the row as "config" even though the file
+        # override is what produced the role. The row's role must be the
+        # file one AND its source must agree.
+        self.storage.get_user_roles.return_value = {"Admin@Example.com": "renter"}
+
+        by_email = {u["email"]: u for u in self.service.all_user_roles()}
+
+        self.assertEqual(by_email["admin@example.com"]["role"], "renter")
+        self.assertEqual(by_email["admin@example.com"]["source"], "file")
+
 
 class FileStorageServiceTestCase(unittest.TestCase):
     def setUp(self):
