@@ -127,6 +127,30 @@ def get_current_user():
     return get_services().auth.current_user()
 
 
+def current_user_email() -> str:
+    """Return the active session's email, lowercased, or ``""`` when
+    missing / not a string.
+
+    ``login_user`` lowercases on write and the OAuth callback validates
+    ``raw_email`` is a non-empty string before writing it (PR #170 et al),
+    but a legacy session issued by a pre-validation build — or a
+    hand-written test harness that skipped the OAuth path — can still carry
+    a non-string value under ``session["user"]["email"]``. Call sites that
+    reach for ``.lower()`` directly on that raw value then AttributeError
+    on an int / bool / None / dict and the crash handler serves an empty
+    503, which — because the same page is often the user's landing page —
+    soft-locks them out until they clear cookies. Returning ``""`` for
+    anything that isn't a string mirrors the "unknown address" fallback
+    :meth:`AuthService.get_user_role` already applies (PR #173) and lets
+    the caller use the empty string as a never-matching lookup key.
+    """
+    user = get_current_user() or {}
+    email = user.get("email")
+    if not isinstance(email, str):
+        return ""
+    return email.strip().lower()
+
+
 def login_required(view_func):
     @wraps(view_func)
     def wrapped(*args, **kwargs):

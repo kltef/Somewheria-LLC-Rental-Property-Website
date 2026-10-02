@@ -12,6 +12,7 @@ from flask import Response, abort, current_app, jsonify, redirect, render_templa
 
 from ..services.auth import (
     admin_required,
+    current_user_email,
     get_current_user,
     high_admin_required,
     is_logged_in,
@@ -293,7 +294,11 @@ def _backfill_contract_ids(services, contracts_for_email: list[dict], email: str
 def renter_dashboard():
     services = get_services()
     user = get_current_user()
-    email = user["email"].lower()
+    # ``current_user_email`` tolerates a legacy / hand-written session whose
+    # ``user["email"]`` is non-string — ``user["email"].lower()`` directly
+    # would AttributeError and 503 the renter's landing page via the crash
+    # handler. Same defensive shape as ``AuthService.get_user_role`` (PR #173).
+    email = current_user_email()
     contracts = _backfill_contract_ids(
         services, services.storage.get_renter_contracts().get(email, []), email
     )
@@ -809,7 +814,8 @@ def admin_users():
 def renter_profile():
     services = get_services()
     user = get_current_user()
-    email = user["email"].lower()
+    # See ``renter_dashboard`` for the ``current_user_email`` rationale.
+    email = current_user_email()
     success = None
     if request.method == "POST":
         # Hold the storage lock across load+modify+save so two renters
@@ -1064,7 +1070,8 @@ def _find_contract_for_email(services, email: str, contract_id: str):
 def contract_detail(contract_id: str):
     services = get_services()
     user = get_current_user()
-    email = user["email"].lower()
+    # See ``renter_dashboard`` for the ``current_user_email`` rationale.
+    email = current_user_email()
     is_admin = user.get("role") in ("admin", "high_admin")
     contract = None
     owner_email = email
@@ -1104,7 +1111,8 @@ def contract_detail(contract_id: str):
 def contract_download(contract_id: str):
     services = get_services()
     user = get_current_user()
-    email = user["email"].lower()
+    # See ``renter_dashboard`` for the ``current_user_email`` rationale.
+    email = current_user_email()
     is_admin = user.get("role") in ("admin", "high_admin")
     contract = None
     if is_admin:

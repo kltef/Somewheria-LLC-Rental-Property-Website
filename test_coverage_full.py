@@ -16,7 +16,7 @@ from PIL import Image
 from somewheria_app import create_app
 from somewheria_app.services.analytics import AnalyticsTracker
 from somewheria_app.services.appointments import AppointmentService
-from somewheria_app.services.auth import AuthService, auth_status_payload, renter_required
+from somewheria_app.services.auth import AuthService, auth_status_payload, current_user_email, renter_required
 from somewheria_app.services.console import set_console_log_level
 from somewheria_app.services.notifications import NotificationService
 from somewheria_app.services.properties import PropertyService, UploadValidationError
@@ -1209,6 +1209,46 @@ class CoverageInfrastructureTestCase(unittest.TestCase):
 
         self.assertTrue(response.get_json()["authenticated"])
         self.assertEqual(response.get_json()["user"]["email"], "user@example.com")
+
+    def test_current_user_email_lowercases_and_strips(self):
+        # Normalization matches the ``email.lower()`` call sites it replaces
+        # (``renter_dashboard``, ``renter_profile``, ``contract_detail`` /
+        # ``contract_download``, ``_actor_email``): callers compare against
+        # the lowered email stored by ``login_user`` / ``set_user_role``.
+        with patch(
+            "somewheria_app.services.auth.get_current_user",
+            return_value={"email": "  Alice@Example.COM  "},
+        ):
+            self.assertEqual(current_user_email(), "alice@example.com")
+
+    def test_current_user_email_returns_empty_for_non_string_email(self):
+        # A legacy / hand-written session can carry a non-string value under
+        # ``user["email"]``. The old ``user["email"].lower()`` call sites
+        # AttributeError'd on an int / bool / None / dict and 503'd the
+        # renter's landing page via the crash handler. Return ``""`` for
+        # anything that isn't a string — a never-matching lookup key — so
+        # the request proceeds. Mirrors the ``AuthService.get_user_role``
+        # guard (PR #173).
+        for bad in (None, 5, True, ["a@b.com"], {"email": "a@b.com"}, b"user@example.com"):
+            with patch(
+                "somewheria_app.services.auth.get_current_user",
+                return_value={"email": bad},
+            ):
+                self.assertEqual(current_user_email(), "", bad)
+
+    def test_current_user_email_handles_missing_user_and_missing_email_key(self):
+        # ``get_current_user`` returning ``None`` (unauthenticated or
+        # session["user"] = null) and a logged-in user whose dict is missing
+        # the ``email`` key both resolve to an empty string instead of
+        # raising. Keeps call sites free of their own ``if user is None`` and
+        # ``.get("email", "")`` boilerplate.
+        with patch("somewheria_app.services.auth.get_current_user", return_value=None):
+            self.assertEqual(current_user_email(), "")
+        with patch(
+            "somewheria_app.services.auth.get_current_user",
+            return_value={"name": "No email"},
+        ):
+            self.assertEqual(current_user_email(), "")
 
     def test_renter_required_forbids_guest_role(self):
         app = Flask(__name__)

@@ -15,6 +15,7 @@ from flask import abort, redirect, render_template, request, url_for
 
 from ..services.auth import (
     admin_required,
+    current_user_email,
     get_current_user,
     is_logged_in,
     login_required,
@@ -32,8 +33,14 @@ from ..services.tickets import (
 
 
 def _actor_email() -> str:
-    user = get_current_user() or {}
-    return (user.get("email") or "").lower()
+    # ``current_user_email`` guards against a legacy / hand-written session
+    # whose ``user["email"]`` is a truthy non-string: the old
+    # ``(user.get("email") or "").lower()`` idiom only coerced falsy values
+    # ("", None), so a stored int / bool / dict sailed past the ``or ""``
+    # and raised AttributeError inside ``.lower()`` — 503'ing every ticket
+    # route that reaches for the current actor's email. Mirrors the
+    # ``AuthService.get_user_role`` guard (PR #173).
+    return current_user_email()
 
 
 def _is_admin() -> bool:
@@ -133,7 +140,10 @@ def ticket_new_submit():
         abort(403)
     services = get_services()
     user = get_current_user() or {}
-    submitter_email = (user.get("email") or "").lower()
+    # ``current_user_email`` tolerates a legacy session whose stored email is
+    # non-string — the old ``(... or "").lower()`` idiom crashed on a truthy
+    # non-string. See ``_actor_email`` above.
+    submitter_email = current_user_email()
 
     property_id = (request.form.get("property_id") or "").strip()
     property_name = ""
