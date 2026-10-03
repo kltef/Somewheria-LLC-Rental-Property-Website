@@ -1404,6 +1404,113 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(render_mock.call_args.kwargs["metrics"]["known_users"], 3)
 
+    def test_admin_dashboard_tolerates_non_string_session_email(self):
+        # ``_refresh_session_role`` normally demotes a non-string-email
+        # session to "guest", but PR #175 made that refresh fall back to the
+        # cached role on storage failure. A high_admin whose session carries
+        # a legacy / hand-written non-string ``email`` can therefore reach
+        # this POST and the old ``actor_email.lower()`` would AttributeError
+        # on int/bool/dict, 503'ing the dashboard. Mirrors PR #179's guard
+        # on the renter-side routes.
+        self.login_as("high_admin", email="owner@example.com")
+        with self.client.session_transaction() as sess:
+            # Reassign the whole dict so Flask marks the session modified
+            # — mutating a nested value in-place isn't observed.
+            user = dict(sess["user"])
+            user["email"] = 42
+            sess["user"] = user
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.auth,
+            "all_user_roles",
+            return_value=[],
+        ), patch.object(
+            self.services.storage, "set_user_role"
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={},
+        ):
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "add", "email": "new@example.com", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        # Successful add, not the "cannot modify your own account" branch —
+        # the empty actor email never matches a form-submitted address.
+        self.assertIn(b"added as admin", response.data)
+
+    def test_admin_users_tolerates_non_string_session_email(self):
+        # Same gap on /admin/users: the ``actor_email`` was lowered inline
+        # off the session, so a non-string value crashed ``.lower()`` and
+        # 503'd the role-update POST through the crash handler. See the
+        # dashboard test above for how a non-string email can survive
+        # ``_refresh_session_role``.
+        self.login_as("admin", email="admin@example.com")
+        with self.client.session_transaction() as sess:
+            user = dict(sess["user"])
+            user["email"] = True
+            sess["user"] = user
+        with patch.object(
+            self.services.storage, "set_user_role"
+        ) as set_user_role_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"user@example.com": "renter"},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "user@example.com", "role": "renter", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"updated to renter", response.data)
+        set_user_role_mock.assert_called_once_with("user@example.com", "renter")
+        # Audit log falls back to "" (anonymous) rather than crashing on
+        # the non-string session email.
+        log_mock.assert_called_once_with(
+            "",
+            "user_role_updated",
+            {"email": "user@example.com", "role": "renter"},
+        )
+
+    def test_admin_registrations_tolerates_non_string_session_email(self):
+        # Approve/reject used to pull ``actor_email`` through a raw
+        # ``.get("email", "").lower()`` on the session user, which
+        # AttributeError'd on a non-string email and 503'd the admin's
+        # decision through the crash handler. Mirrors the dashboard /
+        # users-page guards for the same scenario.
+        self.login_as("admin", email="admin@example.com")
+        with self.client.session_transaction() as sess:
+            user = dict(sess["user"])
+            user["email"] = {"nested": "dict"}
+            sess["user"] = user
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [],
+            ],
+        ), patch.object(self.services.storage, "set_user_role"), patch.object(
+            self.services.storage, "remove_pending_registration"
+        ), patch.object(self.services.notifications, "send_email_async"), patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        log_mock.assert_called_once()
+        self.assertEqual(log_mock.call_args.args[0], "")
+        self.assertEqual(log_mock.call_args.args[1], "registration_approved")
+
     def test_renter_dashboard_loads_for_renter(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(

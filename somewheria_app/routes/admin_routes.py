@@ -519,14 +519,23 @@ def admin_dashboard_combined():
     services = get_services()
     error = None
     success = None
-    actor_email = (get_current_user() or {}).get("email", "")
+    # ``current_user_email`` tolerates a legacy / hand-written session whose
+    # ``user["email"]`` is non-string — a direct ``.lower()`` on the raw value
+    # would AttributeError on an int / bool / dict and 503 the dashboard POST
+    # via the crash handler. ``_refresh_session_role`` would normally demote
+    # such a session to "guest" (so ``@high_admin_required`` blocks the
+    # route), but PR #175 made that refresh fall back to the cached role on
+    # storage failure — a non-string-email session that was cached as
+    # ``high_admin`` can therefore still land here. Mirrors the guard PR
+    # #179 applied to the renter-side call sites.
+    actor_email = current_user_email()
     actor_role = _current_role()
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()[:254]
         action = request.form.get("action", "").strip()[:32]
         if not email:
             error = "No email provided."
-        elif email == actor_email.lower():
+        elif email == actor_email:
             error = "You cannot modify your own account here."
         elif action == "delete":
             target_role = services.auth.get_user_role(email)
@@ -707,7 +716,10 @@ def admin_registrations():
         # any address the request names — one that was never vetted, or one
         # already decided moments ago — and ``reject`` emails a rejection to
         # someone who never applied.
-        actor_email = (get_current_user() or {}).get("email", "").lower()
+        # See ``admin_dashboard_combined``: ``current_user_email`` guards
+        # against a non-string session email that would otherwise crash the
+        # downstream ``.lower()`` and 503 the approve/reject POST.
+        actor_email = current_user_email()
         if not any((item.get("email") or "").lower() == email for item in pending):
             return render_template(
                 "admin_registrations.html",
@@ -758,7 +770,10 @@ def admin_users():
     error = None
     success = None
     users = services.auth.all_user_roles()
-    actor_email = (get_current_user() or {}).get("email", "").lower()
+    # See ``admin_dashboard_combined``: ``current_user_email`` guards against
+    # a non-string session email that would otherwise crash the self-check
+    # and audit-log calls below.
+    actor_email = current_user_email()
     actor_role = _current_role()
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()[:254]
