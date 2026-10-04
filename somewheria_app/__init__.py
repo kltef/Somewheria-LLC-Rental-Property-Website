@@ -153,7 +153,19 @@ def create_app() -> Flask:
         if app.config.get("TESTING"):
             return
         user = session.get("user")
-        if not user or not user.get("email"):
+        # ``login_user`` only ever writes a dict under this key, but a legacy
+        # session issued by a pre-dataclass build — or a hand-written test
+        # harness that bypassed ``login_user`` — can still carry a truthy
+        # non-dict value (a bare string, a number, a list). ``not user`` only
+        # catches the falsy shapes, so ``user.get("email")`` on a truthy
+        # non-dict then AttributeErrors inside this before_request hook and
+        # 503s EVERY request across the whole site via the crash handler —
+        # including ``/admin/status``, the one page an operator would reach for
+        # to diagnose the outage. Treat anything that isn't a dict as "no
+        # usable session user" and skip the refresh. Mirrors the isinstance
+        # guards PRs #173 / #179 already apply at the ``user["email"]`` call
+        # sites and the matching guard just added in ``AuthService.current_user``.
+        if not isinstance(user, dict) or not user.get("email"):
             return
         # A storage-layer failure inside ``get_user_role`` (SQLite corruption,
         # a transient JSON-file read error, a permission flip on the roles

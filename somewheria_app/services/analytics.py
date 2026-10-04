@@ -99,7 +99,18 @@ class AnalyticsTracker:
         if request.endpoint is None or _is_bot_user_agent(request.headers.get("User-Agent", "")):
             return
         today = datetime.date.today().isoformat()
-        user = session.get("user") or {}
+        # ``session.get("user") or {}`` only coerces FALSY shapes to ``{}`` —
+        # a truthy non-dict value under the key (a legacy / hand-written
+        # session that bypassed ``login_user``) sails past it and then raises
+        # ``AttributeError: 'str' object has no attribute 'get'`` inside
+        # ``user.get("email")`` below, 503'ing EVERY request via the crash
+        # handler because this hook runs before every endpoint. Isinstance the
+        # fallback instead so the analytics tracker degrades to anonymous
+        # bucketing for the corrupted session rather than taking the whole
+        # site down. Matches the isinstance guard ``AuthService.current_user``
+        # applies for the same shape.
+        stored = session.get("user")
+        user = stored if isinstance(stored, dict) else {}
         # Normalize the email casing before it becomes a set key. ``record_login``
         # already stores the lowercased address, so a session whose stored
         # ``user["email"]`` retained its original mixed case (Google's id_token

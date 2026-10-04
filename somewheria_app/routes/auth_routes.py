@@ -24,7 +24,16 @@ def _landing_redirect():
     """Where a logged-in user starts: admins land in the admin panel, not on
     a public page. The Dashboard is high_admin-only, so plain admins land on
     Users (any admin page renders the panel sidebar)."""
-    role = (session.get("user") or {}).get("role", "")
+    # ``session.get("user") or {}`` only coerces FALSY shapes to ``{}``; a
+    # truthy non-dict value under the key (from a legacy / hand-written
+    # session that bypassed ``login_user``) sails past it and then raises
+    # ``AttributeError: 'str' object has no attribute 'get'`` inside
+    # ``.get("role", "")`` — 503'ing the post-login redirect via the crash
+    # handler's empty response. Match the isinstance guard
+    # ``AuthService.current_user`` applies for the same corrupted-session
+    # shape.
+    stored = session.get("user")
+    role = stored.get("role", "") if isinstance(stored, dict) else ""
     if role == "high_admin":
         return redirect(url_for("admin_dashboard_combined"))
     if role == "admin":
