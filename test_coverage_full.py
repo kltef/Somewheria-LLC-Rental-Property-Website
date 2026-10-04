@@ -1650,6 +1650,44 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
             with client.session_transaction() as flask_session:
                 self.assertEqual(flask_session["user"]["role"], "admin")
 
+    def test_session_role_refresh_survives_non_dict_session_user(self):
+        # ``login_user`` only ever writes a dict under ``session["user"]``,
+        # but a legacy session issued by a pre-dataclass build — or a
+        # hand-written test harness that bypassed ``login_user`` — can carry
+        # a truthy non-dict value under that key. The old ``not user or not
+        # user.get("email")`` guard only short-circuited on the falsy shapes
+        # ({}, None); a truthy non-dict (a bare string, a number, a list)
+        # sailed past it and crashed ``.get("email")`` with AttributeError
+        # inside this before_request hook — 503'ing EVERY request across the
+        # whole site via the crash handler, including ``/admin/status`` where
+        # an operator would reach to diagnose the outage. Isinstance the
+        # guard so a corrupted session degrades to "no usable session user"
+        # and the site stays up. Mirrors the PR #175 fallback for storage
+        # failures.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/probe")
+        def probe():
+            return "ok"
+
+        services = app.extensions["somewheria_services"]
+        # ``get_user_role`` must not be reached on the bail-out path — the
+        # non-dict never had a chance to become a lookup key.
+        with patch.object(
+            services.auth,
+            "get_user_role",
+            side_effect=AssertionError("should not be called on non-dict session user"),
+        ):
+            for bad in ("just-a-string", 42, 3.14, True, ["a", "b"], b"bytes"):
+                client = app.test_client()
+                with client.session_transaction() as flask_session:
+                    flask_session["user"] = bad
+                response = client.get("/probe")
+                self.assertEqual(response.status_code, 200, bad)
+                self.assertEqual(response.data, b"ok", bad)
+
     def test_before_request_skips_static_endpoint(self):
         with self.app.test_client() as client:
             client.get("/static/missing.css")
@@ -1683,6 +1721,28 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
             self.analytics.before_request()
 
+        self.assertEqual(sum(self.analytics.site_visits.values()), 1)
+
+    def test_before_request_survives_non_dict_session_user(self):
+        # ``login_user`` only ever writes a dict under ``session["user"]``,
+        # but a legacy session issued by a pre-dataclass build — or a
+        # hand-written test harness that bypassed ``login_user`` — can carry
+        # a truthy non-dict value under that key. The old ``session.get("user")
+        # or {}`` idiom only coerced FALSY shapes; a truthy non-dict (a bare
+        # string, a number, a list) sailed past it and crashed
+        # ``user.get("email")`` with AttributeError — 503'ing EVERY request
+        # across the whole site via the crash handler because this hook runs
+        # before every endpoint. Degrade to anonymous bucketing (by
+        # ``remote_addr``) for the corrupted session so the site stays up.
+        from flask import session
+
+        for bad in ("just-a-string", 42, True, ["a", "b"], b"bytes"):
+            with self.app.test_request_context("/hello", headers={"User-Agent": self.BROWSER_UA}):
+                session["user"] = bad
+                self.analytics.before_request()  # must not raise
+
+        # Every request still counted (anonymous bucketing kicked in) and
+        # the hook never crashed back into the caller.
         self.assertEqual(sum(self.analytics.site_visits.values()), 1)
 
     def test_visitor_last_seen_hard_caps_when_all_entries_are_fresh(self):

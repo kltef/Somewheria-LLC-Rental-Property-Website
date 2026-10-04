@@ -87,6 +87,29 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/manage-listings", response.headers["Location"])
 
+    def test_login_survives_non_dict_session_user(self):
+        # ``login_user`` only ever writes a dict under ``session["user"]``,
+        # but a legacy session issued by a pre-dataclass build — or a
+        # hand-written test harness that bypassed ``login_user`` — can carry
+        # a truthy non-dict value under that key. The old
+        # ``(session.get("user") or {}).get("role", "")`` idiom at
+        # ``_landing_redirect`` only coerced FALSY shapes to ``{}``; a truthy
+        # non-dict (a bare string, a number, a list) sailed past it and
+        # crashed ``.get("role", "")`` with ``AttributeError: 'str' object
+        # has no attribute 'get'``, 503'ing the post-login redirect via the
+        # crash handler's empty response. Isinstance the fallback so the
+        # corrupted session degrades to the public landing (``manage_listings``)
+        # instead of taking the whole login path down. Mirrors the
+        # ``AuthService.current_user`` isinstance guard and the matching
+        # ``_refresh_session_role`` fix.
+        for bad in ("just-a-string", 42, 3.14, True, ["a", "b"], b"bytes"):
+            with self.client.session_transaction() as session:
+                session["user"] = bad
+            response = self.client.get("/login", follow_redirects=False)
+            self.assertEqual(response.status_code, 302, bad)
+            # No ``role`` resolved -> falls through to the public landing.
+            self.assertIn("/manage-listings", response.headers["Location"], bad)
+
     def test_logout_clears_session(self):
         self.login_as("renter")
 

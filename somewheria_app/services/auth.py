@@ -14,7 +14,22 @@ class AuthService:
         return "user" in session
 
     def current_user(self):
-        return session.get("user")
+        # ``login_user`` only ever writes a dict under ``session["user"]`` (see
+        # below), so in normal operation this is just ``session.get("user")``.
+        # A legacy session issued by a pre-dataclass build — or a hand-written
+        # test harness that bypassed ``login_user`` — can still carry a non-dict
+        # value under that key. ``session.get("user") or {}`` at the call sites
+        # only coerces FALSY values ("", None, {}); a truthy non-dict (a bare
+        # string, a number, a list) sails past that idiom and then raises
+        # ``AttributeError: 'str' object has no attribute 'get'`` on the first
+        # ``user.get(...)`` — soft-locking the visitor out via the crash
+        # handler's empty 503 because the same session reads happen on every
+        # subsequent request. Return ``None`` for anything that isn't a dict so
+        # the standard ``get_current_user() or {}`` idiom resolves cleanly to an
+        # empty dict. Mirrors the isinstance guards PRs #173 / #179 added for
+        # non-string ``session["user"]["email"]`` values.
+        user = session.get("user")
+        return user if isinstance(user, dict) else None
 
     def whitelist_configured(self) -> bool:
         return bool(self.config.authorized_users)

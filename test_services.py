@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
+from flask import Flask, session
+
 from somewheria_app.services.appointments import AppointmentService
 from somewheria_app.services.auth import AuthService
 from somewheria_app.services.notifications import NotificationService
@@ -148,6 +150,41 @@ class AuthServiceTestCase(unittest.TestCase):
 
         self.assertEqual(by_email["admin@example.com"]["role"], "renter")
         self.assertEqual(by_email["admin@example.com"]["source"], "file")
+
+    def test_current_user_returns_none_for_non_dict_session_value(self):
+        # ``login_user`` only ever writes a dict under ``session["user"]``,
+        # but a legacy session issued by a pre-dataclass build — or a
+        # hand-written test harness that bypassed ``login_user`` — can carry
+        # a truthy non-dict value under that key (a bare string, a number, a
+        # list, bytes). The ``session.get("user") or {}`` idiom at every
+        # reader only coerces FALSY shapes; a truthy non-dict sailed past it
+        # and crashed the first ``.get(...)`` call. ``current_user`` now
+        # returns ``None`` for anything that isn't a dict so the standard
+        # ``get_current_user() or {}`` fallback resolves cleanly. Mirrors the
+        # isinstance guard PR #173 added at the ``user["email"]`` call sites.
+        app = Flask(__name__)
+        app.secret_key = "test"
+        for bad in ("just-a-string", 42, 3.14, True, ["a", "b"], b"bytes"):
+            with app.test_request_context():
+                session["user"] = bad
+                self.assertIsNone(self.service.current_user(), bad)
+
+    def test_current_user_passes_through_dict_session_value(self):
+        # The normal path: ``login_user`` wrote a dict, ``current_user``
+        # returns it unchanged (no copying) so downstream reads see the live
+        # session dict just as before the isinstance guard landed.
+        app = Flask(__name__)
+        app.secret_key = "test"
+        user = {"email": "alice@example.com", "role": "renter"}
+        with app.test_request_context():
+            session["user"] = user
+            self.assertEqual(self.service.current_user(), user)
+
+    def test_current_user_returns_none_when_user_key_missing(self):
+        app = Flask(__name__)
+        app.secret_key = "test"
+        with app.test_request_context():
+            self.assertIsNone(self.service.current_user())
 
 
 class FileStorageServiceTestCase(unittest.TestCase):
