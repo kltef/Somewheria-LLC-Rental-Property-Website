@@ -2830,6 +2830,26 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b'name="photos"', response.data)
         self.assertIn(b"multipart/form-data", response.data)
 
+    def test_ticket_new_form_survives_non_string_session_email(self):
+        # Regression: a legacy / hand-written session whose stored
+        # ``user["email"]`` is a truthy non-string (here an int) sailed past
+        # the ``user.get("email")`` truthiness check in ``ticket_new_form``
+        # and crashed ``.lower()`` inside ``_renter_email_default`` —
+        # taking the ticket submission page out via the crash handler's
+        # empty 503, with no way to recover short of clearing cookies.
+        # Mirrors PRs #173 / #179 that applied the same isinstance guard
+        # at the other ``session["user"]["email"]`` call sites.
+        with self.client.session_transaction() as session:
+            session["user"] = {
+                "id": "renter-id",
+                "email": 42,
+                "name": "Test User",
+                "role": "renter",
+            }
+        response = self.client.get("/tickets/new")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'name="photos"', response.data)
+
     def test_ticket_service_add_photo_persists_image(self):
         from somewheria_app.services.tickets import MAX_TICKET_PHOTOS
 
