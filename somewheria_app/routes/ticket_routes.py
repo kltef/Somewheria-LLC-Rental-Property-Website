@@ -102,8 +102,18 @@ def _is_ticket_submitter(ticket: dict, actor_email: str) -> bool:
 # ---------------------------------------------------------------- submit / list
 
 def _renter_email_default(services, email: str) -> bool:
-    """Look up the renter's 'email status updates' preference (default on)."""
-    if not email:
+    """Look up the renter's 'email status updates' preference (default on).
+
+    The isinstance guard tolerates a legacy / hand-written session whose
+    stored ``user["email"]`` is a truthy non-string (an int, a bool, a
+    dict). ``ticket_new_form`` used to pass ``user.get("email", "")``
+    straight through, and ``email.lower()`` on anything that isn't a
+    string AttributeErrors — 503'ing the ticket submission page via the
+    crash handler's empty response, with no way to recover short of
+    clearing cookies. Mirrors the isinstance guards PRs #173 / #179
+    added at the other ``session["user"]["email"]`` call sites.
+    """
+    if not isinstance(email, str) or not email:
         return False
     profile = services.storage.get_renter_profiles().get(email.lower()) or {}
     return bool(profile.get("email_status_updates", True))
@@ -119,7 +129,16 @@ def ticket_new_form():
     properties = services.properties.get_cached_properties() or []
     user = get_current_user() or {}
     prefill_property = (request.args.get("property_id") or "").strip()
-    email_default = _renter_email_default(services, user.get("email", "")) if user.get("email") else False
+    # ``_actor_email`` → ``current_user_email`` normalizes the session's
+    # stored email to a lowered string (or ``""`` for a non-string / absent
+    # value), so a legacy / hand-written session whose ``user["email"]`` is
+    # a truthy non-string (an int, a bool, a dict) no longer sails past the
+    # ``user.get("email")`` truthiness check and crashes ``.lower()`` inside
+    # ``_renter_email_default`` — which 503'd this page via the crash
+    # handler's empty response. Mirrors the fix PR #179 applied at the
+    # other session-email call sites, and matches how ``ticket_new_submit``
+    # already resolves the submitter email below.
+    email_default = _renter_email_default(services, _actor_email())
     return render_template(
         "ticket_new.html",
         title="Submit a Repair Ticket",
