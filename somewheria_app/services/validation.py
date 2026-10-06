@@ -65,4 +65,17 @@ def is_valid_email(value) -> bool:
     local, _, _ = value.rpartition("@")
     if not local or len(local) > 64:
         return False
-    return _EMAIL_REGEX.match(value) is not None
+    # ``fullmatch`` — not ``match`` — because Python's ``$`` anchor matches
+    # just before a trailing newline at the end of the string even without
+    # the ``MULTILINE`` flag, so ``_EMAIL_REGEX.match("alice@example.com\n")``
+    # happily returns a Match object and the function wrongly reports the
+    # value as valid. Every current caller ``.strip()``s before calling, so
+    # the bypass is latent today, but the function is documented to reject
+    # "values containing whitespace" and a future call site that forgets
+    # the strip could smuggle a CR/LF through to anywhere the "address"
+    # eventually becomes a mail header value — a textbook CRLF-injection
+    # vector into ``EmailMessage``'s ``To:`` field. ``fullmatch`` requires
+    # the entire string to be consumed by the pattern, and the character
+    # classes above do not include CR, LF, or any other whitespace, so a
+    # trailing newline (or any other dangling byte) now fails closed.
+    return _EMAIL_REGEX.fullmatch(value) is not None
