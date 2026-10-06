@@ -3256,6 +3256,24 @@ class EmailValidationTestCase(unittest.TestCase):
         # continue to pass — the boundary is inclusive.
         self.assertTrue(is_valid_email("a" * 64 + "@example.com"))
 
+    def test_rejects_trailing_cr_lf(self):
+        # Python's ``$`` anchor matches just before a trailing ``\n`` at the
+        # end of the string even without ``re.MULTILINE``, so a bare
+        # ``_EMAIL_REGEX.match(...)`` would accept ``"alice@example.com\n"``
+        # as valid — contradicting the function's documented contract to
+        # reject values that contain whitespace, and leaving a CRLF-
+        # injection vector open for any future caller that forgets to
+        # ``.strip()`` the value before passing it to ``send_email``'s
+        # ``To:`` header. Every variant that smuggles a CR, LF, or CRLF
+        # past the regex via the end-of-string anchor must now fail.
+        for value in (
+            "alice@example.com\n",
+            "alice@example.com\r",
+            "alice@example.com\r\n",
+            "alice@example.com\nBcc: attacker@example.net",
+        ):
+            self.assertFalse(is_valid_email(value), value)
+
 
 class TicketSetEmailUpdatesTestCase(unittest.TestCase):
     """Guard the no-op short-circuit in ``TicketService.set_email_updates``.
