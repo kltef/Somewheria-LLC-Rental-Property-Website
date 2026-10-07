@@ -1260,6 +1260,86 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         set_user_role_mock.assert_called_once_with("new@example.com", "admin")
         log_site_change_mock.assert_called_once()
 
+    def test_admin_dashboard_add_blocks_demoting_env_configured_high_admin(self):
+        # A ``high_admin`` using the dashboard "add" form must not be able
+        # to silently demote another ``high_admin`` whose role comes from
+        # the HIGH_ADMIN_USERS env list. The old ``email in user_roles``
+        # check saw only file entries, so an env-only high_admin passed
+        # the duplicate guard; ``set_user_role`` then wrote a lower-rank
+        # file entry that wins over the env fallback in
+        # ``AuthService.get_user_role``. ``admin_users`` already blocks
+        # the equivalent assignment via ``_can_act_on``; this test pins
+        # the parity for the dashboard form (the only caller to the
+        # endpoint today is a hand-crafted POST, but it stays as
+        # defense-in-depth now that the exploit is removed).
+        self.services.config.high_admin_users.append("env-high@example.com")
+        try:
+            self.login_as("high_admin", email="owner@example.com")
+            with patch.object(
+                self.services.analytics,
+                "dashboard_data",
+                return_value=({"visits": 0}, {"labels": []}),
+            ), patch.object(
+                self.services.auth,
+                "all_user_roles",
+                return_value=[],
+            ), patch.object(
+                self.services.storage,
+                "get_user_roles",
+                return_value={},
+            ), patch.object(
+                self.services.storage, "set_user_role"
+            ) as set_user_role_mock:
+                response = self.client.post(
+                    "/admin/dashboard",
+                    data={
+                        "action": "add",
+                        "email": "env-high@example.com",
+                        "role": "renter",
+                    },
+                )
+        finally:
+            self.services.config.high_admin_users.remove("env-high@example.com")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"User already exists", response.data)
+        set_user_role_mock.assert_not_called()
+
+    def test_admin_dashboard_add_allows_reactivating_revoked_user(self):
+        # A ``revoked`` tombstone resolves to the "guest" effective role in
+        # ``AuthService.get_user_role``, so re-adding a previously-deleted
+        # user through the dashboard "add" form must still work after the
+        # env-admin fix tightens the duplicate guard. Mirrors the same
+        # intent the existing dashboard tests rely on for the add path.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.auth,
+            "all_user_roles",
+            return_value=[],
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"revoked@example.com": "revoked"},
+        ), patch.object(
+            self.services.storage, "set_user_role"
+        ) as set_user_role_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={
+                    "action": "add",
+                    "email": "revoked@example.com",
+                    "role": "renter",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"added as renter", response.data)
+        set_user_role_mock.assert_called_once_with("revoked@example.com", "renter")
+
     def test_admin_dashboard_rejects_malformed_email_on_add(self):
         # Mirror of test_admin_users_rejects_malformed_email_on_role_assignment for
         # the combined admin dashboard's "add user" path. A typo'd email must not

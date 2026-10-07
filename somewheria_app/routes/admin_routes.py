@@ -575,7 +575,20 @@ def admin_dashboard_combined():
                 )
         elif action == "add":
             new_role = request.form.get("role", "renter").strip()
-            user_roles = services.storage.get_user_roles()
+            # Resolve the effective role so env-configured admins (ADMIN_USERS /
+            # HIGH_ADMIN_USERS / AUTHORIZED_USERS) also count as existing. The
+            # old ``email in user_roles`` check only saw file entries, which
+            # let a plain ``admin`` silently demote an env-configured
+            # ``high_admin`` by "adding" them with a lesser role: the env
+            # admin had no file entry, so the duplicate guard passed, and
+            # ``set_user_role`` wrote a lower-rank file entry that wins over
+            # the env fallback in ``AuthService.get_user_role``. ``admin_users``
+            # already gates its role writes through ``_can_act_on`` against the
+            # merged effective role; mirror that here. ``get_user_role``
+            # returns "guest" for both a never-registered account AND one
+            # whose file entry is tombstoned as "revoked", so re-adding a
+            # previously-revoked user stays allowed.
+            target_role = services.auth.get_user_role(email)
             # Reject malformed emails at the admin boundary too. The public
             # /register path already validates with is_valid_email; without
             # the same gate here, an admin paste-error puts a garbage entry
@@ -583,7 +596,7 @@ def admin_dashboard_combined():
             # OAuth login and just pollutes the table.
             if not is_valid_email(email):
                 error = "A valid email is required."
-            elif email in user_roles and user_roles.get(email) != "revoked":
+            elif target_role != "guest":
                 error = "User already exists."
             elif new_role not in ALLOWED_ROLES:
                 error = "Invalid role."
