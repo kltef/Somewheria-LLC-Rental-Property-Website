@@ -3216,6 +3216,25 @@ class PropertyMetaDescriptionTestCase(unittest.TestCase):
         self.assertNotIn("N/A", desc)
         self.assertNotIn(" in .", desc)
 
+    def test_normalized_non_string_name_does_not_crash(self):
+        # End-to-end: an upstream listing whose ``name`` / ``address`` arrive
+        # as a truthy non-string (dict/int/bool from a mis-serializing Lambda)
+        # must be renderable after ``normalize_property`` without crashing the
+        # meta-description call. Pre-fix, ``normalize_property`` left the
+        # non-string in place and ``.strip()`` on it raised AttributeError —
+        # which the crash handler then served as an empty 503 for
+        # /property/<uuid>.
+        from somewheria_app.services.properties import PropertyService
+
+        service = PropertyService.__new__(PropertyService)
+        normalized = service.normalize_property(
+            {"name": {"first": "Maple"}, "address": 42},
+            "prop-crash",
+        )
+        desc, cap = self._describe(**normalized)
+        self.assertLessEqual(len(desc), cap)
+        self.assertTrue(desc)  # non-empty fallback copy
+
 
 class TicketRouteAuthorizationTestCase(unittest.TestCase):
     """The renter-facing ticket routes (``ticket_detail`` / ``ticket_toggle_email``

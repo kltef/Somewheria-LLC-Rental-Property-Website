@@ -1236,6 +1236,38 @@ class PropertyServiceTestCase(unittest.TestCase):
         self.assertEqual(normalized["description"], "")
         self.assertEqual(normalized["blurb"], "")
 
+    def test_normalize_property_coerces_non_string_text_fields_to_defaults(self):
+        # A truthy non-string under ``name`` / ``address`` / ``lease_length``
+        # (a Lambda mis-serializing a joined record as a dict, a boolean flag
+        # inserted during migration, a stray integer id) would otherwise sail
+        # past the None-only ``_scalar_defaults`` loop and later crash
+        # ``public_routes._property_meta_description`` with
+        # ``AttributeError: 'int' object has no attribute 'strip'`` — 503'ing
+        # the public /property/<uuid> page via the crash handler. Each text
+        # field must fall back to its documented default.
+        normalized = self.service.normalize_property(
+            {
+                "name": {"street": "x"},
+                "address": 42,
+                "lease_length": True,
+            },
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["name"], "Property")
+        self.assertEqual(normalized["address"], "N/A")
+        self.assertEqual(normalized["lease_length"], "12 months")
+
+    def test_normalize_property_keeps_numeric_rent_bedrooms(self):
+        # Upstream legitimately returns rent/bedrooms as numbers; the
+        # text-field coercion above must not touch them.
+        normalized = self.service.normalize_property(
+            {"name": "Maple", "rent": 1500, "bedrooms": 3}, "prop-1"
+        )
+
+        self.assertEqual(normalized["rent"], 1500)
+        self.assertEqual(normalized["bedrooms"], 3)
+
     def test_normalize_property_coerces_null_included_amenities_to_empty_list(self):
         # Same upstream-shape bug as the description coercion above: a
         # ``"included_amenities": null`` payload made the pets-inference branch
