@@ -697,17 +697,35 @@ class PropertyService:
         # Same class of bug as the description / included_amenities null fixes
         # above — here it doesn't crash, it just produces ugly UI.
         _scalar_defaults = (
-            ("name", "Property"),
-            ("address", "N/A"),
             ("rent", "N/A"),
             ("deposit", "N/A"),
             ("sqft", "N/A"),
             ("bedrooms", "N/A"),
             ("bathrooms", "N/A"),
-            ("lease_length", "12 months"),
         )
         for key, default in _scalar_defaults:
             if normalized.get(key) is None:
+                normalized[key] = default
+        # ``name`` / ``address`` / ``lease_length`` are text-only fields that
+        # route handlers reach for with ``.strip()`` (see
+        # ``public_routes._property_meta_description``) and templates render
+        # inline. The None-replacement above handles the common
+        # ``"name": null`` case, but a truthy non-string from upstream (a
+        # dict / list / bool / number — rare but observed when a Lambda
+        # mis-serializes a joined address record) sails past the ``is None``
+        # check and crashes ``.strip()`` with AttributeError inside the
+        # meta-description call, 503'ing the public /property/<uuid> page via
+        # the crash handler. The numeric fields above legitimately arrive as
+        # ints/floats so leave their None-only guard alone; coerce the text
+        # ones here instead. Mirrors the ``description`` / ``blurb`` guards
+        # just below.
+        _text_defaults = (
+            ("name", "Property"),
+            ("address", "N/A"),
+            ("lease_length", "12 months"),
+        )
+        for key, default in _text_defaults:
+            if not isinstance(normalized.get(key), str):
                 normalized[key] = default
         # Coerce a null / non-string description to "". Upstream occasionally
         # returns ``"description": null`` for partially-filled listings; without
