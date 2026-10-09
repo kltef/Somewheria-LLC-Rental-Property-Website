@@ -2839,6 +2839,70 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertIn(b"Contract removed for renter@example.com.", response.data)
         delete_file_mock.assert_not_called()
 
+    def test_contract_download_survives_null_byte_pdf_filename(self):
+        # Companion to ``test_contract_download_survives_non_string_pdf_filename``:
+        # a stored filename that is a non-empty string but smuggles an
+        # embedded NUL (hand-edited row, migrated BLOB coerced through TEXT
+        # affinity) sails past the isinstance / separator / ``..`` guards in
+        # ``_safe_contract_pdf_path`` and then raises
+        # ``ValueError: embedded null byte`` inside ``pathlib.Path.resolve()``
+        # when the OS realpath syscall rejects the byte. The outer route
+        # has no try/except around that call, so the raise took
+        # /contracts/<id>/download out via the crash handler's empty 503.
+        # The explicit NUL reject in ``_safe_contract_pdf_path`` must now
+        # 404 cleanly instead.
+        self.login_as("renter", email="renter@example.com")
+        contract_id = "contract-nullbyte"
+        contracts_data = {
+            "renter@example.com": [
+                {
+                    "id": contract_id,
+                    "property_name": "Maple House",
+                    "start_date": "2024-01-01",
+                    "end_date": "2025-01-01",
+                    "status": "Active",
+                    "pdf_filename": "legit\x00payload.pdf",
+                }
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts_data
+        ):
+            response = self.client.get(f"/contracts/{contract_id}/download")
+        self.assertEqual(response.status_code, 404)
+
+    def test_admin_contracts_delete_survives_null_byte_pdf_filename(self):
+        # Regression companion to
+        # ``test_contract_download_survives_null_byte_pdf_filename``: the
+        # /admin/contracts delete path reads ``pdf_filename`` from the
+        # stored row and feeds it to ``_safe_contract_pdf_path``, so an
+        # embedded NUL in the stored filename would 503 the admin POST
+        # inside ``Path.resolve()`` before the ``relative_to`` guard runs.
+        # The delete must still succeed (removing the row) and never call
+        # into the filesystem for that bogus filename.
+        self.login_as("admin")
+        contracts = {
+            "renter@example.com": [
+                {"property_name": "Maple House", "pdf_filename": "a\x00b.pdf"}
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=contracts
+        ), patch.object(self.services.storage, "save_renter_contracts"), patch.object(
+            self.services.storage, "delete_file"
+        ) as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "delete",
+                    "renter_email": "renter@example.com",
+                    "contract_index": "0",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Contract removed for renter@example.com.", response.data)
+        delete_file_mock.assert_not_called()
+
     def test_contract_pdfs_stored_outside_static_tree(self):
         """Regression: contract PDFs must not live under ``static/`` because
         Flask's static handler would serve them at /static/uploads/contracts/...

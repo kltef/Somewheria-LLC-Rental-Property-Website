@@ -947,10 +947,26 @@ def _safe_contract_pdf_path(services, pdf_filename):
     taking out ``/contracts/<id>/download`` and the ``/admin/contracts``
     delete POST via the crash handler's empty 503. Same defensive shape the
     tickets / contracts services already apply on their string fields
-    (PRs #158 / #162)."""
+    (PRs #158 / #162).
+
+    The null-byte check pre-empts the ``.resolve()`` call below: a stored
+    filename that smuggles a NUL (hand-edited row, migrated BLOB coerced
+    through TEXT affinity) sailed past the ``/`` / ``\\`` / ``..`` guard,
+    then raised ``ValueError: embedded null byte`` inside pathlib when
+    ``.resolve()`` ran against the OS realpath syscall — the same crash the
+    other separator guards here already pre-empt. Catching it with an
+    explicit reject keeps the function's contract ("return a safe path or
+    None") intact, so neither ``contract_download`` nor the
+    ``admin_contracts`` delete POST 503s via the crash handler on a
+    tampered filename."""
     if not isinstance(pdf_filename, str) or not pdf_filename:
         return None
-    if "/" in pdf_filename or "\\" in pdf_filename or ".." in pdf_filename:
+    if (
+        "/" in pdf_filename
+        or "\\" in pdf_filename
+        or ".." in pdf_filename
+        or "\x00" in pdf_filename
+    ):
         return None
     upload_root = services.config.contract_upload_dir.resolve()
     pdf_path = (services.config.contract_upload_dir / pdf_filename).resolve()
