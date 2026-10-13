@@ -350,6 +350,38 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "Invalid date.")
 
+    def test_schedule_appointment_rejects_non_string_json_fields_cleanly(self):
+        # A JSON body can smuggle a truthy non-string value under any field
+        # (``{"name": 42, ...}``). The handler's old ``(x or "").strip()``
+        # idiom crashed with AttributeError on the non-string, and the
+        # crash handler turned the unauthenticated POST into an empty 503
+        # (plus an admin crash email per fingerprint). We now coerce
+        # non-strings so bad input falls out as a clean JSON error response
+        # instead of blowing up. Each field is probed in isolation so a
+        # future regression on only one of them still gets caught.
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        base = {
+            "name": "Alex",
+            "date": future_date,
+            "contact_method": "email",
+            "contact_info": "alex@example.com",
+        }
+        for field, bad_value in (
+            ("name", 42),
+            ("date", True),
+            ("contact_method", ["email"]),
+            ("contact_info", {"nested": "dict"}),
+        ):
+            payload = {**base, field: bad_value}
+            with self.subTest(field=field):
+                response = self.client.post("/property/prop-1/schedule", json=payload)
+                # The crash path would 503 with an empty body; any clean
+                # 4xx with a JSON error (missing field / invalid date /
+                # property not found) is a non-crash outcome.
+                self.assertNotEqual(response.status_code, 503, response.data)
+                self.assertTrue(400 <= response.status_code < 500, response.data)
+                self.assertIn("error", response.get_json() or {})
+
     def test_schedule_appointment_rejects_past_date(self):
         past_date = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 
