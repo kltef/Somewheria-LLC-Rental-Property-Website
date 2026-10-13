@@ -214,10 +214,25 @@ def schedule_appointment(uuid):
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return jsonify(success=False, error="Invalid payload."), 400
-    name = (data.get("name") or "").strip()[:MAX_NAME_LEN]
-    date = (data.get("date") or "").strip()[:MAX_DATE_LEN]
-    contact_method = (data.get("contact_method") or "").strip().lower()[:32]
-    contact_info = (data.get("contact_info") or "").strip()[:MAX_CONTACT_LEN]
+
+    # ``request.form`` always hands back strings, but a JSON body can smuggle
+    # a truthy non-string value (``{"name": 42, "date": true, ...}``) under
+    # any of these keys. The ``(x or "")`` idiom only coerces FALSY values;
+    # a non-falsy non-string sails through and the following ``.strip()``
+    # raises ``AttributeError: 'int' object has no attribute 'strip'`` on the
+    # unauthenticated POST path, which the crash handler then turns into an
+    # empty 503 (plus an admin crash email per fingerprint). Coerce to ``""``
+    # so bad input falls out as a clean 400 via the "required fields"/invalid
+    # date checks below. Matches the isinstance guards PRs #173-#186 added at
+    # other string-coercion call sites.
+    def _str_field(key: str) -> str:
+        value = data.get(key)
+        return value if isinstance(value, str) else ""
+
+    name = _str_field("name").strip()[:MAX_NAME_LEN]
+    date = _str_field("date").strip()[:MAX_DATE_LEN]
+    contact_method = _str_field("contact_method").strip().lower()[:32]
+    contact_info = _str_field("contact_info").strip()[:MAX_CONTACT_LEN]
 
     if not name or not contact_info:
         return jsonify(success=False, error="Name and contact info are required."), 400
