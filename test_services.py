@@ -704,6 +704,32 @@ class FileStorageServiceTestCase(unittest.TestCase):
             },
         )
 
+    def test_get_renter_contracts_normalizes_mixed_case_email_keys(self):
+        # ``admin_contracts`` POST (add + delete) and ``_find_contract_for_email``
+        # all look contracts up by a ``.lower()``-ed renter email, so a
+        # legacy / hand-edited row keyed as ``Foo@Bar.com`` is otherwise
+        # unreachable: the admin delete fails "Contract not found" even
+        # though the row is right there, and the renter's own
+        # ``contract_detail`` call misses their contracts entirely. Verify
+        # keys come back lowercased, and that mixed-case duplicates are
+        # merged under the same lowercased key rather than letting the
+        # second entry clobber the first (which would silently lose the
+        # earlier contracts).
+        raw = {
+            "Foo@Bar.com": [{"id": "c1"}, {"id": "c2"}],
+            "foo@bar.com": [{"id": "c3"}],
+            "BAZ@Example.com": [{"id": "c4"}],
+            123: [{"id": "ignored-non-string-key"}],
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_contracts()
+        self.assertEqual(set(loaded), {"foo@bar.com", "baz@example.com"})
+        self.assertEqual(
+            {c["id"] for c in loaded["foo@bar.com"]},
+            {"c1", "c2", "c3"},
+        )
+        self.assertEqual(loaded["baz@example.com"], [{"id": "c4"}])
+
     def test_get_user_roles_drops_non_string_keys_and_values(self):
         # ``expected_type=dict`` on load_json_file only verifies the top-level
         # container. A corrupted / hand-edited ``user_roles.json`` can still

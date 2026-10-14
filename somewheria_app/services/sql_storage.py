@@ -329,11 +329,22 @@ class SqlStorageService:
         # take out the admin UI via the crash handler's 503. Matches the
         # FileStorageService counterpart and the guards PRs #146 / #147
         # added for tickets and lead captures.
+        #
+        # Normalize email keys to lowercase. ``save_renter_contracts`` /
+        # ``admin_contracts`` POST already write with ``.lower()``, so in
+        # normal operation this is a no-op — but a raw-SQL insert or a
+        # pre-normalization row could carry a mixed-case ``Foo@Bar.com``
+        # that the admin UI's lowered-email lookup then misses, failing
+        # every delete / renter-side lookup with "Contract not found".
+        # Mirrors the file-backend guard; see its docstring.
         out: dict[str, list] = {}
         for row in rows:
+            email = row["email"]
+            if not isinstance(email, str):
+                continue
             contract = self._safe_loads(row["contract"], source="renter_contracts")
             if isinstance(contract, dict):
-                out.setdefault(row["email"], []).append(contract)
+                out.setdefault(email.lower(), []).append(contract)
         return out
 
     def save_renter_contracts(self, contracts: dict) -> None:
