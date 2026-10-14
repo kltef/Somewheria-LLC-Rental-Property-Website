@@ -328,11 +328,28 @@ class FileStorageService:
         # take out the admin UI via the crash handler's 503. Matches the
         # isinstance(dict) guard PRs #146 / #147 added for pending
         # registrations, lead captures, and tickets.
+        #
+        # Normalize email keys to lowercase so a hand-edited row keyed as
+        # ``Foo@Bar.com`` is reachable from the admin UI. ``admin_contracts``
+        # POST (add + delete) lowercases ``renter_email`` before the dict
+        # lookup, so a mixed-case stored key otherwise fails every delete
+        # with "Contract not found" even though the row is right there, and
+        # the renter-side ``contract_detail`` / ``_find_contract_for_email``
+        # calls (which also pass a lowered email) miss the renter's own
+        # contracts. Mixed-case duplicates — a direct consequence of a
+        # legacy / hand-edited file, since every write path already
+        # lowercases — are merged under the same lowercased key rather than
+        # letting the second entry clobber the first.
         cleaned: dict = {}
         for email, contracts in raw.items():
-            if not isinstance(contracts, list):
+            if not isinstance(email, str) or not isinstance(contracts, list):
                 continue
-            cleaned[email] = [item for item in contracts if isinstance(item, dict)]
+            normalized = email.lower()
+            valid = [item for item in contracts if isinstance(item, dict)]
+            if normalized in cleaned:
+                cleaned[normalized].extend(valid)
+            else:
+                cleaned[normalized] = valid
         return cleaned
 
     def save_renter_contracts(self, contracts: dict) -> None:

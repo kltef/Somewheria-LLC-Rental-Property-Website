@@ -362,6 +362,42 @@ class RenterContractsTestCase(SqlStorageBaseTestCase):
         out = self.storage.get_renter_contracts()
         self.assertEqual(out, {"renter@example.com": [{"id": "c1"}]})
 
+    def test_get_renter_contracts_normalizes_mixed_case_email_keys(self):
+        # Every write path (``save_renter_contracts`` /
+        # ``admin_contracts`` POST) lowercases the email before storing, so
+        # in normal operation keys come back lowercase already. A raw-SQL
+        # insert or a pre-normalization migration row can still carry a
+        # mixed-case ``Foo@Bar.com`` that the admin UI's lowered-email
+        # lookup then misses (``admin_contracts`` delete returns "Contract
+        # not found", ``_find_contract_for_email`` fails to surface the
+        # renter's own contracts). Verify keys come back lowercased and
+        # that mixed-case duplicates merge under the same lowered key
+        # rather than letting the later row clobber the earlier contracts.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("Foo@Bar.com", 0, '{"id": "c1"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("Foo@Bar.com", 1, '{"id": "c2"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("foo@bar.com", 0, '{"id": "c3"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("BAZ@Example.com", 0, '{"id": "c4"}'),
+            )
+        out = self.storage.get_renter_contracts()
+        self.assertEqual(set(out), {"foo@bar.com", "baz@example.com"})
+        self.assertEqual(
+            {c["id"] for c in out["foo@bar.com"]},
+            {"c1", "c2", "c3"},
+        )
+        self.assertEqual(out["baz@example.com"], [{"id": "c4"}])
+
 
 class TicketsTestCase(SqlStorageBaseTestCase):
     def test_save_and_load_via_path_shim(self):
