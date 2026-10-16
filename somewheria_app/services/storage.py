@@ -225,7 +225,30 @@ class FileStorageService:
         # AttributeError and take out the page via the crash handler's 503.
         # Mirrors the isinstance(dict) guard PRs #146 / #147 added for pending
         # registrations, lead captures, and tickets.
-        return {email: profile for email, profile in raw.items() if isinstance(profile, dict)}
+        #
+        # Normalize email keys to lowercase so a hand-edited row keyed as
+        # ``Foo@Bar.com`` is reachable from the renter profile route
+        # (``current_user_email`` lowercases before the dict lookup) and from
+        # ``ticket_routes._renter_email_default`` (same lower()). Every write
+        # path already lowercases, so in normal operation this is a no-op —
+        # but a legacy / hand-edited file can still carry mixed-case entries,
+        # and without normalization the renter's own profile edits miss the
+        # existing row, overwrite with a blank default, and leave the
+        # mixed-case row sitting in the file forever as dead weight.
+        # Mixed-case duplicates are merged field-wise (later row wins per
+        # shared key) rather than letting the second entry clobber the first,
+        # mirroring PR #188's merge-not-clobber contract for
+        # ``get_renter_contracts``.
+        cleaned: dict = {}
+        for email, profile in raw.items():
+            if not isinstance(email, str) or not isinstance(profile, dict):
+                continue
+            normalized = email.lower()
+            if normalized in cleaned:
+                cleaned[normalized] = {**cleaned[normalized], **profile}
+            else:
+                cleaned[normalized] = dict(profile)
+        return cleaned
 
     def save_renter_profiles(self, profiles: dict) -> None:
         self.save_json_file(self.config.renter_profile_file, profiles)

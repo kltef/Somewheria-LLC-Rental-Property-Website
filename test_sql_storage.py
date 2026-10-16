@@ -266,6 +266,40 @@ class RenterProfilesTestCase(SqlStorageBaseTestCase):
         profiles = self.storage.get_renter_profiles()
         self.assertEqual(profiles, {"keep@example.com": {"name": "Renter R"}})
 
+    def test_get_renter_profiles_normalizes_mixed_case_email_keys(self):
+        # ``save_renter_profiles`` already lowercases on write, so in normal
+        # operation keys come back lowercase already. A raw-SQL insert /
+        # pre-normalization migration row can still carry a mixed-case
+        # ``Foo@Bar.com`` that the renter-profile route's lowered-email
+        # lookup then misses — the renter sees a blank form, overwrites with
+        # new values, and the mixed-case row sits in the table as dead
+        # weight. Verify keys come back lowercased, and that mixed-case
+        # duplicates MERGE field-wise under the same lowered key rather than
+        # letting the later row clobber the earlier fields outright. Mirrors
+        # ``test_get_renter_contracts_normalizes_mixed_case_email_keys``.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("Foo@Bar.com", '{"name": "Original", "contact": "555-0100"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("foo@bar.com", '{"name": "Updated"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("BAZ@Example.com", '{"name": "Baz"}'),
+            )
+        out = self.storage.get_renter_profiles()
+        self.assertEqual(set(out), {"foo@bar.com", "baz@example.com"})
+        # Later-row ``name`` wins; earlier-row ``contact`` survives because
+        # the later row didn't carry that field (dict.update semantics).
+        self.assertEqual(
+            out["foo@bar.com"],
+            {"name": "Updated", "contact": "555-0100"},
+        )
+        self.assertEqual(out["baz@example.com"], {"name": "Baz"})
+
     def test_get_renter_profiles_drops_malformed_json_payloads(self):
         # A ``profile`` column containing text that isn't valid JSON at all
         # (a truncated INSERT, on-disk corruption) must not raise
