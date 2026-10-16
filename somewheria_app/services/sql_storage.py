@@ -297,11 +297,31 @@ class SqlStorageService:
         # handler's 503. Matches the guard the FileStorageService counterpart
         # applies and the same-shape guards on the tickets / lead-captures
         # tables landed in PRs #146 / #147.
+        #
+        # Normalize email keys to lowercase. ``save_renter_profiles`` /
+        # ``renter_profile`` POST already write with ``.lower()``, so in
+        # normal operation this is a no-op — but a raw-SQL insert or a
+        # pre-normalization migration row could carry a mixed-case
+        # ``Foo@Bar.com`` that the ``renter_profile`` route's lowered-email
+        # lookup then misses: the renter sees a blank form, overwrites with
+        # new values, and the mixed-case row sits in the table as dead weight
+        # from then on. Mixed-case duplicates merge field-wise (later row
+        # wins per shared key) rather than letting the later row clobber the
+        # earlier fields outright. Mirrors the file-backend guard and PR
+        # #188's merge-not-clobber contract for ``get_renter_contracts``.
         out: dict = {}
         for row in rows:
+            email = row["email"]
+            if not isinstance(email, str):
+                continue
             profile = self._safe_loads(row["profile"], source="renter_profiles")
-            if isinstance(profile, dict):
-                out[row["email"]] = profile
+            if not isinstance(profile, dict):
+                continue
+            normalized = email.lower()
+            if normalized in out:
+                out[normalized] = {**out[normalized], **profile}
+            else:
+                out[normalized] = dict(profile)
         return out
 
     def save_renter_profiles(self, profiles: dict) -> None:

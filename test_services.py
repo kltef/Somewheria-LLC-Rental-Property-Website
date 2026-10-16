@@ -704,6 +704,53 @@ class FileStorageServiceTestCase(unittest.TestCase):
             },
         )
 
+    def test_get_renter_profiles_normalizes_mixed_case_email_keys(self):
+        # ``renter_profile`` POST and ``_renter_email_default`` both look
+        # profiles up by a ``.lower()``-ed renter email (via
+        # ``current_user_email``), so a legacy / hand-edited row keyed as
+        # ``Foo@Bar.com`` is otherwise unreachable: the renter sees a blank
+        # form on first visit, overwrites with new values, and the
+        # mixed-case row stays in the file as dead weight. Verify keys come
+        # back lowercased, and that mixed-case duplicates MERGE field-wise
+        # under the same lowered key rather than letting the second entry
+        # clobber the first outright (which would silently lose fields the
+        # earlier row carried but the later one omitted). Mirrors
+        # ``test_get_renter_contracts_normalizes_mixed_case_email_keys``.
+        raw = {
+            "Foo@Bar.com": {"name": "Original", "contact": "555-0100"},
+            "foo@bar.com": {"name": "Updated"},
+            "BAZ@Example.com": {"name": "Baz"},
+            123: {"name": "ignored-non-string-key"},
+            "junk@example.com": "not a dict",
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_profiles()
+        self.assertEqual(set(loaded), {"foo@bar.com", "baz@example.com"})
+        # Later row's ``name`` wins (dict.update semantics); the earlier
+        # row's ``contact`` is preserved because the later row didn't carry
+        # it.
+        self.assertEqual(
+            loaded["foo@bar.com"],
+            {"name": "Updated", "contact": "555-0100"},
+        )
+        self.assertEqual(loaded["baz@example.com"], {"name": "Baz"})
+
+    def test_get_renter_profiles_does_not_mutate_input_rows(self):
+        # The merge path writes a fresh dict into ``cleaned`` so that
+        # subsequent calls (or callers that still hold a reference to the
+        # raw payload via ``load_json_file``) see the original rows
+        # unchanged. Without ``dict(profile)`` the first-seen row would be
+        # mutated in place by a later ``.update``, which would corrupt an
+        # in-memory cache or a shared mock fixture across repeated reads.
+        raw = {
+            "foo@bar.com": {"name": "Original", "contact": "555-0100"},
+            "Foo@Bar.com": {"name": "Updated"},
+        }
+        snapshot_original = dict(raw["foo@bar.com"])
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            self.service.get_renter_profiles()
+        self.assertEqual(raw["foo@bar.com"], snapshot_original)
+
     def test_get_renter_contracts_normalizes_mixed_case_email_keys(self):
         # ``admin_contracts`` POST (add + delete) and ``_find_contract_for_email``
         # all look contracts up by a ``.lower()``-ed renter email, so a
