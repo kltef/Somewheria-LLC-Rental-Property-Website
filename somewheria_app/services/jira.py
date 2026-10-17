@@ -131,8 +131,22 @@ class JiraClient:
 
     @staticmethod
     def map_jira_status(jira_status: str) -> Optional[str]:
-        """Translate a JIRA status name to one of ALLOWED_STATUSES, or None."""
-        if not jira_status:
+        """Translate a JIRA status name to one of ALLOWED_STATUSES, or None.
+
+        The isinstance guard rejects non-string input defensively. The webhook
+        extractor (``_extract_jira_status`` in ``routes/webhook_routes.py``)
+        already filters non-strings before this method is reached, so in the
+        production flow this is a no-op — but ``map_jira_status`` is a public
+        static method, and a hand-rolled test or future caller passing a
+        non-string (``None``, an int, a dict, a list) would otherwise raise
+        ``AttributeError: 'int' object has no attribute 'strip'`` inside
+        ``.strip().lower()`` and surface through ``transition_local_ticket`` as
+        an unhandled exception. Returning ``None`` for anything that isn't a
+        string matches the "unmapped status" fallback already used for
+        unrecognized strings. Mirrors the isinstance guards PRs #162 / #168 /
+        #187 added at other string-coercion call sites.
+        """
+        if not isinstance(jira_status, str) or not jira_status:
             return None
         return _STATUS_REVERSE_MAP.get(jira_status.strip().lower())
 

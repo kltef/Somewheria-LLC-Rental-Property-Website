@@ -57,6 +57,22 @@ class JiraClientTestCase(unittest.TestCase):
         self.assertIsNone(JiraClient.map_jira_status("Backlog"))
         self.assertIsNone(JiraClient.map_jira_status(""))
 
+    def test_map_jira_status_returns_none_for_non_string_input(self):
+        # The webhook extractor already filters non-strings, so in the
+        # production flow this is unreachable — but ``map_jira_status`` is a
+        # public static method, and a hand-rolled test or future caller
+        # passing a non-string (``None``, an int, a dict, a list) used to
+        # raise ``AttributeError`` inside ``.strip()``. Return ``None`` for
+        # anything that isn't a string, matching the "unmapped status"
+        # fallback already used for unrecognized strings. Mirrors the
+        # isinstance guards PRs #162 / #168 / #187 added at other
+        # string-coercion call sites.
+        for value in (None, 0, 42, True, [], ["Open"], {}, {"name": "Open"}):
+            self.assertIsNone(
+                JiraClient.map_jira_status(value),
+                msg=f"non-string {value!r} should map to None",
+            )
+
     def test_priority_mapping_via_payload_inspection(self):
         # Indirectly assert mapping via the log. Easier path: check that the
         # configured client doesn't blow up on each priority.
