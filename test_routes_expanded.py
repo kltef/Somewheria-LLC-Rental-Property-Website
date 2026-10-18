@@ -1539,6 +1539,34 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(render_mock.call_args.kwargs["metrics"]["known_users"], 3)
 
+    def test_admin_status_pwa_support_row_reports_healthy_when_files_present(self):
+        # ``manifest.webmanifest`` ships at the project root — pwa_routes.manifest
+        # serves it via ``send_from_directory(config.base_dir, ...)``. The admin
+        # status check used to look under ``static_dir`` instead, so the
+        # "PWA Support" row rendered as "Issue" on every healthy install even
+        # though ``/manifest.webmanifest`` served a 200. Guard against the
+        # path mismatch regressing: on a healthy install the file is at
+        # ``base_dir``, routes are registered, and ``service-worker.js`` is
+        # also at the project root, so the row's ``ok`` must be True.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            return_value=[],
+        ), patch(
+            "somewheria_app.routes.admin_routes.render_template",
+            return_value="ok",
+        ) as render_mock:
+            response = self.client.get("/admin/status")
+
+        self.assertEqual(response.status_code, 200)
+        website_status = render_mock.call_args.kwargs["website_status"]
+        pwa_row = next(item for item in website_status if item["label"] == "PWA Support")
+        self.assertTrue(
+            pwa_row["ok"],
+            f"PWA Support row should be healthy on this install; got {pwa_row!r}",
+        )
+
     def test_admin_dashboard_tolerates_non_string_session_email(self):
         # ``_refresh_session_role`` normally demotes a non-string-email
         # session to "guest", but PR #175 made that refresh fall back to the
