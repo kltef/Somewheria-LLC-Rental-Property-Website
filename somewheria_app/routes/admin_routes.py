@@ -496,8 +496,15 @@ def admin_status():
         {
             "label": "PWA Support",
             "detail": "Manifest and service worker files are available",
+            # ``manifest.webmanifest`` lives at the project root (``base_dir``)
+            # — ``pwa_routes.manifest`` serves it from there with
+            # ``send_from_directory(config.base_dir, ...)``. Checking
+            # ``static_dir`` here instead was a latent mismatch: that path
+            # never exists on disk, so the "PWA Support" row rendered as
+            # "Issue" on every admin status page load even on a perfectly
+            # healthy install serving ``/manifest.webmanifest`` with a 200.
             "ok": route_ready("manifest", "manifest_json", "service_worker")
-            and config.static_dir.joinpath("manifest.webmanifest").exists()
+            and config.base_dir.joinpath("manifest.webmanifest").exists()
             and config.base_dir.joinpath("service-worker.js").exists(),
         },
     ]
