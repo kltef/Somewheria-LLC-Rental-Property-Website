@@ -27,10 +27,33 @@ Env overrides:
 
 import os
 
+
+def _int_env(name: str, default: int, *, minimum: int) -> int:
+    # ``int()`` alone would raise ValueError and refuse to boot on a mistyped
+    # env value (``GUNICORN_WORKERS=auto``, or a stray ``GUNICORN_WORKERS=``
+    # line that leaves the var set to the empty string). Gunicorn reads this
+    # config file with ``exec`` at startup — an uncaught exception here means
+    # the production service fails to come up with a cryptic traceback instead
+    # of using the documented default. Falling back to the default on blank /
+    # non-numeric / below-minimum matches the ``_int_env`` contract the app's
+    # own config.py already applies for ``CACHE_REFRESH_INTERVAL`` /
+    # ``TRUSTED_PROXY_COUNT`` so an operator typo can never take the service
+    # offline. ``minimum`` enforces the per-setting floor (workers / threads
+    # must be ≥ 1 or gunicorn rejects the config at validation time).
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
 bind = os.getenv("BIND", "127.0.0.1:8000")
-workers = int(os.getenv("GUNICORN_WORKERS", "1"))
-threads = int(os.getenv("GUNICORN_THREADS", "8"))
-timeout = int(os.getenv("GUNICORN_TIMEOUT", "120"))
+workers = _int_env("GUNICORN_WORKERS", 1, minimum=1)
+threads = _int_env("GUNICORN_THREADS", 8, minimum=1)
+timeout = _int_env("GUNICORN_TIMEOUT", 120, minimum=0)
 graceful_timeout = 30
 # Recycle workers periodically to bound any slow memory growth.
 max_requests = 1000
