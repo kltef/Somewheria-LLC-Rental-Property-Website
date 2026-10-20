@@ -137,7 +137,25 @@ class TicketService:
         statuses: Iterable[str] | None = None,
     ) -> list[dict]:
         tickets = self._load()
-        if submitter:
+        # ``is not None`` — not ``if submitter:`` — so an empty-string filter
+        # fails closed instead of silently returning every ticket. The
+        # ``renter_dashboard`` / ``ticket_list_mine`` call sites pass
+        # ``current_user_email()``, which returns ``""`` when the session's
+        # stored ``user["email"]`` is a non-string (a legacy / hand-written
+        # session that bypassed the OAuth validation). The cached session role
+        # would normally be refreshed to "guest" and the ``@renter_required``
+        # / ``@login_required`` gates would block the request — but PR #175
+        # made ``_refresh_session_role`` keep the cached role on a storage
+        # failure, so a transient outage can land such a session on these
+        # routes with the cached ``renter`` role intact. The old
+        # ``if submitter:`` turned the empty filter into "no filter at all"
+        # and showed EVERY ticket in the system to that session — admins',
+        # other renters', the lot. Treating ``""`` as a real filter value
+        # returns no rows (production tickets always carry a non-empty
+        # ``submitted_by``) and keeps the data boundary intact. ``None``
+        # (the default) still means "no filter" so the admin list keeps its
+        # full view.
+        if submitter is not None:
             submitter_lc = submitter.lower()
             # ``_string_field`` guards against a hand-edited row whose
             # ``submitted_by`` is a non-string (e.g. an integer) — the old

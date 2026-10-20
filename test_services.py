@@ -3501,6 +3501,56 @@ class TicketLoadNonDictRowGuardTestCase(unittest.TestCase):
         self.assertEqual(self.service.find_by_jira_key("OPS-1")["id"], "t1")
 
 
+class TicketListEmptySubmitterFiltersTestCase(unittest.TestCase):
+    """Regression: ``list_tickets(submitter="")`` must not fall through to a
+    no-filter return that leaks every ticket in the system.
+
+    ``renter_dashboard`` / ``ticket_list_mine`` call ``list_tickets`` with
+    ``current_user_email()``, which returns ``""`` when the session's stored
+    ``user["email"]`` is a non-string (a legacy / hand-written session that
+    bypassed the OAuth validation). The cached role would normally be
+    refreshed to "guest" and the ``@renter_required`` / ``@login_required``
+    gates would block — but PR #175 made ``_refresh_session_role`` keep the
+    cached role on a transient storage failure, so such a session can still
+    land on these routes with ``renter`` cached. The old ``if submitter:``
+    turned the empty filter into "no filter at all" and the caller saw every
+    ticket; the ``is not None`` guard keeps the per-user boundary intact.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # Two tickets filed by different real renters; neither should surface
+        # to a caller that passes an empty submitter.
+        self.tickets_path.write_text(
+            '['
+            '{"id": "t1", "status": "open", "priority": "normal", '
+            '"submitted_by": "renter-a@example.com"},'
+            '{"id": "t2", "status": "resolved", "priority": "high", '
+            '"submitted_by": "renter-b@example.com"}'
+            ']',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_empty_submitter_filter_returns_no_rows(self):
+        # Before the fix, this returned both tickets — one caller with a
+        # corrupted session would see every other renter's tickets.
+        self.assertEqual(self.service.list_tickets(submitter=""), [])
+
+    def test_none_submitter_still_returns_all_rows(self):
+        # ``admin_ticket_list`` passes no submitter kwarg (defaulting to
+        # ``None``); that path MUST keep the full view.
+        tickets = self.service.list_tickets()
+        self.assertEqual({t["id"] for t in tickets}, {"t1", "t2"})
+
+
 class TicketNonStringFieldGuardTestCase(unittest.TestCase):
     """Regression: a dict-shaped ticket row whose fields hold non-string
     values (a corrupted / hand-edited tickets.json that put an integer under
