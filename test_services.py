@@ -1462,6 +1462,32 @@ class PropertyServiceTestCase(unittest.TestCase):
         # duplicate variants of the same amenity.
         self.assertEqual(payload["included_amenities"], ["Parking", "Washer/Dryer", "Garden", "Storage"])
 
+    def test_normalize_property_drops_non_string_amenity_items(self):
+        # Upstream can return a mixed amenity list for a partially-filled
+        # listing (``[null, "Pool", 42]``) — the old ``str(item).strip()``
+        # coerced each junk element to a literal ``"None"`` / ``"42"`` /
+        # ``"{'a': 1}"`` badge rendered on the public property page. Dropping
+        # non-strings here keeps the badge list limited to real amenity
+        # labels, matching the drop-rather-than-coerce pattern storage
+        # applies to malformed rows.
+        normalized = self.service.normalize_property(
+            {
+                "name": "Maple",
+                "included_amenities": [
+                    None,
+                    "Pool",
+                    42,
+                    True,
+                    {"nested": "junk"},
+                    "   ",
+                    "Parking",
+                ],
+            },
+            "prop-1",
+        )
+
+        self.assertEqual(normalized["included_amenities"], ["Pool", "Parking"])
+
     def test_set_listing_active_false_hides_and_logs(self):
         self.service.cache = [{"id": "prop-1"}]
         storage = Mock()
