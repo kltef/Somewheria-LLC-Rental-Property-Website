@@ -187,11 +187,28 @@ _AMENITY_CANONICAL_BY_ALIAS = {
 def canonicalize_amenities(items) -> list[str]:
     """Map amenity variants to their canonical label and drop duplicates,
     case-insensitively, preserving first-seen order. Unrecognized custom
-    amenities pass through trimmed but otherwise unchanged."""
+    amenities pass through trimmed but otherwise unchanged.
+
+    Non-string items are dropped rather than coerced through ``str(...)``.
+    Upstream occasionally returns a stray ``null`` / number / bool / nested
+    object inside an amenity list for a partially-filled listing, and the
+    old ``str(item).strip()`` turned those into literal ``"None"`` /
+    ``"True"`` / ``"42"`` / ``"{'a': 1}"`` badges on the public
+    ``/for-rent`` and ``/property/<uuid>`` pages — none of which match a
+    canonical alias, so the junk string rode through to the template
+    verbatim. Form POSTs and ``included_amenities`` writes already only
+    submit strings (``form.getlist(...)`` plus ``custom_amenities.split(",")``
+    both yield strings), so dropping the non-string case here has no
+    legitimate call-site impact. Mirrors the drop-rather-than-coerce
+    pattern ``get_hidden_listing_ids`` / ``get_pending_registrations``
+    already apply to malformed storage rows (PRs #152-#156).
+    """
     seen: set[str] = set()
     result: list[str] = []
     for item in items or []:
-        text = str(item).strip()
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
         if not text:
             continue
         canonical = _AMENITY_CANONICAL_BY_ALIAS.get(text.lower(), text)
