@@ -120,10 +120,25 @@ class AuthService:
         return merged
 
     def login_user(self, id_info: dict) -> dict:
-        user_email = id_info["email"].lower()
+        # Normalize the stored email: strip + lower on write so every
+        # downstream reader sees a canonical form. The old code stored
+        # ``id_info["email"]`` verbatim while computing ``role`` from the
+        # lowered copy — a subtle inconsistency that would surface the moment
+        # an id_token carried whitespace or non-canonical casing (a replayed
+        # token, a future non-Google IdP, a hand-written test harness). In
+        # that case ``_refresh_session_role`` reads ``user["email"]`` and
+        # passes it to ``get_user_role``, which only lowers; the whitespace
+        # survives the lookup, the role resolves to "guest", and the user is
+        # soft-locked out of every renter/admin page until they clear cookies
+        # — including ``/admin/status``, the one place an operator would reach
+        # for to diagnose it. Google's own id_tokens are already canonical, so
+        # in production this is a no-op; the fix is defensive against the
+        # non-Google paths and makes the login-time role resolution agree with
+        # the stored session value.
+        user_email = id_info["email"].strip().lower()
         user = {
             "id": id_info["sub"],
-            "email": id_info["email"],
+            "email": user_email,
             "name": id_info.get("name", ""),
             "picture": id_info.get("picture", ""),
             "given_name": id_info.get("given_name", ""),

@@ -1191,6 +1191,68 @@ class CoverageInfrastructureTestCase(unittest.TestCase):
         self.assertEqual(user["role"], "guest")
         self.assertEqual(user["email"], "user@example.com")
 
+    def test_auth_service_login_user_normalizes_email_casing(self):
+        # ``login_user`` normalizes the email on write — strip + lower — so
+        # downstream readers (``_refresh_session_role``'s
+        # ``user["email"]`` read, the ``/auth/status`` payload, logs, and
+        # templates) all see the same canonical form the role lookup used.
+        # Storing a mixed-case ``Alice@Example.COM`` verbatim used to leave
+        # ``session["user"]["email"]`` as that raw string while the role was
+        # computed from a lowered copy; a future ``_refresh_session_role``
+        # (which only lowers, never strips) still agreed, so the inconsistency
+        # was latent — but any direct ``user["email"] == "alice@example.com"``
+        # comparison downstream would spuriously fail.
+        app = Flask(__name__)
+        app.secret_key = "test"
+        storage = Mock()
+        storage.get_user_roles.return_value = {"alice@example.com": "renter"}
+        service = AuthService(
+            SimpleNamespace(
+                authorized_users=["alice@example.com"],
+                admin_users=[],
+                high_admin_users=[],
+            ),
+            storage,
+        )
+
+        with app.test_request_context("/"):
+            user = service.login_user(
+                {"sub": "123", "email": "Alice@Example.COM", "name": "Alice"}
+            )
+
+        self.assertEqual(user["email"], "alice@example.com")
+        self.assertEqual(user["role"], "renter")
+
+    def test_auth_service_login_user_normalizes_email_whitespace(self):
+        # Google's own id_tokens are canonical today, but a replayed token,
+        # a future non-Google IdP, or a hand-written test harness could ship
+        # an email claim with leading / trailing whitespace. The old code
+        # stored it verbatim; the subsequent ``_refresh_session_role`` passed
+        # that whitespace-padded value to ``get_user_role`` which only
+        # lowered — the lookup missed the real role, the session was pinned
+        # to ``guest``, and the user was soft-locked out of every
+        # renter/admin page. Normalizing on write closes that gap.
+        app = Flask(__name__)
+        app.secret_key = "test"
+        storage = Mock()
+        storage.get_user_roles.return_value = {}
+        service = AuthService(
+            SimpleNamespace(
+                authorized_users=[],
+                admin_users=["admin@ekbergproperties.com"],
+                high_admin_users=[],
+            ),
+            storage,
+        )
+
+        with app.test_request_context("/"):
+            user = service.login_user(
+                {"sub": "123", "email": "  admin@ekbergproperties.com  "}
+            )
+
+        self.assertEqual(user["email"], "admin@ekbergproperties.com")
+        self.assertEqual(user["role"], "admin")
+
     def test_auth_status_payload_returns_false_when_logged_out(self):
         app = Flask(__name__)
         with app.test_request_context("/"), patch("somewheria_app.services.auth.is_logged_in", return_value=False):
