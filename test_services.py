@@ -808,6 +808,41 @@ class FileStorageServiceTestCase(unittest.TestCase):
             },
         )
 
+    def test_get_user_roles_normalizes_mixed_case_email_keys(self):
+        # ``set_user_role`` lowercases on write, so new entries always key
+        # the file dict by a lowered email. But a legacy / hand-edited
+        # ``user_roles.json`` can still carry a mixed-case key like
+        # ``Alice@Example.com``. ``AuthService.get_user_role`` lowercases its
+        # lookup email and then checks ``email in user_roles``, so the
+        # stored mixed-case key never matched: Alice couldn't act as her
+        # stored role even though ``/admin/users`` showed her as having one
+        # (``all_user_roles`` lowercases on its own merge). Verify keys come
+        # back lowercased, and that mixed-case duplicates MERGE under the
+        # same lowered key (later entry wins) rather than letting the
+        # mixed-case row sit unreachable forever. Mirrors
+        # ``test_get_renter_profiles_normalizes_mixed_case_email_keys`` and
+        # ``test_get_renter_contracts_normalizes_mixed_case_email_keys``.
+        raw = {
+            "Alice@Example.com": "admin",
+            "alice@example.com": "renter",
+            "BOB@Example.com": "high_admin",
+            "revoked@example.com": "revoked",
+            # Non-string key/value entries still get dropped first, so the
+            # last-wins merge below never sees them as the surviving entry.
+            123: "admin",
+            "corrupt-value@example.com": {"role": "admin"},
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                "alice@example.com": "renter",
+                "bob@example.com": "high_admin",
+                "revoked@example.com": "revoked",
+            },
+        )
+
     def test_get_hidden_listing_ids_drops_non_string_and_empty_entries(self):
         # ``expected_type=list`` verifies the outer container but not each
         # entry. A hand-edited / corrupted ``hidden_listings.json`` can slip

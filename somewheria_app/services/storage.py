@@ -173,11 +173,25 @@ class FileStorageService:
         # on the non-string and take out the admin UI via the crash handler's
         # empty 503. Mirrors the isinstance guards PRs #146 / #147 / #148
         # added for pending registrations, tickets, and renter profiles.
-        return {
-            email: role
-            for email, role in raw.items()
-            if isinstance(email, str) and isinstance(role, str)
-        }
+        #
+        # Normalize email keys to lowercase. ``set_user_role`` already
+        # lowercases on write, so in normal operation this is a no-op — but a
+        # legacy / hand-edited file can carry a mixed-case key like
+        # ``Alice@Example.com`` that was never reachable: ``AuthService.
+        # get_user_role`` lowercases the lookup email and then checks ``email
+        # in user_roles``, so a stored mixed-case key never matched the
+        # lowered lookup. The legacy row sat in the file forever, still
+        # surfaced on ``/admin/users`` (via ``all_user_roles`` which lowers
+        # on its own merge), confusing admins who could see the role but
+        # couldn't act on it with that account. Later entries win per
+        # lowered key, mirroring PR #188's merge-not-clobber contract for
+        # ``get_renter_contracts`` and PR #189's for ``get_renter_profiles``.
+        cleaned: dict = {}
+        for email, role in raw.items():
+            if not isinstance(email, str) or not isinstance(role, str):
+                continue
+            cleaned[email.lower()] = role
+        return cleaned
 
     def set_user_role(self, email: str, role: str) -> None:
         with self.file_lock:

@@ -112,6 +112,45 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
             self.storage.get_user_roles(), {"keep@example.com": "admin"}
         )
 
+    def test_get_user_roles_normalizes_mixed_case_email_keys(self):
+        # ``set_user_role`` / ``_replace_user_roles`` lowercase on write, but
+        # the ``email TEXT PRIMARY KEY`` schema uses the default BINARY
+        # collation, so a raw-SQL insert can co-habit ``Alice@Example.com``
+        # alongside ``alice@example.com`` without conflict.
+        # ``AuthService.get_user_role`` lowercases its lookup email and then
+        # checks ``email in user_roles`` — a stored mixed-case key was never
+        # reachable, even though ``/admin/users`` kept surfacing the row (via
+        # ``all_user_roles``'s own lower-on-read merge). Verify keys come back
+        # lowercased, and that mixed-case duplicates MERGE under the same
+        # lowered key (later entry wins) rather than remaining as dead
+        # unreachable rows. Mirrors the file-backend normalization added in
+        # this change.
+        self.storage.set_user_role("alice@example.com", "renter")
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("Alice@Example.com", "admin"),
+            )
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("BOB@Example.com", "high_admin"),
+            )
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("REVOKED@Example.com", "revoked"),
+            )
+        loaded = self.storage.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                # alice: both lowered + mixed-case present; later-written
+                # row (admin via raw INSERT) wins per lowered key.
+                "alice@example.com": "admin",
+                "bob@example.com": "high_admin",
+                "revoked@example.com": "revoked",
+            },
+        )
+
 
 class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
     def test_add_and_get(self):
