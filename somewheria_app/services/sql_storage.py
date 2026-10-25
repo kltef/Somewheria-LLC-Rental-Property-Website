@@ -234,11 +234,27 @@ class SqlStorageService:
         # would otherwise AttributeError / TypeError on the non-string and
         # take out the admin UI via the crash handler's empty 503. Matches
         # the isinstance guard PR #152 added on the file backend.
-        return {
-            row["email"]: row["role"]
-            for row in rows
-            if isinstance(row["email"], str) and isinstance(row["role"], str)
-        }
+        #
+        # Normalize email keys to lowercase. ``set_user_role`` /
+        # ``_replace_user_roles`` already lowercase on write, so in normal
+        # operation this is a no-op — but the ``email TEXT PRIMARY KEY``
+        # schema uses the default BINARY collation, so a raw-SQL insert can
+        # co-habit ``Alice@Example.com`` alongside ``alice@example.com``
+        # without conflict. ``AuthService.get_user_role`` then lowercases its
+        # lookup key and does ``email in user_roles`` — a stored mixed-case
+        # key is never reachable, yet ``all_user_roles`` still surfaces the
+        # row (its own merge lowercases on read), confusing admins who see
+        # the role but can't log in as that user. Later entries win per
+        # lowered key, mirroring PR #188's merge-not-clobber contract on
+        # ``get_renter_contracts`` and PR #189's on ``get_renter_profiles``.
+        cleaned: dict = {}
+        for row in rows:
+            email = row["email"]
+            role = row["role"]
+            if not isinstance(email, str) or not isinstance(role, str):
+                continue
+            cleaned[email.lower()] = role
+        return cleaned
 
     def set_user_role(self, email: str, role: str) -> None:
         email = (email or "").lower()
