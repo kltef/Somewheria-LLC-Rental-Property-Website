@@ -322,6 +322,21 @@ def create_app() -> Flask:
             fingerprint=fingerprint,
         )
 
+        # Bump the dashboard's ``errors_last_24h`` counter so an unhandled
+        # exception shows up on /admin/dashboard the same way a deliberate
+        # ``log_and_notify_error`` call does. Without this a sustained crash
+        # on a route — the single most important thing to see on the
+        # dashboard — stays invisible because the 10-min per-fingerprint
+        # cooldown suppresses repeat emails after the first alert, and the
+        # dashboard tile that reddens on ``> 0`` keeps showing a confident
+        # "0" while the site is actively 503ing. Wrapped in try/except so
+        # a bug in the in-memory counter (there isn't one today, but this
+        # is the crash path) can never re-raise and defeat the bare 503.
+        try:
+            analytics.record_error()
+        except Exception:
+            pass
+
         try:
             app.logger.exception("Unhandled exception serving %s %s", method, path)
         except Exception:
