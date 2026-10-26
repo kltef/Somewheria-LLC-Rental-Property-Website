@@ -735,6 +735,39 @@ class FileStorageServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(loaded["baz@example.com"], {"name": "Baz"})
 
+    def test_get_renter_profiles_drops_empty_string_email_key(self):
+        # Specific crash-adjacent scenario, not just hand-edited junk:
+        # ``renter_profile`` POST looks the stored profile up by
+        # ``current_user_email()``, which returns ``""`` for a legacy /
+        # hand-written session whose ``user["email"]`` is a truthy non-string
+        # (an int, a bool, a dict). ``_refresh_session_role`` (PR #175) keeps
+        # the cached role on a storage failure, so such a session with a
+        # cached ``renter`` role can still land in the POST handler and
+        # persist ``profiles[""] = {name, contact, email_status_updates,
+        # rcs_status_updates}``. On the next read, ANY other session whose
+        # email also resolves to ``""`` would see that record as their own —
+        # a cross-session data leak of profile fields. Dropping the empty
+        # key on read makes it unreachable through legitimate lookups, and
+        # the next legitimate ``save_renter_profiles`` call (which doesn't
+        # include a ``""`` entry) cleans it off disk. Matches the
+        # drop-empty-string pattern ``get_hidden_listing_ids`` already
+        # applies.
+        raw = {
+            "renter@example.com": {"name": "Renter R"},
+            "": {"name": "leaked"},
+            "   ": {"name": "whitespace-only"},
+            "renter2@example.com": {"name": "Renter Two"},
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_profiles()
+        self.assertEqual(
+            loaded,
+            {
+                "renter@example.com": {"name": "Renter R"},
+                "renter2@example.com": {"name": "Renter Two"},
+            },
+        )
+
     def test_get_renter_profiles_does_not_mutate_input_rows(self):
         # The merge path writes a fresh dict into ``cleaned`` so that
         # subsequent calls (or callers that still hold a reference to the

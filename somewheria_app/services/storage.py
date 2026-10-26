@@ -253,11 +253,27 @@ class FileStorageService:
         # shared key) rather than letting the second entry clobber the first,
         # mirroring PR #188's merge-not-clobber contract for
         # ``get_renter_contracts``.
+        #
+        # Drop entries whose key normalizes to the empty string. ``renter_profile``
+        # POST looks the stored profile up by ``current_user_email()``, which
+        # returns ``""`` for a legacy / hand-written session whose ``user["email"]``
+        # is a non-string value (an int, a bool, a dict). ``_refresh_session_role``
+        # (PR #175) keeps the cached role on a storage failure, so such a session
+        # with a cached ``renter`` role can still reach the POST and persist
+        # ``profiles[""] = {...}`` — and the next broken session hitting the
+        # same route would read that same ``""``-keyed profile as their own,
+        # leaking name / contact / notification preferences across callers.
+        # Dropping ``""`` on read makes the ``""`` entry unreachable through
+        # legitimate lookups, and the next legitimate save (which doesn't
+        # include a ``""`` key) cleans it off disk. Matches the drop-empty-string
+        # pattern ``get_hidden_listing_ids`` already applies.
         cleaned: dict = {}
         for email, profile in raw.items():
             if not isinstance(email, str) or not isinstance(profile, dict):
                 continue
-            normalized = email.lower()
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
             if normalized in cleaned:
                 cleaned[normalized] = {**cleaned[normalized], **profile}
             else:
