@@ -339,6 +339,31 @@ class RenterProfilesTestCase(SqlStorageBaseTestCase):
         )
         self.assertEqual(out["baz@example.com"], {"name": "Baz"})
 
+    def test_get_renter_profiles_drops_empty_string_email_key(self):
+        # Mirrors the file-backend test. A ``renter_profile`` POST on a
+        # broken session (``current_user_email()`` returns ``""`` when the
+        # stored session email is a non-string, and PR #175 keeps the cached
+        # ``renter`` role on a storage failure so such a session can still
+        # reach the POST) can persist ``profiles[""] = {...}``, and the next
+        # broken session would read that same ``""``-keyed profile as their
+        # own. The read-side filter drops the row so it's unreachable through
+        # legitimate lookups; the next ``save_renter_profiles`` call cleans
+        # the table (``DELETE FROM renter_profiles`` + fresh inserts).
+        self.storage.save_renter_profiles(
+            {"keep@example.com": {"name": "Renter R"}}
+        )
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("", '{"name": "leaked"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_profiles(email, profile) VALUES (?, ?)",
+                ("   ", '{"name": "whitespace-only"}'),
+            )
+        profiles = self.storage.get_renter_profiles()
+        self.assertEqual(profiles, {"keep@example.com": {"name": "Renter R"}})
+
     def test_get_renter_profiles_drops_malformed_json_payloads(self):
         # A ``profile`` column containing text that isn't valid JSON at all
         # (a truncated INSERT, on-disk corruption) must not raise

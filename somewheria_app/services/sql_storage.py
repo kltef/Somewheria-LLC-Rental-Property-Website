@@ -325,6 +325,18 @@ class SqlStorageService:
         # wins per shared key) rather than letting the later row clobber the
         # earlier fields outright. Mirrors the file-backend guard and PR
         # #188's merge-not-clobber contract for ``get_renter_contracts``.
+        #
+        # Drop rows whose email key normalizes to the empty string. See the
+        # file-backend counterpart for the full scenario: ``renter_profile``
+        # POST on a broken session (``current_user_email()`` returns ``""``
+        # when the stored session email is a non-string, and PR #175 keeps
+        # the cached ``renter`` role on a storage failure so such a session
+        # can still reach the POST) can persist ``profiles[""] = {...}``, and
+        # the next broken session reads it as their own — leaking name /
+        # contact / notification preferences across callers. Dropping ``""``
+        # on read makes the row unreachable through legitimate lookups, and
+        # the next legitimate ``save_renter_profiles`` call (``DELETE FROM
+        # renter_profiles`` + fresh inserts) cleans it off the table.
         out: dict = {}
         for row in rows:
             email = row["email"]
@@ -333,7 +345,9 @@ class SqlStorageService:
             profile = self._safe_loads(row["profile"], source="renter_profiles")
             if not isinstance(profile, dict):
                 continue
-            normalized = email.lower()
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
             if normalized in out:
                 out[normalized] = {**out[normalized], **profile}
             else:
