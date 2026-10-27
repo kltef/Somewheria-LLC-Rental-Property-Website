@@ -387,14 +387,26 @@ class SqlStorageService:
         # that the admin UI's lowered-email lookup then misses, failing
         # every delete / renter-side lookup with "Contract not found".
         # Mirrors the file-backend guard; see its docstring.
+        #
+        # Also ``.strip()`` the normalized key and drop entries that
+        # normalize to the empty string, matching the file-backend
+        # treatment and the equivalent guards on ``get_renter_profiles``:
+        # a whitespace-wrapped email in a raw-SQL insert is unreachable
+        # from the admin UI (the lookups strip+lower), and a ``""`` key
+        # would otherwise be reachable by any broken session whose
+        # ``current_user_email()`` resolves to ``""`` — leaking one such
+        # session's contracts to the next.
         out: dict[str, list] = {}
         for row in rows:
             email = row["email"]
             if not isinstance(email, str):
                 continue
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
             contract = self._safe_loads(row["contract"], source="renter_contracts")
             if isinstance(contract, dict):
-                out.setdefault(email.lower(), []).append(contract)
+                out.setdefault(normalized, []).append(contract)
         return out
 
     def save_renter_contracts(self, contracts: dict) -> None:
