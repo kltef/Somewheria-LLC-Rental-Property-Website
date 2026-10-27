@@ -393,11 +393,30 @@ class FileStorageService:
         # legacy / hand-edited file, since every write path already
         # lowercases — are merged under the same lowercased key rather than
         # letting the second entry clobber the first.
+        #
+        # ``.strip()`` on the normalized key AND drop empty normalized keys,
+        # mirroring the same treatment ``get_renter_profiles`` applies. A
+        # hand-edited row keyed as ``" alice@example.com "`` is otherwise
+        # unreachable: ``admin_contracts`` POST and ``_find_contract_for_email``
+        # look contracts up with a stripped+lowered email, so the whitespace
+        # key never matches and the delete fails "Contract not found" while
+        # the row sits in the file as dead weight. The empty-string key
+        # closes the same cross-session leak path PR #198 fixed for
+        # profiles: ``_backfill_contract_ids`` reads/writes
+        # ``all_contracts[email]`` with ``email = current_user_email()``,
+        # which returns ``""`` for a broken session whose stored
+        # ``user["email"]`` is a non-string (``_refresh_session_role`` keeps
+        # a cached ``renter`` role on a storage failure, so such a session
+        # can still reach the dashboard). Dropping ``""`` on read makes the
+        # row unreachable and the next legitimate save (which doesn't carry
+        # the key) cleans it off disk.
         cleaned: dict = {}
         for email, contracts in raw.items():
             if not isinstance(email, str) or not isinstance(contracts, list):
                 continue
-            normalized = email.lower()
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
             valid = [item for item in contracts if isinstance(item, dict)]
             if normalized in cleaned:
                 cleaned[normalized].extend(valid)

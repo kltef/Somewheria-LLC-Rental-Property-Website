@@ -810,6 +810,59 @@ class FileStorageServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(loaded["baz@example.com"], [{"id": "c4"}])
 
+    def test_get_renter_contracts_drops_empty_string_email_key(self):
+        # Mirrors ``test_get_renter_profiles_drops_empty_string_email_key``:
+        # a hand-edited row keyed as ``""`` (or whitespace-only) is
+        # otherwise reachable by any broken session whose
+        # ``current_user_email()`` resolves to ``""`` — leaking one
+        # session's contracts into the next. ``_refresh_session_role`` (PR
+        # #175) keeps the cached ``renter`` role on a storage failure, so
+        # such a session can still land on ``renter_dashboard`` /
+        # ``_backfill_contract_ids`` and (if any contract needs an id
+        # backfilled) write ``all_contracts[""] = …`` to disk. Dropping
+        # the empty key on read makes those entries unreachable through
+        # legitimate lookups and lets the next legitimate save (which
+        # doesn't carry a ``""`` key) clean them off disk.
+        raw = {
+            "renter@example.com": [{"id": "c1"}],
+            "": [{"id": "leaked"}],
+            "   ": [{"id": "whitespace-only"}],
+            "renter2@example.com": [{"id": "c2"}],
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_contracts()
+        self.assertEqual(
+            loaded,
+            {
+                "renter@example.com": [{"id": "c1"}],
+                "renter2@example.com": [{"id": "c2"}],
+            },
+        )
+
+    def test_get_renter_contracts_strips_whitespace_from_email_keys(self):
+        # Mirrors the ``.strip()`` normalization ``get_renter_profiles``
+        # applies: ``admin_contracts`` POST and ``_find_contract_for_email``
+        # look contracts up with a stripped+lowered email, so a hand-edited
+        # row keyed as ``" Alice@Example.com "`` is otherwise unreachable —
+        # the admin delete says "Contract not found" and the renter sees no
+        # contracts of their own. Rows that differ only in whitespace/case
+        # merge under the same stripped+lowered key rather than letting the
+        # later row clobber the earlier contracts (same merge-not-clobber
+        # contract the mixed-case test enforces).
+        raw = {
+            " alice@example.com ": [{"id": "c1"}],
+            "ALICE@example.com": [{"id": "c2"}],
+            "\tbob@example.com\n": [{"id": "c3"}],
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_renter_contracts()
+        self.assertEqual(set(loaded), {"alice@example.com", "bob@example.com"})
+        self.assertEqual(
+            {c["id"] for c in loaded["alice@example.com"]},
+            {"c1", "c2"},
+        )
+        self.assertEqual(loaded["bob@example.com"], [{"id": "c3"}])
+
     def test_get_user_roles_drops_non_string_keys_and_values(self):
         # ``expected_type=dict`` on load_json_file only verifies the top-level
         # container. A corrupted / hand-edited ``user_roles.json`` can still

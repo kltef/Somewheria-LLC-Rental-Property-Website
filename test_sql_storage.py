@@ -496,6 +496,72 @@ class RenterContractsTestCase(SqlStorageBaseTestCase):
         )
         self.assertEqual(out["baz@example.com"], [{"id": "c4"}])
 
+    def test_get_renter_contracts_drops_empty_string_email_key(self):
+        # Mirrors the file-backend's drop-empty-string guard: a raw-SQL
+        # row keyed as ``""`` (or whitespace-only) is otherwise reachable
+        # by any broken session whose ``current_user_email()`` resolves
+        # to ``""`` — leaking one session's contracts to the next.
+        # ``_backfill_contract_ids`` writes ``all_contracts[email] = …``
+        # when ``email`` is ``""`` and a contract id is backfilled, so
+        # this path is reachable in production from a broken-session
+        # dashboard hit; dropping the empty key on read makes it
+        # unreachable through legitimate lookups and lets the next
+        # legitimate save (which doesn't carry the key) clean it off.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("renter@example.com", 0, '{"id": "c1"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("", 0, '{"id": "leaked"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("   ", 0, '{"id": "whitespace-only"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("renter2@example.com", 0, '{"id": "c2"}'),
+            )
+        out = self.storage.get_renter_contracts()
+        self.assertEqual(
+            out,
+            {
+                "renter@example.com": [{"id": "c1"}],
+                "renter2@example.com": [{"id": "c2"}],
+            },
+        )
+
+    def test_get_renter_contracts_strips_whitespace_from_email_keys(self):
+        # Mirrors the file-backend's ``.strip()`` normalization: a
+        # raw-SQL / pre-normalization row keyed as ``" Alice@Example.com "``
+        # (with whitespace) is otherwise unreachable from the admin UI
+        # (its lookups strip+lower before the dict comparison), so the
+        # admin delete fails "Contract not found" while the row sits
+        # in the table forever. Rows differing only in whitespace/case
+        # merge under the same stripped+lowered key.
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                (" alice@example.com ", 0, '{"id": "c1"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("ALICE@example.com", 0, '{"id": "c2"}'),
+            )
+            conn.execute(
+                "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                ("\tbob@example.com\n", 0, '{"id": "c3"}'),
+            )
+        out = self.storage.get_renter_contracts()
+        self.assertEqual(set(out), {"alice@example.com", "bob@example.com"})
+        self.assertEqual(
+            {c["id"] for c in out["alice@example.com"]},
+            {"c1", "c2"},
+        )
+        self.assertEqual(out["bob@example.com"], [{"id": "c3"}])
+
 
 class TicketsTestCase(SqlStorageBaseTestCase):
     def test_save_and_load_via_path_shim(self):
