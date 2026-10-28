@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 
 
@@ -55,11 +56,29 @@ class JsonFormatter(logging.Formatter):
 
     Consumed by the /logs viewer (notifications.read_logs) and, once logs are
     centralized, by tools like CloudWatch Logs Insights or jq.
+
+    Timestamps emit in UTC with a ``Z`` suffix, matching the wire format every
+    other on-disk timestamp uses (``utcnow_iso()`` for the JSONL change log,
+    tickets' ``created_at`` / ``updated_at``, contracts' ``created_at``, and
+    lead captures). ``logging.Formatter.formatTime`` otherwise defaults to
+    server-local time, so an operator correlating the ``/logs`` viewer
+    against ``site_changes.log`` or a ticket's ``created_at`` sees entries
+    drift by the server's local offset — and across a DST transition by a
+    shifting offset, double-stamping or missing an hour. The ``Z`` suffix
+    is also what the first-7-char ``YYYY-MM`` slice in
+    ``AnalyticsTracker.recent_listing_activity`` relies on upstream, so
+    a future "logs by month" bucket can reuse the same pattern.
     """
+
+    # Switch the base class's internal strftime to UTC. The timestamps are
+    # written to the shared ``application.log`` file read by the /logs viewer;
+    # keeping them aligned with ``utcnow_iso()`` means operators don't have
+    # to mentally offset by the server's local-timezone delta.
+    converter = time.gmtime
 
     def format(self, record):
         entry = {
-            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%SZ"),
             "level": record.levelname,
             "component": getattr(record, "component", "app"),
             "request_id": getattr(record, "request_id", "-"),

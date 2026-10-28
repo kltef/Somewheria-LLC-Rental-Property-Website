@@ -3440,6 +3440,63 @@ class NotificationsChangeLogTimestampTestCase(unittest.TestCase):
         self.assertRegex(entry["timestamp"][:7], r"^\d{4}-\d{2}$")
 
 
+class JsonFormatterUtcTimestampTestCase(unittest.TestCase):
+    """Lock the application.log timestamp wire format to UTC with ``Z`` suffix.
+
+    The ``/logs`` viewer and every other on-disk timestamp (change log,
+    tickets, contracts, lead captures) use UTC via ``utcnow_iso()``. The
+    JSON log formatter defaulted to ``logging.Formatter.formatTime``, which
+    emits server-local time — correlating the two across time zones (or a
+    DST transition) silently misaligned entries. The formatter now sets
+    ``converter = time.gmtime`` and suffixes ``Z``.
+    """
+
+    def test_json_formatter_emits_utc_z_timestamp(self):
+        import json as _json
+        import logging as _logging
+        import re as _re
+        import time as _time
+
+        from somewheria_app.services.console import JsonFormatter
+
+        formatter = JsonFormatter()
+        # Pick a known epoch value whose UTC and local renderings diverge
+        # unless ``converter`` is explicitly ``time.gmtime``. 2026-07-01
+        # 00:00:00 UTC — any server at a non-zero offset would otherwise
+        # render a different hour/day.
+        fixed_epoch = 1782864000  # 2026-07-01T00:00:00Z (calendar.timegm)
+        record = _logging.LogRecord(
+            name="somewheria.console",
+            level=_logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg="hello",
+            args=None,
+            exc_info=None,
+        )
+        record.created = fixed_epoch
+        record.msecs = 0.0
+        record.component = "test"
+        record.request_id = "-"
+
+        line = formatter.format(record)
+        entry = _json.loads(line)
+        self.assertEqual(entry["timestamp"], "2026-07-01T00:00:00Z")
+        self.assertTrue(
+            entry["timestamp"].endswith("Z"),
+            f"timestamp not Z-suffixed UTC: {entry['timestamp']!r}",
+        )
+        # Exact shape: YYYY-MM-DDTHH:MM:SSZ, no microseconds.
+        self.assertRegex(
+            entry["timestamp"], _re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        )
+        # Independent sanity check against time.gmtime so the test fails if a
+        # future refactor silently reverts to local time on a UTC build box.
+        gm = _time.gmtime(fixed_epoch)
+        expected = _time.strftime("%Y-%m-%dT%H:%M:%SZ", gm)
+        self.assertEqual(entry["timestamp"], expected)
+
+
 class EmailValidationTestCase(unittest.TestCase):
     def test_accepts_typical_addresses(self):
         for value in (
