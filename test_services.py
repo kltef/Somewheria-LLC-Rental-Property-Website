@@ -1022,6 +1022,66 @@ class FileStorageServiceTestCase(unittest.TestCase):
         self.assertFalse(removed)
         save_json_mock.assert_not_called()
 
+    def test_save_json_file_returns_true_on_successful_write(self):
+        # The bool contract added alongside the silent-save fix: callers that
+        # need to know whether the payload is durably on disk (admin
+        # notifications, role revocation) rely on True meaning "it's there"
+        # and False meaning "the write failed, don't lie to the user".
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        path = Path(tmpdir.name) / "payload.json"
+        self.assertTrue(self.service.save_json_file(path, {"ok": True}))
+        self.assertTrue(path.exists())
+
+    def test_save_json_file_returns_false_on_write_failure(self):
+        # Previously ``save_json_file`` returned None and swallowed the
+        # exception, so ENOSPC / EACCES / fsync errors silently blessed a
+        # failed write as a success. Returning False lets callers surface the
+        # failure instead of telling the user "we saved it" when nothing is
+        # on disk.
+        path_mock = Mock()
+        path_mock.parent.mkdir.side_effect = PermissionError("read-only fs")
+        with patch.object(self.service.logger, "error") as error_mock:
+            self.assertFalse(self.service.save_json_file(path_mock, {"ok": True}))
+        error_mock.assert_called_once()
+
+    def test_add_pending_registration_returns_false_when_save_fails(self):
+        # The silent-save fix made this a reachable "no" instead of a lie:
+        # a disk-full / permission failure on the registrations file now
+        # surfaces as a False return so the ``admin_register`` POST can skip
+        # the "New Registration Request" admin email for a row the write
+        # path lost. Mirrors the duplicate-email False already returned here.
+        with patch.object(self.service, "get_pending_registrations", return_value=[]), patch.object(
+            self.service, "save_json_file", return_value=False
+        ):
+            self.assertFalse(
+                self.service.add_pending_registration({"email": "new@example.com"})
+            )
+
+    def test_add_pending_lead_capture_returns_false_when_save_fails(self):
+        # Same silent-save fix as pending registrations: a failed write on
+        # the lead-capture file now returns False so the caller can skip
+        # notifying the admin about a lead that never reached disk.
+        with patch.object(self.service, "get_pending_lead_captures", return_value=[]), patch.object(
+            self.service, "save_json_file", return_value=False
+        ):
+            self.assertFalse(
+                self.service.add_pending_lead_capture({"email": "new@example.com"})
+            )
+
+    def test_delete_user_role_returns_false_when_save_fails(self):
+        # Role revocation is a security-adjacent op: when the tombstone
+        # write fails, saying "User role revoked" leaves an ex-admin's
+        # env-var access intact after the next restart, which is exactly
+        # the gap the tombstone exists to close. False — misleading as
+        # "User not found" in the admin UI, but strictly better than a
+        # phantom success — is the surfaced-failure contract the silent-save
+        # fix introduced.
+        with patch.object(
+            self.service, "get_user_roles", return_value={"admin@example.com": "admin"}
+        ), patch.object(self.service, "save_json_file", return_value=False):
+            self.assertFalse(self.service.delete_user_role("admin@example.com"))
+
     def test_save_renter_profiles_delegates_to_save_json_file(self):
         profiles = {"renter@example.com": {"name": "Jamie"}}
         with patch.object(self.service, "save_json_file") as save_json_mock:
