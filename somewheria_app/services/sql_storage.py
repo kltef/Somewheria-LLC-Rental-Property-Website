@@ -129,11 +129,15 @@ class SqlStorageService:
             self.logger.error("Failed to load %s from sqlite: %s", path, exc)
         return default
 
-    def save_json_file(self, path, data) -> None:
+    def save_json_file(self, path, data) -> bool:
+        # API parity with FileStorageService.save_json_file: True on a
+        # durable write, False on an unknown path or a sqlite failure. The
+        # file-backend returning None here while sqlite also returned None
+        # masked the same silent-save bug on both backends.
         key = self._path_key(path)
         if not key:
             self.logger.warning("Unknown storage path %s; ignoring write", path)
-            return
+            return False
         try:
             if key == "tickets":
                 self._save_tickets(data)
@@ -149,8 +153,10 @@ class SqlStorageService:
                 self._replace_pending_lead_captures(data)
             elif key == "hidden_listings":
                 self._replace_hidden_listings(data)
+            return True
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to save %s to sqlite: %s", path, exc)
+            return False
 
     # ----------------------------------------------------- pending_registrations
 

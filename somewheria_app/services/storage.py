@@ -54,7 +54,22 @@ class FileStorageService:
             self.logger.error("Failed to load %s: %s", path, exc)
         return default
 
-    def save_json_file(self, path, data) -> None:
+    def save_json_file(self, path, data) -> bool:
+        # Returns True when the payload is durably on disk, False when the
+        # write failed (ENOSPC / EACCES / fsync error / a crash inside
+        # os.replace). Previously the function returned ``None`` and
+        # swallowed every exception, so a disk-full event lost the write
+        # silently while every caller — ``add_pending_registration``
+        # returning ``True``, ``delete_user_role`` tombstoning a role,
+        # ``TicketService._save`` persisting a new ticket — kept behaving as
+        # if the save had succeeded: the admin inbox got the "new
+        # registration" email, the submitter saw the confirmation page, the
+        # revoked ex-admin was told their access was gone, but nothing was
+        # on disk and the next process restart served the pre-write state.
+        # Returning a bool lets callers that care (admin notifications,
+        # role-revocation UI) surface the failure instead of lying to the
+        # user. Sibling ``save_binary_file`` already returns a bool with
+        # the same contract.
         try:
             with self.file_lock:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,8 +88,10 @@ class FileStorageService:
                     except OSError:
                         pass
                     raise
+            return True
         except Exception as exc:
             self.logger.error("Failed to save %s: %s", path, exc)
+            return False
 
     @staticmethod
     def _has_valid_email_field(item: dict) -> bool:
@@ -140,8 +157,15 @@ class FileStorageService:
             ):
                 return False
             registrations.append(registration)
-            self.save_json_file(self.config.registration_file, registrations)
-            return True
+            # Propagate the save result instead of blindly returning True.
+            # When the underlying write fails (ENOSPC, EACCES, fsync error),
+            # the in-memory list carries the new row but nothing is on disk;
+            # the ``admin_register`` POST uses this return value to decide
+            # whether to fire the "New Registration Request" admin email, and
+            # emailing an admin about a request that was lost before it hit
+            # the pending-registrations file is exactly the lie the bool
+            # contract on ``save_json_file`` was added to prevent.
+            return self.save_json_file(self.config.registration_file, registrations)
 
     def remove_pending_registration(self, email: str) -> None:
         target = (email or "").lower()
@@ -225,8 +249,17 @@ class FileStorageService:
             # so that env-var fallbacks in AuthService.get_user_role cannot
             # silently restore a deleted user's access on their next login.
             roles[email] = "revoked"
-            self.save_json_file(self.config.user_roles_file, roles)
-        return True
+            # Propagate the save result instead of blindly returning True.
+            # Role revocation is a security-adjacent operation: telling the
+            # admin "User role revoked" when the tombstone never reached disk
+            # leaves an ex-admin's env-var role still live after the next
+            # restart, which is precisely the gap this tombstone exists to
+            # close. Returning False on a save failure makes the admin UI
+            # fall through to "User not found" — misleading on its own, but
+            # strictly better than lying about a revocation that never
+            # happened, and the error is already logged in ``save_json_file``
+            # for post-mortem triage.
+            return self.save_json_file(self.config.user_roles_file, roles)
 
     def get_renter_profiles(self) -> dict:
         raw = self.load_json_file(self.config.renter_profile_file, {}, expected_type=dict)
@@ -321,8 +354,11 @@ class FileStorageService:
             if any((item.get("email") or "").lower() == target_email for item in leads):
                 return False
             leads.append(lead)
-            self.save_json_file(self.config.lead_capture_file, leads)
-            return True
+            # See ``add_pending_registration``: propagate the save result so
+            # a disk-full / permission failure can't trick the caller into
+            # firing the "new lead" admin email for a row that never
+            # persisted.
+            return self.save_json_file(self.config.lead_capture_file, leads)
 
     def remove_pending_lead_capture(self, email: str) -> None:
         target = (email or "").lower()
