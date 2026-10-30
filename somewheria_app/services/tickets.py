@@ -125,8 +125,20 @@ class TicketService:
         value = ticket.get(key)
         return value if isinstance(value, str) else ""
 
-    def _save(self, tickets: list[dict]) -> None:
-        self.storage.save_json_file(self.config.tickets_file, tickets)
+    def _save(self, tickets: list[dict]) -> bool:
+        # Propagate the ``save_json_file`` bool so callers can distinguish a
+        # durable write from a silent failure (ENOSPC / EACCES / fsync error
+        # on the file backend; a sqlite transaction error on the SQL backend).
+        # Discarding the return — the pre-#201 shape — let ``create_ticket``
+        # email the admin inbox and the submitter their "we received your
+        # ticket" confirmation for a row that never reached disk; the next
+        # process restart would then serve a ticket list that didn't include
+        # the one the submitter was told was filed. Mirrors the surfaced-
+        # failure contract PRs #171 (add_pending_registration) / #172
+        # (add_pending_lead_capture) / #175 (delete_user_role) applied to
+        # the other write paths that fan out notification side effects after
+        # the save.
+        return self.storage.save_json_file(self.config.tickets_file, tickets)
 
     # ---------------------------------------------------------------- query
 
@@ -263,10 +275,25 @@ class TicketService:
         # ``create_ticket`` racing this one cannot load the same pre-append
         # list, then save back over our just-saved row — a plain load/save
         # pair on the file backend silently loses one ticket per collision.
+        #
+        # Surface a failed save as a ValueError BEFORE firing the admin /
+        # submitter notification emails. ``_save`` now returns False on a
+        # silent write failure (ENOSPC / EACCES / fsync error on the file
+        # backend; a transaction error on the SQL backend); without this
+        # check the function would still return ``ticket`` and the caller
+        # would email the submitter "we received your repair ticket" with a
+        # reference id that nobody can ever look up — the same lie the
+        # ``save_json_file`` bool contract (PR #201) was added to eliminate
+        # at the storage boundary. ``ticket_new_submit`` already catches
+        # ValueError and re-renders the form with the error, so a disk-full
+        # event now tells the user to retry instead of pretending it worked.
         with self.storage.atomic():
             tickets = self._load()
             tickets.append(ticket)
-            self._save(tickets)
+            if not self._save(tickets):
+                raise ValueError(
+                    "Could not save your ticket right now. Please try again."
+                )
 
         # Notify the internal admin inbox. Dispatched off the request thread
         # so a slow/unreachable SMTP relay can't stall the caller for up to

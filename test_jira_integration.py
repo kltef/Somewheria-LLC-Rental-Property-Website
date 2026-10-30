@@ -153,6 +153,13 @@ class TicketServiceJiraWiringTestCase(unittest.TestCase):
         )
         def _save(path, data):
             Path(path).write_text(json.dumps(data), encoding="utf-8")
+            # ``FileStorageService.save_json_file`` returns ``True`` on a
+            # successful durable write (and ``False`` on a silent failure).
+            # ``TicketService._save`` now propagates that bool, so returning
+            # ``None`` here (the default when a side_effect function has no
+            # explicit return) would be read by ``create_ticket`` as a
+            # failed save and raise ValueError.
+            return True
         self.storage.save_json_file.side_effect = _save
         self.notifications = MagicMock()
         self.notifications.send_email.return_value = True

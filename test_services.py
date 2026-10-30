@@ -3898,5 +3898,90 @@ class TicketNonStringFieldGuardTestCase(unittest.TestCase):
         self.notifications.send_email.assert_not_called()
 
 
+class TicketCreateSurfacesSaveFailureTestCase(unittest.TestCase):
+    """Regression: a silent ``_save`` failure must not reach the submitter as
+    a "we received your repair ticket" confirmation.
+
+    ``FileStorageService.save_json_file`` returns ``False`` on a durable-write
+    failure (ENOSPC / EACCES / fsync error). Before this guard ``_save``
+    discarded that bool, so ``create_ticket`` returned the in-memory ticket
+    object and the route fired the admin notification plus the submitter's
+    confirmation email as if the row had been persisted — a reference id the
+    next process restart would serve a ticket list without. Mirrors the
+    surfaced-failure contract PRs #171 / #172 / #175 / #201 applied at the
+    other write boundaries.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = SimpleNamespace(tickets_file=Path(self.tmp.name) / "tickets.json")
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def _payload(self):
+        return {
+            "title": "Leaky faucet",
+            "description": "Kitchen sink drips overnight.",
+            "category": "plumbing",
+            "priority": "normal",
+            "submitter_name": "Renter",
+            "contact": "",
+            "property_id": "",
+            "property_name": "",
+            "email_updates": False,
+        }
+
+    def test_create_ticket_raises_value_error_when_save_fails(self):
+        with patch.object(self.storage, "save_json_file", return_value=False):
+            with self.assertRaises(ValueError):
+                self.service.create_ticket(self._payload(), "renter@example.com")
+        # No admin notification, no submitter confirmation, no change-log
+        # entry for a ticket that never persisted.
+        self.notifications.send_email.assert_not_called()
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_create_ticket_succeeds_when_save_returns_true(self):
+        # Baseline: the ValueError is only raised on a save FAILURE. A normal
+        # save still returns the new ticket dict and fires the admin
+        # notification + change-log entry, matching the pre-fix happy path.
+        ticket = self.service.create_ticket(self._payload(), "renter@example.com")
+        self.assertIn("id", ticket)
+        self.assertEqual(ticket["title"], "Leaky faucet")
+        self.notifications.log_site_change.assert_called_once()
+
+
+class TicketServiceSavePropagatesBoolTestCase(unittest.TestCase):
+    """``TicketService._save`` must return the ``save_json_file`` bool so
+    callers can distinguish a durable write from a silent failure.
+
+    Prior to this contract ``_save`` returned ``None`` unconditionally, which
+    let every write side-effect downstream (admin email, submitter
+    confirmation, change-log entry, JIRA mirror enqueue) run as if the write
+    had succeeded. Matches the shape ``FileStorageService.save_json_file``
+    already exposes.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = SimpleNamespace(tickets_file=Path(self.tmp.name) / "tickets.json")
+        self.storage = FileStorageService(self.config)
+        self.service = TicketService(self.config, self.storage, MagicMock())
+
+    def test_save_returns_true_on_successful_write(self):
+        self.assertTrue(self.service._save([{"id": "t1"}]))
+        self.assertTrue(self.config.tickets_file.exists())
+
+    def test_save_returns_false_when_storage_fails(self):
+        with patch.object(self.storage, "save_json_file", return_value=False):
+            self.assertFalse(self.service._save([{"id": "t1"}]))
+
+
 if __name__ == "__main__":
     unittest.main()
