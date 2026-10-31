@@ -270,11 +270,31 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
 
 class RenterProfilesTestCase(SqlStorageBaseTestCase):
     def test_save_and_get(self):
-        self.storage.save_renter_profiles(
+        result = self.storage.save_renter_profiles(
             {"renter@example.com": {"name": "Renter R"}}
         )
+        # ``save_renter_profiles`` returns a bool matching the ``save_json_file``
+        # contract (PR #201): True on a durable write so the ``renter_profile``
+        # route only renders "Profile updated." when the row reached disk.
+        self.assertTrue(result)
         profiles = self.storage.get_renter_profiles()
         self.assertEqual(profiles, {"renter@example.com": {"name": "Renter R"}})
+
+    def test_save_returns_false_on_sqlite_failure(self):
+        # Parity with ``FileStorageService.save_renter_profiles`` (which
+        # propagates ``save_json_file``'s bool): a transaction error on the
+        # SQL backend must surface as False, not raise. ``renter_profile``
+        # POST uses the bool to suppress the misleading "Profile updated."
+        # banner when the write was lost.
+        from unittest.mock import patch
+        with patch.object(
+            self.storage.db, "transaction", side_effect=RuntimeError("locked")
+        ):
+            self.assertFalse(
+                self.storage.save_renter_profiles(
+                    {"renter@example.com": {"name": "Renter R"}}
+                )
+            )
 
     def test_get_renter_profiles_drops_non_dict_payloads(self):
         # A ``profile`` column that deserializes to something other than a
@@ -397,12 +417,32 @@ class RenterContractsTestCase(SqlStorageBaseTestCase):
                 {"contract_id": "c"},
             ]
         }
-        self.storage.save_renter_contracts(contracts)
+        result = self.storage.save_renter_contracts(contracts)
+        # ``save_renter_contracts`` returns a bool matching the
+        # ``save_json_file`` contract (PR #201): True on a durable write so
+        # ``admin_contracts`` only renders "Contract added…" when the row
+        # reached disk (and skips the PDF orphan-cleanup branch).
+        self.assertTrue(result)
         out = self.storage.get_renter_contracts()
         self.assertEqual(
             [c["contract_id"] for c in out["renter@example.com"]],
             ["a", "b", "c"],
         )
+
+    def test_save_returns_false_on_sqlite_failure(self):
+        # Parity with ``FileStorageService.save_renter_contracts``: a
+        # transaction error on the SQL backend must surface as False, not
+        # raise. ``admin_contracts`` uses the bool to clean up the orphan
+        # PDF when the row save fails.
+        from unittest.mock import patch
+        with patch.object(
+            self.storage.db, "transaction", side_effect=RuntimeError("locked")
+        ):
+            self.assertFalse(
+                self.storage.save_renter_contracts(
+                    {"renter@example.com": [{"id": "c1"}]}
+                )
+            )
 
     def test_get_renter_contracts_drops_non_dict_payloads(self):
         # A ``contract`` column that deserializes to something other than a

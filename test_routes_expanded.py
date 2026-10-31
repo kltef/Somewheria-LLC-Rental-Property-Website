@@ -1773,6 +1773,28 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
             }
         )
 
+    def test_renter_profile_post_suppresses_confirmation_on_save_failure(self):
+        # When ``save_renter_profiles`` returns False (ENOSPC / EACCES /
+        # fsync error on the file backend; a transaction error on the SQL
+        # backend) the POST must NOT render "Profile updated." — the
+        # pre-fix shape discarded the return and lied to the renter about
+        # a write that was lost. The template only renders ``success``, so
+        # suppressing it on failure is the right signal (the renter notices
+        # and retries) without touching the view's HTML.
+        self.login_as("renter", email="renter@example.com")
+        with patch.object(self.services.storage, "get_renter_profiles", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_profiles",
+            return_value=False,
+        ):
+            response = self.client.post(
+                "/renter/profile",
+                data={"name": "Jamie", "contact": "555-0100"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"Profile updated.", response.data)
+
     def test_renter_profile_post_honors_email_status_updates_checkbox(self):
         self.login_as("renter", email="renter@example.com")
         with patch.object(self.services.storage, "get_renter_profiles", return_value={}), patch.object(
@@ -1852,6 +1874,109 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Contract added for renter@example.com.", response.data)
         save_contracts_mock.assert_called_once()
+
+    def test_admin_contracts_add_surfaces_save_failure(self):
+        # When ``save_renter_contracts`` returns False (ENOSPC / EACCES /
+        # fsync error on the file backend; a transaction error on the SQL
+        # backend) the add path must NOT render "Contract added…" — the
+        # pre-fix shape discarded the return and lied to the admin while
+        # the row was lost and the PDF file was orphaned on disk.
+        self.login_as("admin")
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+            return_value=False,
+        ) as save_contracts_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"Contract added for renter@example.com.", response.data)
+        self.assertIn(b"Could not save contract", response.data)
+        save_contracts_mock.assert_called_once()
+
+    def test_admin_contracts_add_cleans_orphan_pdf_on_save_failure(self):
+        # The add path writes the PDF to ``private/contracts/<id>.pdf``
+        # BEFORE saving the ``renter_contracts`` row — if the row save
+        # fails, the PDF would otherwise sit under the private contracts
+        # directory forever with no row referencing it. Delete it so the
+        # directory stays in sync with the metadata.
+        from io import BytesIO
+
+        self.login_as("admin")
+        pdf_bytes = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n% body\n%%EOF\n"
+        with patch.object(self.services.storage, "get_renter_contracts", return_value={}), patch.object(
+            self.services.storage,
+            "save_binary_file",
+            return_value=True,
+        ), patch.object(
+            self.services.storage,
+            "save_renter_contracts",
+            return_value=False,
+        ), patch.object(
+            self.services.storage,
+            "delete_file",
+        ) as delete_file_mock:
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "add",
+                    "renter_email": "renter@example.com",
+                    "property_name": "Maple House",
+                    "start_date": "2030-01-01",
+                    "end_date": "2030-12-31",
+                    "status": "Active",
+                    "contract_pdf": (BytesIO(pdf_bytes), "signed.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Could not save contract", response.data)
+        delete_file_mock.assert_called_once()
+        orphan_path = delete_file_mock.call_args.args[0]
+        self.assertEqual(
+            orphan_path.parent, self.services.config.contract_upload_dir
+        )
+        self.assertTrue(orphan_path.name.endswith(".pdf"))
+
+    def test_admin_contracts_delete_surfaces_save_failure(self):
+        # Delete flows unlink the on-disk PDF (best-effort) before saving the
+        # updated ``renter_contracts`` map, so a silent save failure would
+        # otherwise leave the admin dashboard still listing a row whose PDF
+        # link now 404s. Surface the failure so the admin retries.
+        self.login_as("admin")
+        existing = {
+            "renter@example.com": [
+                {"id": "c0", "property_name": "Maple House", "pdf_filename": ""}
+            ]
+        }
+        with patch.object(
+            self.services.storage, "get_renter_contracts", return_value=existing
+        ), patch.object(
+            self.services.storage, "save_renter_contracts", return_value=False
+        ):
+            response = self.client.post(
+                "/admin/contracts",
+                data={
+                    "action": "delete",
+                    "renter_email": "renter@example.com",
+                    "contract_index": "0",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"Contract removed for renter@example.com.", response.data)
+        self.assertIn(b"Could not remove contract", response.data)
 
     def test_admin_contracts_add_rejects_malformed_dates(self):
         # A hand-crafted POST (or a paste-error) with a non-ISO date must be

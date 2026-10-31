@@ -360,14 +360,27 @@ class SqlStorageService:
                 out[normalized] = dict(profile)
         return out
 
-    def save_renter_profiles(self, profiles: dict) -> None:
-        with self.db.transaction() as conn:
-            conn.execute("DELETE FROM renter_profiles")
-            for email, profile in (profiles or {}).items():
-                conn.execute(
-                    "INSERT OR REPLACE INTO renter_profiles(email, profile) VALUES (?, ?)",
-                    (str(email).lower(), dumps(profile)),
-                )
+    def save_renter_profiles(self, profiles: dict) -> bool:
+        # API parity with ``FileStorageService.save_renter_profiles``: True on
+        # a durable write, False on a sqlite failure (locked DB, disk full,
+        # corruption). ``renter_profile`` POST uses this bool to decide
+        # whether to render "Profile updated." or surface the failure. The
+        # pre-fix shape raised through the caller on the SQL backend while
+        # the file backend silently swallowed the error — same semantics on
+        # both backends is what the ``save_json_file`` bool contract
+        # (PR #201) was added to enforce elsewhere.
+        try:
+            with self.db.transaction() as conn:
+                conn.execute("DELETE FROM renter_profiles")
+                for email, profile in (profiles or {}).items():
+                    conn.execute(
+                        "INSERT OR REPLACE INTO renter_profiles(email, profile) VALUES (?, ?)",
+                        (str(email).lower(), dumps(profile)),
+                    )
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to save renter_profiles to sqlite: %s", exc)
+            return False
 
     # ------------------------------------------------------- renter_contracts
 
@@ -415,16 +428,27 @@ class SqlStorageService:
                 out.setdefault(normalized, []).append(contract)
         return out
 
-    def save_renter_contracts(self, contracts: dict) -> None:
-        with self.db.transaction() as conn:
-            conn.execute("DELETE FROM renter_contracts")
-            for email, items in (contracts or {}).items():
-                email_lc = str(email).lower()
-                for idx, contract in enumerate(items or []):
-                    conn.execute(
-                        "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
-                        (email_lc, idx, dumps(contract)),
-                    )
+    def save_renter_contracts(self, contracts: dict) -> bool:
+        # API parity with ``FileStorageService.save_renter_contracts``: True
+        # on a durable write, False on a sqlite failure. ``admin_contracts``
+        # uses this bool to decide whether to render "Contract added for
+        # <renter>." or surface the failure and clean up the orphan PDF
+        # the add path has already written to ``private/contracts/``. See
+        # ``save_renter_profiles`` above for the same rationale.
+        try:
+            with self.db.transaction() as conn:
+                conn.execute("DELETE FROM renter_contracts")
+                for email, items in (contracts or {}).items():
+                    email_lc = str(email).lower()
+                    for idx, contract in enumerate(items or []):
+                        conn.execute(
+                            "INSERT INTO renter_contracts(email, idx, contract) VALUES (?, ?, ?)",
+                            (email_lc, idx, dumps(contract)),
+                        )
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to save renter_contracts to sqlite: %s", exc)
+            return False
 
     # ---------------------------------------------------------------- tickets
 
