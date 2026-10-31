@@ -313,8 +313,15 @@ class FileStorageService:
                 cleaned[normalized] = dict(profile)
         return cleaned
 
-    def save_renter_profiles(self, profiles: dict) -> None:
-        self.save_json_file(self.config.renter_profile_file, profiles)
+    def save_renter_profiles(self, profiles: dict) -> bool:
+        # Propagate ``save_json_file``'s bool so callers can distinguish a
+        # durable write from a silent failure (ENOSPC / EACCES / fsync error).
+        # Discarding the return — the pre-fix shape — let ``renter_profile``
+        # POST render "Profile updated." for a payload that never reached
+        # disk, and the next process restart served the pre-write state.
+        # Mirrors the surfaced-failure contract PRs #171 / #175 / #201 / #202
+        # applied to the other write paths.
+        return self.save_json_file(self.config.renter_profile_file, profiles)
 
     def get_pending_lead_captures(self) -> list[dict]:
         raw = self.load_json_file(self.config.lead_capture_file, [], expected_type=list)
@@ -460,8 +467,17 @@ class FileStorageService:
                 cleaned[normalized] = valid
         return cleaned
 
-    def save_renter_contracts(self, contracts: dict) -> None:
-        self.save_json_file(self.config.contracts_file, contracts)
+    def save_renter_contracts(self, contracts: dict) -> bool:
+        # Propagate ``save_json_file``'s bool so ``admin_contracts`` can
+        # distinguish a durable write from a silent failure (ENOSPC / EACCES /
+        # fsync error). Discarding the return — the pre-fix shape — let the
+        # add path render "Contract added for <renter>." for a row that never
+        # reached disk, orphaning the already-saved contract PDF under
+        # ``private/contracts/`` forever. Same lie the bool contract on
+        # ``save_json_file`` (PR #201) was added to prevent at the storage
+        # boundary; mirrors the surfaced-failure contract PR #202 applied to
+        # ``TicketService.create_ticket``.
+        return self.save_json_file(self.config.contracts_file, contracts)
 
     # --- Binary file persistence (contract PDFs, ticket photos) ---
     #

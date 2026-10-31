@@ -1089,12 +1089,39 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
         save_json_mock.assert_called_once_with(self.config.renter_profile_file, profiles)
 
+    def test_save_renter_profiles_propagates_save_json_bool(self):
+        # Mirror the ``save_json_file`` -> ``_save`` -> ``create_ticket`` chain
+        # the ticket service uses: when the underlying write fails,
+        # ``save_renter_profiles`` must return False so the ``renter_profile``
+        # POST surfaces the failure instead of lying "Profile updated." to the
+        # renter.
+        with patch.object(self.service, "save_json_file", return_value=False):
+            self.assertFalse(
+                self.service.save_renter_profiles({"renter@example.com": {"name": "Jamie"}})
+            )
+        with patch.object(self.service, "save_json_file", return_value=True):
+            self.assertTrue(
+                self.service.save_renter_profiles({"renter@example.com": {"name": "Jamie"}})
+            )
+
     def test_save_renter_contracts_delegates_to_save_json_file(self):
         contracts = {"renter@example.com": [{"property_name": "Maple House"}]}
         with patch.object(self.service, "save_json_file") as save_json_mock:
             self.service.save_renter_contracts(contracts)
 
         save_json_mock.assert_called_once_with(self.config.contracts_file, contracts)
+
+    def test_save_renter_contracts_propagates_save_json_bool(self):
+        # ``admin_contracts`` relies on this bool to decide whether to render
+        # "Contract added for <renter>." or clean up the orphan PDF; without
+        # propagation, a disk-full event tells the admin the write succeeded
+        # while leaving a signed PDF under ``private/contracts/`` that no
+        # row references.
+        contracts = {"renter@example.com": [{"property_name": "Maple House"}]}
+        with patch.object(self.service, "save_json_file", return_value=False):
+            self.assertFalse(self.service.save_renter_contracts(contracts))
+        with patch.object(self.service, "save_json_file", return_value=True):
+            self.assertTrue(self.service.save_renter_contracts(contracts))
 
     def test_concurrent_add_pending_registration_preserves_all_writes(self):
         """Lost-update race fix: load+save runs under the file lock.

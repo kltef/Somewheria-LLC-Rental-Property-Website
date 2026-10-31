@@ -877,8 +877,17 @@ def renter_profile():
                 profile["email_status_updates"] = bool(request.form.get("email_status_updates"))
                 profile["rcs_status_updates"] = bool(request.form.get("rcs_status_updates"))
             profiles[email] = profile
-            services.storage.save_renter_profiles(profiles)
-        success = "Profile updated."
+            saved = services.storage.save_renter_profiles(profiles)
+        # Only confirm when the write actually reached disk. Rendering
+        # "Profile updated." for a payload that was lost (ENOSPC / EACCES /
+        # fsync error on the file backend; a transaction error on the SQL
+        # backend) is the lie the ``save_json_file`` bool contract (PR #201)
+        # was added to prevent at the storage boundary. ``renter_profile.html``
+        # only renders ``success``; leaving it as ``None`` on a failed save
+        # suppresses the misleading confirmation banner (the renter notices
+        # and retries) instead of claiming the write succeeded.
+        if saved:
+            success = "Profile updated."
     else:
         profiles = services.storage.get_renter_profiles()
         profile = profiles.get(email) or {
@@ -1058,8 +1067,24 @@ def admin_contracts():
                     with services.storage.atomic():
                         contracts_data = services.storage.get_renter_contracts()
                         contracts_data.setdefault(renter_email, []).append(new_contract)
-                        services.storage.save_renter_contracts(contracts_data)
-                    success = f"Contract added for {renter_email}."
+                        saved = services.storage.save_renter_contracts(contracts_data)
+                    if saved:
+                        success = f"Contract added for {renter_email}."
+                    else:
+                        # Metadata never reached disk, so clean up the PDF the
+                        # add path has already written. Leaving it behind
+                        # would orphan a signed-contract PDF under
+                        # ``private/contracts/`` that no renter_contracts row
+                        # points at — the exact lie the ``save_json_file`` /
+                        # ``save_renter_contracts`` bool contract (PRs #201 /
+                        # this one) exists to prevent.
+                        if pdf_filename:
+                            orphan = services.config.contract_upload_dir / pdf_filename
+                            try:
+                                services.storage.delete_file(orphan)
+                            except Exception:
+                                pass
+                        error = "Could not save contract. Please try again."
         elif action == "delete":
             renter_email = request.form.get("renter_email", "").strip().lower()
             contract_index = request.form.get("contract_index")
@@ -1090,8 +1115,18 @@ def admin_contracts():
                             del contracts_data[renter_email][contract_idx]
                             if not contracts_data[renter_email]:
                                 del contracts_data[renter_email]
-                            services.storage.save_renter_contracts(contracts_data)
-                            success = f"Contract removed for {renter_email}."
+                            # Surface a silent save failure instead of
+                            # pretending the delete worked. The PDF has
+                            # already been unlinked above (best-effort),
+                            # so a false success would leave the admin
+                            # dashboard still listing the row with its
+                            # PDF link now 404'ing — strictly worse than
+                            # telling them to retry.
+                            saved = services.storage.save_renter_contracts(contracts_data)
+                            if saved:
+                                success = f"Contract removed for {renter_email}."
+                            else:
+                                error = "Could not remove contract. Please try again."
                         else:
                             error = "Contract not found."
                 except ValueError:
