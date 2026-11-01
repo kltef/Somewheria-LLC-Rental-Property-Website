@@ -3281,7 +3281,17 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
     def test_ticket_service_add_photo_cleans_orphan_on_save_failure(self):
         """If persisting the ticket JSON fails after the photo is on disk,
         the orphaned image file must be removed so static/uploads/tickets/
-        doesn't accumulate dead bytes on every save error."""
+        doesn't accumulate dead bytes on every save error.
+
+        ``_save`` returns ``False`` on a silent write failure — it does not
+        raise, because ``save_json_file`` catches every exception internally
+        (PR #201). The pre-fix shape wrapped the call in ``try/except
+        Exception`` so the cleanup+raise branch was dead on the real
+        failure mode; a disk-full event left the photo on disk and told the
+        user "photo added" while ``tickets.json`` never got the updated
+        ``photos`` row. Mock ``_save`` to return ``False`` (not raise) so
+        this regresses if the dead-branch shape ever comes back.
+        """
         from somewheria_app.services.properties import UploadValidationError
 
         services = self.services
@@ -3304,7 +3314,7 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
                     self.stream = BytesIO(blob)
 
             with patch.object(
-                services.tickets, "_save", side_effect=OSError("disk full")
+                services.tickets, "_save", return_value=False
             ):
                 with self.assertRaises(UploadValidationError):
                     services.tickets.add_photo(

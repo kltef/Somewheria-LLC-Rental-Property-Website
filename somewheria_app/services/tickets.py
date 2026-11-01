@@ -679,21 +679,34 @@ class TicketService:
             existing_photos.append({"url": relative_url, "uploaded_at": _now_iso()})
             target["photos"] = existing_photos
             target["updated_at"] = _now_iso()
-            try:
-                self._save(tickets)
-            except Exception as exc:
-                # The photo is on disk but the ticket record never picked it up.
-                # Leaving it would orphan the file under static/uploads/tickets/
-                # forever — best-effort delete so the upload dir doesn't grow
-                # unboundedly on repeated save failures.
+            # ``_save`` returns False on a silent write failure (ENOSPC /
+            # EACCES / fsync error on the file backend; a sqlite transaction
+            # error on the SQL backend) — it does NOT raise, because
+            # ``save_json_file`` catches every exception internally and
+            # returns a bool (PR #201). The pre-#202 shape here wrapped the
+            # call in ``try/except Exception`` and treated the except branch
+            # as the failure path, which meant a real disk-full event ran
+            # straight through: the photo stayed on disk under
+            # ``static/uploads/tickets/<id>/``, the route rendered the ticket
+            # detail page with the photo thumbnail, and on the next process
+            # restart ``tickets.json`` didn't carry the row's updated
+            # ``photos`` list — the exact silent-save lie PRs #202 / #203
+            # closed on sibling write paths. Mirror #202's shape here: check
+            # the bool, clean up the orphaned image so repeated save failures
+            # don't grow the upload dir unboundedly, and surface a visible
+            # upload error that ``ticket_new_submit`` already renders back
+            # to the user.
+            if not self._save(tickets):
                 try:
                     self.storage.delete_file(save_path)
                 except Exception:
                     self.logger.warning(
                         "Failed to clean up orphaned ticket photo %s", save_path
                     )
-                self.logger.error("Failed to persist ticket photos: %s", exc)
-                raise UploadValidationError("Failed to record photo on ticket.") from exc
+                self.logger.error(
+                    "Failed to persist ticket photo update for ticket %s", ticket_id
+                )
+                raise UploadValidationError("Failed to record photo on ticket.")
             target_snapshot = target
 
         try:
