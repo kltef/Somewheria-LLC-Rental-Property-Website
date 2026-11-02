@@ -3310,12 +3310,28 @@ class ZillowPublisherTestCase(unittest.TestCase):
                 "ZILLOW_API_TOKEN": "token",
                 "ZILLOW_FEED_KEY": "feed",
             },
-        ), patch.object(self.publisher, "_perform_publish", side_effect=RuntimeError("nope")), patch(
+        ), patch.object(self.publisher, "_perform_publish", side_effect=RuntimeError("nope")) as perform, patch(
             "somewheria_app.services.zillow.time.sleep", return_value=None
-        ):
+        ) as sleep_mock:
             self.publisher._retry_worker("create", "prop-1", {})
         self.assertEqual(self.publisher.failure_count, 1)
         self.notifications.log_and_notify_error.assert_called_once()
+        # Four attempts (initial + one per backoff) and three waits that
+        # consume the full ``_RETRY_BACKOFF_SECONDS`` schedule in order.
+        # The pre-fix shape capped at three attempts with two waits and
+        # left the 16s backoff as dead code, so the real retry window was
+        # 1+4=5s rather than the advertised 1+4+16=21s.
+        from somewheria_app.services.zillow import (
+            _MAX_ATTEMPTS,
+            _RETRY_BACKOFF_SECONDS,
+        )
+
+        self.assertEqual(perform.call_count, _MAX_ATTEMPTS)
+        self.assertEqual(_MAX_ATTEMPTS, len(_RETRY_BACKOFF_SECONDS) + 1)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            list(_RETRY_BACKOFF_SECONDS),
+        )
 
     def test_status_snapshot_shape(self):
         snapshot = self.publisher.status_snapshot()
@@ -4008,6 +4024,84 @@ class TicketServiceSavePropagatesBoolTestCase(unittest.TestCase):
     def test_save_returns_false_when_storage_fails(self):
         with patch.object(self.storage, "save_json_file", return_value=False):
             self.assertFalse(self.service._save([{"id": "t1"}]))
+
+
+class JiraCreateWithRetriesSchedulesEveryBackoffTestCase(unittest.TestCase):
+    """``TicketService._jira_create_with_retries`` must consume every entry in
+    ``_jira_backoffs`` as a between-attempt wait.
+
+    The pre-fix shape iterated the backoff tuple directly, which capped the
+    retry window at 1+4=5s and left the final 16s wait as dead code — a
+    transient JIRA blip whose recovery exceeded five seconds would log a
+    one-shot ``Giving up`` entry and leave the ticket un-mirrored instead of
+    riding out the extra 16-second wait that the "max ~21s" contract on the
+    schedule was designed to provide. The fix adds a trailing attempt so N
+    backoffs produce N+1 attempts and the full 1+4+16=21s window is actually
+    reachable. Mirrors the equivalent regression test on the sibling
+    ``ZillowPublisher._retry_worker``.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = SimpleNamespace(tickets_file=Path(self.tmp.name) / "tickets.json")
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.jira = MagicMock()
+        self.service = TicketService(
+            self.config, self.storage, self.notifications, jira=self.jira
+        )
+
+    def test_runs_four_attempts_and_sleeps_full_schedule(self):
+        with patch.object(
+            self.service,
+            "_attempt_jira_create_once",
+            side_effect=RuntimeError("down"),
+        ) as attempt, patch(
+            "somewheria_app.services.tickets.time.sleep", return_value=None
+        ) as sleep_mock:
+            self.service._jira_create_with_retries("ticket-id")
+        self.assertEqual(attempt.call_count, len(self.service._jira_backoffs) + 1)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            list(self.service._jira_backoffs),
+        )
+
+    def test_stops_early_on_success(self):
+        # First attempt succeeds -> no sleeps, no further attempts.
+        with patch.object(
+            self.service, "_attempt_jira_create_once", return_value="OPS-1"
+        ) as attempt, patch(
+            "somewheria_app.services.tickets.time.sleep", return_value=None
+        ) as sleep_mock:
+            self.service._jira_create_with_retries("ticket-id")
+        self.assertEqual(attempt.call_count, 1)
+        sleep_mock.assert_not_called()
+
+    def test_recovers_mid_retry_sleeps_only_before_the_successful_attempt(self):
+        # Fail twice, then succeed: expect two sleeps (backoffs 0 and 1) and
+        # no sleep after the successful attempt.
+        results = [RuntimeError("boom"), RuntimeError("boom"), "OPS-7"]
+
+        def _side_effect(_ticket_id):
+            value = results.pop(0)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        with patch.object(
+            self.service, "_attempt_jira_create_once", side_effect=_side_effect
+        ) as attempt, patch(
+            "somewheria_app.services.tickets.time.sleep", return_value=None
+        ) as sleep_mock:
+            self.service._jira_create_with_retries("ticket-id")
+        self.assertEqual(attempt.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            list(self.service._jira_backoffs[:2]),
+        )
 
 
 if __name__ == "__main__":

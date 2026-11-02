@@ -30,9 +30,21 @@ from .console import get_console_logger
 
 
 # Backoff schedule for the retry worker. Exponential with base 4: 1s, 4s, 16s.
-# Three attempts total (initial try + 2 retries handled here as 3 attempts).
+# Four total attempts (initial try + one retry per backoff) cap the per-publish
+# retry window at ~21s, matching the "max ~21s" contract the sibling JIRA
+# mirror in ``services/tickets.py`` documents and the "wait 1+4+16 seconds"
+# the retry-worker test comment advertises. The pre-fix shape capped
+# ``_MAX_ATTEMPTS`` at 3 against this same 3-element backoff tuple, which
+# meant the ``_RETRY_BACKOFF_SECONDS[attempt]`` lookup never reached the
+# ``16`` slot: the final backoff sat as dead code and the real retry window
+# was 1+4=5s — a transient upstream blip whose recovery exceeded five
+# seconds would log a one-shot ``Zillow Sync Failure`` alert instead of
+# riding out the extra 16-second wait that the schedule was designed to
+# provide. Deriving ``_MAX_ATTEMPTS`` from ``len(_RETRY_BACKOFF_SECONDS)``
+# keeps the two in lockstep so future tuning (more or fewer backoffs) can't
+# reintroduce the same off-by-one.
 _RETRY_BACKOFF_SECONDS = (1, 4, 16)
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = len(_RETRY_BACKOFF_SECONDS) + 1
 
 # Cap on how many recent error records we keep on the publisher for the
 # admin-status page. The publisher is in-memory and process-local; this is a

@@ -80,9 +80,16 @@ class TicketService:
         # directly (without a JiraClient) continue to pass.
         self.jira = jira
         self.logger = get_console_logger("tickets")
-        # Retry backoffs (seconds). 1s/4s/16s = max ~21s of retry per ticket,
-        # entirely off the request thread so JIRA being slow never blocks the
-        # ticket-creation response.
+        # Retry backoffs (seconds). 1s/4s/16s between four total attempts
+        # (initial try + one retry per backoff) caps the per-ticket retry
+        # window at ~21s, entirely off the request thread so JIRA being
+        # slow never blocks the ticket-creation response. The pre-fix shape
+        # iterated the tuple as attempts (three attempts, two waits), so
+        # the final ``16`` sat as dead code and the real retry window was
+        # 1+4=5s — a transient JIRA blip whose recovery exceeded five
+        # seconds would give up and leave the ticket un-mirrored instead
+        # of riding out the 16-second wait the schedule was designed to
+        # provide. Mirrors the equivalent fix in ``services/zillow.py``.
         self._jira_backoffs = (1, 4, 16)
 
     # ------------------------------------------------------------------ I/O
@@ -410,7 +417,13 @@ class TicketService:
 
     def _jira_create_with_retries(self, ticket_id: str) -> None:
         last_exc: Exception | None = None
-        for attempt, backoff in enumerate(self._jira_backoffs, start=1):
+        # ``len(backoffs) + 1`` attempts so every entry in ``_jira_backoffs``
+        # is actually used as a wait between attempts (0 waits precede the
+        # first attempt; the i-th backoff precedes the (i+1)-th retry). The
+        # pre-fix loop iterated the tuple directly, which capped the retry
+        # window at 1+4=5s and left the final 16s backoff unreachable.
+        total_attempts = len(self._jira_backoffs) + 1
+        for attempt in range(1, total_attempts + 1):
             try:
                 key = self._attempt_jira_create_once(ticket_id)
                 if key:
@@ -421,13 +434,13 @@ class TicketService:
                 last_exc = exc
                 self.logger.warning(
                     "JIRA create attempt %d/%d failed for %s: %s",
-                    attempt, len(self._jira_backoffs), ticket_id, exc,
+                    attempt, total_attempts, ticket_id, exc,
                 )
-                if attempt < len(self._jira_backoffs):
-                    time.sleep(backoff)
+                if attempt <= len(self._jira_backoffs):
+                    time.sleep(self._jira_backoffs[attempt - 1])
         self.logger.error(
             "Giving up creating JIRA mirror for %s after %d attempts: %s",
-            ticket_id, len(self._jira_backoffs), last_exc,
+            ticket_id, total_attempts, last_exc,
         )
 
     def _attempt_jira_create_once(self, ticket_id: str) -> str | None:
