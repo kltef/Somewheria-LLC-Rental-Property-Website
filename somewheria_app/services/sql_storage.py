@@ -207,10 +207,24 @@ class SqlStorageService:
             )
         return True
 
-    def remove_pending_registration(self, email: str) -> None:
+    def remove_pending_registration(self, email: str) -> bool:
+        # API parity with ``FileStorageService.remove_pending_registration``:
+        # True on a durable delete, False on a sqlite failure (locked DB,
+        # disk full, corruption). The pre-fix shape let a transaction error
+        # propagate up through the admin approve/reject route to the crash
+        # handler's empty 503, while the file backend quietly discarded
+        # ``save_json_file``'s bool and rendered success — same lie, two
+        # different symptoms. ``admin_registrations`` now uses this bool to
+        # suppress the user-visible "Registration Approved" / "Rejected"
+        # email so a retry after the failure doesn't send it twice.
         email = (email or "").strip().lower()
-        with self.db.transaction() as conn:
-            conn.execute("DELETE FROM pending_registrations WHERE email = ?", (email,))
+        try:
+            with self.db.transaction() as conn:
+                conn.execute("DELETE FROM pending_registrations WHERE email = ?", (email,))
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to remove pending_registration from sqlite: %s", exc)
+            return False
 
     def _replace_pending_registrations(self, data: list[dict]) -> None:
         with self.db.transaction() as conn:

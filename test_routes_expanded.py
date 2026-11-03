@@ -912,6 +912,70 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         remove_pending_mock.assert_not_called()
         send_email_mock.assert_not_called()
 
+    def test_admin_registrations_approve_surfaces_remove_pending_save_failure(self):
+        # ``remove_pending_registration`` returns False when the underlying
+        # ``save_json_file`` call fails (ENOSPC / EACCES / fsync error / a
+        # sqlite transaction error) — the pending row is still on disk, so
+        # on the next process restart the row returns and a retry would
+        # re-approve the same address, firing a duplicate "Registration
+        # Approved" email to the already-notified user. Skip the user email
+        # and the audit log on the failure path so the retry stays safe.
+        # Mirrors the surfaced-failure contract PR #203 applied to the admin
+        # add-contract POST (which also drops the misleading success-side
+        # effects on a storage failure).
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [{"email": "pending@example.com", "name": "Pending"}],
+            ],
+        ), patch.object(self.services.storage, "set_user_role"), patch.object(
+            self.services.storage, "remove_pending_registration", return_value=False
+        ), patch.object(
+            self.services.notifications, "send_email_async"
+        ) as async_mock, patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_change_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async_mock.assert_not_called()
+        log_change_mock.assert_not_called()
+
+    def test_admin_registrations_reject_surfaces_remove_pending_save_failure(self):
+        # Reject path mirrors the approve path: a silent save failure must
+        # not fire the "Registration Rejected" email, because a retry after
+        # restart would send it a second time. See
+        # ``test_admin_registrations_approve_surfaces_remove_pending_save_failure``.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [{"email": "pending@example.com", "name": "Pending"}],
+            ],
+        ), patch.object(
+            self.services.storage, "remove_pending_registration", return_value=False
+        ), patch.object(
+            self.services.notifications, "send_email_async"
+        ) as async_mock, patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_change_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "reject", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        async_mock.assert_not_called()
+        log_change_mock.assert_not_called()
+
     def test_admin_registrations_approve_dispatches_email_off_request_thread(self):
         # The approve/reject admin action must not block on the SMTP relay --
         # send_email_async keeps the response snappy even when Gmail stalls

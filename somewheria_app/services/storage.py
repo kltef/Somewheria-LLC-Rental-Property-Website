@@ -167,7 +167,7 @@ class FileStorageService:
             # contract on ``save_json_file`` was added to prevent.
             return self.save_json_file(self.config.registration_file, registrations)
 
-    def remove_pending_registration(self, email: str) -> None:
+    def remove_pending_registration(self, email: str) -> bool:
         target = (email or "").lower()
         with self.file_lock:
             # ``(item.get("email") or "")`` — not ``item.get("email", "")`` —
@@ -182,7 +182,19 @@ class FileStorageService:
                 item for item in self.get_pending_registrations()
                 if (item.get("email") or "").lower() != target
             ]
-            self.save_json_file(self.config.registration_file, registrations)
+            # Propagate ``save_json_file``'s bool so the /admin/registrations
+            # approve/reject route can distinguish a durable removal from a
+            # silent failure (ENOSPC / EACCES / fsync error). The pre-fix
+            # shape discarded the return and let the admin flow keep going:
+            # the "Registration Approved" / "Registration Rejected" email
+            # fired to the user, the audit log recorded the decision, but
+            # the pending row was still on disk — on the next process restart
+            # the row returned and the admin, seeing it listed again, would
+            # re-approve / re-reject, resending the user-visible email a
+            # second time for a decision the user already received. Mirrors
+            # the surfaced-failure contract PRs #201 / #203 applied to
+            # ``save_json_file`` and ``save_renter_profiles``/``_contracts``.
+            return self.save_json_file(self.config.registration_file, registrations)
 
     def get_user_roles(self) -> dict:
         raw = self.load_json_file(self.config.user_roles_file, {}, expected_type=dict)

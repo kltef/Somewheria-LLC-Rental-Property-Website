@@ -353,6 +353,30 @@ class FileStorageServiceTestCase(unittest.TestCase):
             ],
         )
 
+    def test_remove_pending_registration_propagates_save_result(self):
+        # ``save_json_file`` returns False on ENOSPC / EACCES / fsync error
+        # (PR #201). The pre-fix shape discarded that bool and returned
+        # ``None``, so the /admin/registrations approve/reject route kept
+        # going — logged the decision, emailed the user — for a pending row
+        # that never cleared, and the next process restart surfaced the row
+        # for a redundant decision that would send the same user-visible
+        # email a second time. Propagating the bool lets ``admin_registrations``
+        # render a visible error instead of lying. Mirrors the surfaced-
+        # failure contract PR #203 pinned on ``save_renter_profiles``
+        # / ``save_renter_contracts``.
+        with patch.object(
+            self.service,
+            "get_pending_registrations",
+            return_value=[{"email": "drop@example.com"}],
+        ), patch.object(self.service, "save_json_file", return_value=True):
+            self.assertTrue(self.service.remove_pending_registration("drop@example.com"))
+        with patch.object(
+            self.service,
+            "get_pending_registrations",
+            return_value=[{"email": "drop@example.com"}],
+        ), patch.object(self.service, "save_json_file", return_value=False):
+            self.assertFalse(self.service.remove_pending_registration("drop@example.com"))
+
     def test_add_pending_lead_capture_appends_and_saves(self):
         with patch.object(
             self.service, "get_pending_lead_captures", return_value=[{"email": "keep@example.com"}]
