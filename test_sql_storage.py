@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from somewheria_app.services.sql_storage import SqlStorageService
 
@@ -165,9 +166,25 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
     def test_remove_pending_registration(self):
         self.storage.add_pending_registration({"email": "a@example.com"})
         self.storage.add_pending_registration({"email": "b@example.com"})
-        self.storage.remove_pending_registration("A@Example.com")
+        self.assertTrue(self.storage.remove_pending_registration("A@Example.com"))
         rows = self.storage.get_pending_registrations()
         self.assertEqual({r["email"] for r in rows}, {"b@example.com"})
+
+    def test_remove_pending_registration_returns_false_on_sqlite_failure(self):
+        # API parity with ``FileStorageService.remove_pending_registration``:
+        # the admin approve/reject route uses this bool to suppress the
+        # user-visible "Registration Approved" / "Rejected" email when the
+        # removal didn't actually persist. The pre-fix shape let the
+        # transaction exception propagate up to the crash handler's empty
+        # 503, which still sent no email but also lost the admin's error
+        # context — False lets ``admin_registrations`` render a visible
+        # retry prompt instead.
+        self.storage.add_pending_registration({"email": "a@example.com"})
+        with patch.object(self.storage.db, "transaction", side_effect=RuntimeError("db locked")):
+            self.assertFalse(self.storage.remove_pending_registration("a@example.com"))
+        # The row is still there — the failure didn't partially succeed.
+        rows = self.storage.get_pending_registrations()
+        self.assertEqual({r["email"] for r in rows}, {"a@example.com"})
 
     def test_add_pending_registration_dedupes_and_reports_new(self):
         self.assertTrue(

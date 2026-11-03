@@ -754,7 +754,26 @@ def admin_registrations():
             # who somehow landed in the pending list.
             if role_rank(services.auth.get_user_role(email)) < role_rank("renter"):
                 services.storage.set_user_role(email, "renter")
-            services.storage.remove_pending_registration(email)
+            # Surface a storage failure instead of emailing the user and
+            # logging the decision for a pending row that never cleared.
+            # Without this gate, a disk-full / EACCES / fsync error silently
+            # drops the removal while the admin still sees "approved" and
+            # the user still gets the email — then on the next process
+            # restart the pending row returns and the admin, seeing it
+            # listed again, re-approves, triggering a duplicate email to
+            # the same user. Mirrors the surfaced-failure contract PR #203
+            # applied to the admin add-contract POST.
+            if not services.storage.remove_pending_registration(email):
+                pending = services.storage.get_pending_registrations()
+                return render_template(
+                    "admin_registrations.html",
+                    pending=pending,
+                    title="Pending Registrations",
+                    error=(
+                        f"Could not clear pending registration for {email}. "
+                        "Please retry; the user has not been notified."
+                    ),
+                )
             # Approving grants a role, so it belongs in the audit trail
             # alongside the role mutations made from /admin/users and
             # /admin/dashboard — otherwise the only record of how an account
@@ -771,7 +790,17 @@ def admin_registrations():
                 to=email,
             )
         else:
-            services.storage.remove_pending_registration(email)
+            if not services.storage.remove_pending_registration(email):
+                pending = services.storage.get_pending_registrations()
+                return render_template(
+                    "admin_registrations.html",
+                    pending=pending,
+                    title="Pending Registrations",
+                    error=(
+                        f"Could not reject pending registration for {email}. "
+                        "Please retry; the user has not been notified."
+                    ),
+                )
             services.notifications.log_site_change(
                 actor_email, "registration_rejected", {"email": email}
             )
