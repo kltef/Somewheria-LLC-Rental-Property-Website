@@ -764,7 +764,27 @@ class TicketService:
                     "text": text,
                 })
                 ticket["updated_at"] = _now_iso()
-                self._save(tickets)
+                # Surface a failed save as a ValueError BEFORE firing the
+                # heads-up notification email + change-log entry. ``_save``
+                # returns False on a silent write failure (ENOSPC / EACCES /
+                # fsync error on the file backend; a transaction error on
+                # the SQL backend); the pre-fix shape discarded that bool
+                # and let the enclosing route redirect, email the submitter
+                # "a new note has been added to your ticket" (or notify the
+                # internal inbox of a renter reply), and append a
+                # ``ticket_note_added`` row to the change log — all for a
+                # note the next process restart would serve a ticket
+                # without. ``ticket_add_note`` already catches ValueError
+                # (today for empty notes) and silently redirects to the
+                # detail page, where the missing note is immediately
+                # visible — a soft failure, strictly better than the pre-
+                # fix lie. Mirrors the surfaced-failure contract PRs #202
+                # (``create_ticket``) and #204 (``add_photo``) applied to
+                # the sibling write paths on this service.
+                if not self._save(tickets):
+                    raise ValueError(
+                        "Could not save your note right now. Please try again."
+                    )
                 target = ticket
                 break
         if target is None:

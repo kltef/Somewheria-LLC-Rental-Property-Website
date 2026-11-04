@@ -4021,6 +4021,81 @@ class TicketCreateSurfacesSaveFailureTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_called_once()
 
 
+class TicketAddNoteSurfacesSaveFailureTestCase(unittest.TestCase):
+    """Regression: a silent ``_save`` failure inside ``add_note`` must not
+    fire the heads-up notification email or append a ``ticket_note_added``
+    change-log row.
+
+    ``FileStorageService.save_json_file`` returns ``False`` on a durable-
+    write failure (ENOSPC / EACCES / fsync error). Before this guard
+    ``add_note`` discarded that bool: the note was appended to the in-memory
+    row, ``_maybe_email_submitter`` / ``_enqueue_email`` fired a heads-up to
+    the ticket's counterparty, the change log gained a ``ticket_note_added``
+    entry, and the route redirected the author to the detail page — where
+    the missing note would be immediately visible on the next request,
+    because nothing reached disk. The email and the change-log row,
+    however, could not be unsent. Mirrors the surfaced-failure contract
+    PRs #202 (``create_ticket``) and #204 (``add_photo``) applied to the
+    sibling write paths on this service.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # One pre-existing ticket so ``add_note`` reaches the save path.
+        # ``email_updates`` on + a valid ``submitted_by`` would normally
+        # trigger an outbound email from ``_maybe_email_submitter`` once
+        # the note persists; we assert below that the save-failure branch
+        # short-circuits before that email fans out.
+        self.tickets_path.write_text(
+            '[{"id": "t1", "status": "open", "priority": "normal", '
+            '"submitted_by": "renter@example.com", '
+            '"email_updates": true, "title": "Leaky faucet", '
+            '"submitter_name": "Renter", '
+            '"notes": [], "created_at": "2024-01-01T00:00:00Z", '
+            '"updated_at": "2024-01-01T00:00:00Z"}]',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_add_note_raises_value_error_when_save_fails(self):
+        with patch.object(self.storage, "save_json_file", return_value=False):
+            with self.assertRaises(ValueError):
+                # Admin leaves a note on the renter's ticket; the email
+                # heads-up would normally go to ``renter@example.com``.
+                self.service.add_note("t1", "please schedule", "admin@example.com")
+        # No email heads-up for a note that never persisted, and no
+        # change-log entry for a mutation that never happened.
+        self.notifications.send_email.assert_not_called()
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_add_note_still_rejects_empty_text_with_value_error(self):
+        # Baseline: the pre-existing ValueError on empty text is unchanged,
+        # so the ``ticket_add_note`` route's existing ``except ValueError:
+        # pass`` branch keeps absorbing those without touching the save
+        # path at all (``save_json_file`` is never called).
+        with patch.object(self.storage, "save_json_file") as save:
+            with self.assertRaises(ValueError):
+                self.service.add_note("t1", "   ", "admin@example.com")
+            save.assert_not_called()
+
+    def test_add_note_succeeds_when_save_returns_true(self):
+        # Happy path: with ``_save`` returning True (the default against a
+        # real tempdir), ``add_note`` returns the updated ticket, the note
+        # lands on disk, and the heads-up email / change-log entry fire
+        # as before.
+        ticket = self.service.add_note("t1", "on it", "admin@example.com")
+        self.assertIsNotNone(ticket)
+        self.assertEqual(ticket["notes"][-1]["text"], "on it")
+        self.notifications.log_site_change.assert_called_once()
+
+
 class TicketServiceSavePropagatesBoolTestCase(unittest.TestCase):
     """``TicketService._save`` must return the ``save_json_file`` bool so
     callers can distinguish a durable write from a silent failure.
