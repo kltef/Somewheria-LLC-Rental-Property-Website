@@ -565,7 +565,23 @@ class TicketService:
 
                 if changed:
                     ticket["updated_at"] = _now_iso()
-                    self._save(tickets)
+                    # Surface a failed save as a ValueError BEFORE firing the
+                    # submitter heads-up email + change-log entry. ``_save``
+                    # returns False on a silent write failure (ENOSPC / EACCES
+                    # / fsync error on the file backend; a transaction error
+                    # on the SQL backend); the pre-fix shape discarded that
+                    # bool and let the enclosing route redirect, email the
+                    # submitter "Status: resolved" for a status change the
+                    # next process restart would serve the ticket without,
+                    # and append a ``ticket_updated`` row to the change log
+                    # describing a mutation that never happened. Mirrors the
+                    # surfaced-failure contract PRs #202 (``create_ticket``),
+                    # #204 (``add_photo``), and #207 (``add_note``) applied
+                    # to the sibling write paths on this service.
+                    if not self._save(tickets):
+                        raise ValueError(
+                            "Could not save ticket update right now. Please try again."
+                        )
                 break
 
         if target is None:

@@ -4096,6 +4096,91 @@ class TicketAddNoteSurfacesSaveFailureTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_called_once()
 
 
+class TicketUpdateSurfacesSaveFailureTestCase(unittest.TestCase):
+    """Regression: a silent ``_save`` failure inside ``update_ticket`` must
+    not reach the submitter as a "status changed to <x>" email or append a
+    ``ticket_updated`` change-log row.
+
+    ``FileStorageService.save_json_file`` returns ``False`` on a durable-
+    write failure (ENOSPC / EACCES / fsync error). Before this guard
+    ``update_ticket`` discarded that bool: the mutation was applied to the
+    in-memory row, ``_maybe_email_submitter`` fired a status-change heads-up
+    to the submitter, ``notifications.log_site_change`` appended a
+    ``ticket_updated`` entry, and the route redirected the admin to the
+    detail page — where the pre-update status would be immediately visible
+    on the next request because nothing reached disk. The email and the
+    change-log row, however, could not be unsent. Mirrors the surfaced-
+    failure contract PRs #202 (``create_ticket``), #204 (``add_photo``),
+    and #207 (``add_note``) applied to the sibling write paths on this
+    service.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # One pre-existing ticket so ``update_ticket`` reaches the save path.
+        # ``email_updates`` on + a valid ``submitted_by`` would normally
+        # trigger an outbound email from ``_maybe_email_submitter`` once the
+        # mutation persists; we assert below that the save-failure branch
+        # short-circuits before that email fans out.
+        self.tickets_path.write_text(
+            '[{"id": "t1", "status": "open", "priority": "normal", '
+            '"submitted_by": "renter@example.com", '
+            '"email_updates": true, "title": "Leaky faucet", '
+            '"submitter_name": "Renter", '
+            '"notes": [], "assigned_to": "", '
+            '"created_at": "2024-01-01T00:00:00Z", '
+            '"updated_at": "2024-01-01T00:00:00Z"}]',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_update_ticket_raises_value_error_when_save_fails(self):
+        with patch.object(self.storage, "save_json_file", return_value=False):
+            with self.assertRaises(ValueError):
+                # Admin moves the ticket to in_progress; the email heads-up
+                # would normally go to ``renter@example.com``.
+                self.service.update_ticket(
+                    "t1", {"status": "in_progress"}, "admin@example.com"
+                )
+        # No submitter heads-up for a status change that never persisted,
+        # and no change-log entry for a mutation that never happened.
+        self.notifications.send_email.assert_not_called()
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_update_ticket_no_op_skips_save_and_returns_target(self):
+        # Baseline: a POST with the ticket's current field values hits
+        # neither the save path nor the side-effect fan-out. No save ->
+        # no ``save_json_file`` call -> no ValueError even in a disk-full
+        # world, matching the pre-fix no-op semantics.
+        with patch.object(self.storage, "save_json_file") as save:
+            result = self.service.update_ticket(
+                "t1", {"status": "open"}, "admin@example.com"
+            )
+            save.assert_not_called()
+        self.assertIsNotNone(result)
+        self.notifications.send_email.assert_not_called()
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_update_ticket_succeeds_when_save_returns_true(self):
+        # Happy path: with ``_save`` returning True (the default against a
+        # real tempdir), ``update_ticket`` returns the updated ticket, the
+        # status lands on disk, and the submitter heads-up email + change-
+        # log entry fire as before.
+        ticket = self.service.update_ticket(
+            "t1", {"status": "in_progress"}, "admin@example.com"
+        )
+        self.assertIsNotNone(ticket)
+        self.assertEqual(ticket["status"], "in_progress")
+        self.notifications.log_site_change.assert_called_once()
+
+
 class TicketServiceSavePropagatesBoolTestCase(unittest.TestCase):
     """``TicketService._save`` must return the ``save_json_file`` bool so
     callers can distinguish a durable write from a silent failure.
