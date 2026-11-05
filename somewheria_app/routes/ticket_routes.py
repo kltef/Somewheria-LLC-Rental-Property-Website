@@ -351,7 +351,19 @@ def admin_ticket_update(ticket_id: str):
     # admin sees the miss instead of a silent redirect to a broken detail
     # page. ``update_ticket`` returns None on a miss; the other ticket
     # routes (detail, add-note, toggle-email) already 404 in this case.
-    result = services.tickets.update_ticket(ticket_id, updates, _actor_email())
+    #
+    # Catch ``ValueError`` so a silent save failure (ENOSPC / EACCES / fsync
+    # error — see the new guard inside ``update_ticket``) redirects the admin
+    # back to the detail page where the still-unchanged status / priority /
+    # assignee is immediately visible, instead of crashing into the 503 crash
+    # handler. Mirrors the ``ticket_add_note`` route's ``except ValueError:
+    # pass`` shape: the failure signal is the ticket's visibly-unchanged state
+    # on the next page load, strictly better than the pre-fix "redirect +
+    # silent lie" where the submitter had already been emailed.
+    try:
+        result = services.tickets.update_ticket(ticket_id, updates, _actor_email())
+    except ValueError:
+        return redirect(url_for("ticket_detail", ticket_id=ticket_id))
     if result is None:
         return render_template("404.html", title="Ticket Not Found"), 404
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))

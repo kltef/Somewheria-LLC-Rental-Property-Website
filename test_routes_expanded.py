@@ -2631,6 +2631,30 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/tickets/abc123", response.headers["Location"])
 
+    def test_admin_ticket_update_redirects_on_save_failure(self):
+        # ``update_ticket`` raises ValueError when ``_save`` returns False on
+        # a silent write failure (ENOSPC / EACCES / fsync error). The route
+        # must catch that and redirect to the detail page where the still-
+        # unchanged status is visible to the admin, instead of crashing into
+        # the 503 crash handler which would also fire a stack-trace email to
+        # the ops inbox for what is already a logged storage error. Mirrors
+        # the ``ticket_add_note`` route's ``except ValueError: pass`` shape.
+        self.login_as("admin")
+
+        with patch.object(
+            self.services.tickets,
+            "update_ticket",
+            side_effect=ValueError("Could not save ticket update right now."),
+        ):
+            response = self.client.post(
+                "/admin/tickets/abc123",
+                data={"status": "in_progress"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/tickets/abc123", response.headers["Location"])
+
     def test_admin_ticket_list_search_survives_non_string_fields(self):
         # PR #162 guarded ``TicketService`` against non-string ticket fields,
         # but ``admin_ticket_list``'s search filter still reached for
