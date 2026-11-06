@@ -276,13 +276,31 @@ class SqlStorageService:
             cleaned[email.lower()] = role
         return cleaned
 
-    def set_user_role(self, email: str, role: str) -> None:
+    def set_user_role(self, email: str, role: str) -> bool:
+        # Return a ``bool`` so admin role writes stop lying to the admin UI
+        # when the transaction fails (disk-full, locked db, I/O error). The
+        # pre-fix shape returned ``None`` and let the exception propagate
+        # straight through the admin routes to the crash handler's empty
+        # 503 — the write never persisted AND the admin got no actionable
+        # feedback. Returning ``False`` matches the file backend's new
+        # contract and lets the /admin/dashboard, /admin/users, and
+        # /admin/registrations POSTs render a visible error instead. A
+        # ``True`` return means the row is committed (SQLite's ``COMMIT``
+        # succeeded); ``False`` means ``db.transaction()`` rolled back and
+        # the row is NOT on disk. Sibling ``delete_user_role`` already
+        # returns ``bool`` on the file backend, so this also closes a
+        # cross-backend signature mismatch on the ``set_`` side.
         email = (email or "").lower()
-        with self.db.transaction() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
-                (email, role),
-            )
+        try:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
+                    (email, role),
+                )
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to set user_role for %s in sqlite: %s", email, exc)
+            return False
 
     def delete_user_role(self, email: str) -> bool:
         email = (email or "").lower()

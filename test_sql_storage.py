@@ -52,6 +52,32 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
         roles = self.storage.get_user_roles()
         self.assertEqual(roles, {"admin@example.com": "admin"})
 
+    def test_set_user_role_returns_true_on_commit(self):
+        # API parity with the file backend's new bool contract: a durable
+        # write returns True so the admin routes can gate the "User added
+        # as X." / "Role updated to Y." success banner on an actual
+        # commit instead of lying.
+        self.assertTrue(self.storage.set_user_role("Admin@Example.com", "admin"))
+
+    def test_set_user_role_returns_false_on_sqlite_error(self):
+        # A ``db.transaction()`` that raises (locked db, I/O error) used
+        # to propagate straight through the admin routes to the crash
+        # handler's empty 503 — the write never persisted AND the admin
+        # got no actionable feedback. Returning ``False`` matches the
+        # file backend's new ``bool`` contract and lets the admin UI
+        # render a visible error instead. Mirrors the catch-and-log
+        # shape ``save_renter_contracts`` / ``save_renter_profiles``
+        # already apply on the SQL backend.
+        import unittest.mock as mock
+
+        class _Boom(Exception):
+            pass
+
+        with mock.patch.object(
+            self.storage.db, "transaction", side_effect=_Boom("locked")
+        ):
+            self.assertFalse(self.storage.set_user_role("admin@example.com", "admin"))
+
     def test_delete_user_role_records_tombstone(self):
         self.storage.set_user_role("user@example.com", "renter")
         existed = self.storage.delete_user_role("user@example.com")
