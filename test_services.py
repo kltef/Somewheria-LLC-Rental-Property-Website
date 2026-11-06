@@ -989,6 +989,25 @@ class FileStorageServiceTestCase(unittest.TestCase):
             {"admin@example.com": "admin"},
         )
 
+    def test_set_user_role_propagates_save_result(self):
+        # ``save_json_file`` returns False on ENOSPC / EACCES / fsync error
+        # (PR #201). The pre-fix shape discarded that bool and returned
+        # ``None``, so the /admin/dashboard, /admin/users, and
+        # /admin/registrations POSTs rendered "User added as X." /
+        # "Role for X updated to Y." / silently proceeded to email the
+        # user for a role write that never reached disk. Propagating the
+        # bool lets the admin routes render a visible error instead.
+        # Mirrors the surfaced-failure contract pinned by
+        # ``test_remove_pending_registration_propagates_save_result``.
+        with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
+            self.service, "save_json_file", return_value=True
+        ):
+            self.assertTrue(self.service.set_user_role("admin@example.com", "admin"))
+        with patch.object(self.service, "get_user_roles", return_value={}), patch.object(
+            self.service, "save_json_file", return_value=False
+        ):
+            self.assertFalse(self.service.set_user_role("admin@example.com", "admin"))
+
     def test_delete_user_role_returns_true_when_removed(self):
         with patch.object(self.service, "get_user_roles", return_value={"admin@example.com": "admin"}), patch.object(
             self.service,

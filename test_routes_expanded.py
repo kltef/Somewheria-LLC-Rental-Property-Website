@@ -912,6 +912,52 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         remove_pending_mock.assert_not_called()
         send_email_mock.assert_not_called()
 
+    def test_admin_registrations_approve_surfaces_set_user_role_save_failure(self):
+        # ``set_user_role`` returns False when the underlying write fails
+        # (ENOSPC / EACCES / fsync error on the file backend; a sqlite
+        # transaction error on the SQL backend). The pre-fix shape
+        # discarded that bool, so an approval with a silently-lost role
+        # grant still cleared the pending row AND emailed the user that
+        # their registration was approved — but on the next login they
+        # fell back to the env-default "guest" role with no pending row
+        # for the admin to retry against. Guarding on the bool here
+        # means the pending row stays, no email is sent, and the admin
+        # sees an actionable error. Mirrors
+        # ``test_admin_registrations_approve_surfaces_remove_pending_save_failure``
+        # for the other side of the approve flow.
+        self.login_as("admin")
+        with patch.object(
+            self.services.storage,
+            "get_pending_registrations",
+            side_effect=[
+                [{"email": "pending@example.com", "name": "Pending"}],
+                [{"email": "pending@example.com", "name": "Pending"}],
+            ],
+        ), patch.object(
+            self.services.auth, "get_user_role", return_value="guest"
+        ), patch.object(
+            self.services.storage, "set_user_role", return_value=False
+        ) as set_user_role_mock, patch.object(
+            self.services.storage, "remove_pending_registration"
+        ) as remove_pending_mock, patch.object(
+            self.services.notifications, "send_email_async"
+        ) as async_mock, patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_change_mock:
+            response = self.client.post(
+                "/admin/registrations",
+                data={"action": "approve", "email": "pending@example.com"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        set_user_role_mock.assert_called_once_with("pending@example.com", "renter")
+        # The pending row must stay and the user must not be notified:
+        # a retry after the disk pressure clears sends exactly one
+        # approval email, not a duplicate.
+        remove_pending_mock.assert_not_called()
+        async_mock.assert_not_called()
+        log_change_mock.assert_not_called()
+
     def test_admin_registrations_approve_surfaces_remove_pending_save_failure(self):
         # ``remove_pending_registration`` returns False when the underlying
         # ``save_json_file`` call fails (ENOSPC / EACCES / fsync error / a
@@ -1296,6 +1342,33 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_admin_users_update_surfaces_set_user_role_save_failure(self):
+        # ``set_user_role`` returns False when the underlying write fails
+        # (ENOSPC / EACCES / fsync error on the file backend; a sqlite
+        # transaction error on the SQL backend). The pre-fix shape
+        # discarded that bool and rendered "Role for X updated to Y."
+        # plus a ``user_role_updated`` audit entry for a write that
+        # never reached disk. Pin the surfaced failure so the admin
+        # sees an error banner and the audit log stays clean.
+        self.login_as("admin", email="admin@example.com")
+        with patch.object(
+            self.services.storage, "set_user_role", return_value=False
+        ) as set_user_role_mock, patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"user@example.com": "renter"},
+        ), patch.object(self.services.notifications, "log_site_change") as log_mock:
+            response = self.client.post(
+                "/admin/users",
+                data={"email": "user@example.com", "role": "renter", "action": "update"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Could not update role for user@example.com", response.data)
+        self.assertNotIn(b"updated to renter", response.data)
+        set_user_role_mock.assert_called_once_with("user@example.com", "renter")
+        log_mock.assert_not_called()
+
     def test_admin_users_rejects_malformed_email_on_role_assignment(self):
         # Defense-in-depth check: an admin pasting a typo'd value like "not-an-email"
         # should be rejected at the route boundary before user_roles storage is
@@ -1475,6 +1548,69 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"valid email is required", response.data)
         set_user_role_mock.assert_not_called()
+
+    def test_admin_dashboard_add_surfaces_set_user_role_save_failure(self):
+        # ``set_user_role`` returns False when the underlying write fails
+        # (ENOSPC / EACCES / fsync error on the file backend; a sqlite
+        # transaction error on the SQL backend). The pre-fix shape
+        # discarded that bool and rendered "User X added as Y." plus a
+        # ``user_added`` audit entry for a write that never reached disk.
+        # Pin the surfaced failure so the admin sees an error banner and
+        # the audit log stays clean. Mirrors
+        # ``test_admin_registrations_approve_surfaces_remove_pending_save_failure``
+        # for the other side of the add flow.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.storage, "get_user_roles", return_value={}
+        ), patch.object(
+            self.services.storage, "set_user_role", return_value=False
+        ) as set_user_role_mock, patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "add", "email": "new@example.com", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Could not add new@example.com", response.data)
+        self.assertNotIn(b"added as admin", response.data)
+        set_user_role_mock.assert_called_once_with("new@example.com", "admin")
+        log_mock.assert_not_called()
+
+    def test_admin_dashboard_update_surfaces_set_user_role_save_failure(self):
+        # Mirror of ``test_admin_dashboard_add_surfaces_set_user_role_save_failure``
+        # for the ``update`` action: a silent save failure must not render
+        # "Role for X updated to Y." or emit a ``user_role_updated`` audit
+        # entry.
+        self.login_as("high_admin", email="owner@example.com")
+        with patch.object(
+            self.services.analytics,
+            "dashboard_data",
+            return_value=({"visits": 0}, {"labels": []}),
+        ), patch.object(
+            self.services.storage,
+            "get_user_roles",
+            return_value={"user@example.com": "renter"},
+        ), patch.object(
+            self.services.storage, "set_user_role", return_value=False
+        ) as set_user_role_mock, patch.object(
+            self.services.notifications, "log_site_change"
+        ) as log_mock:
+            response = self.client.post(
+                "/admin/dashboard",
+                data={"action": "update", "email": "user@example.com", "role": "admin"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Could not update role for user@example.com", response.data)
+        self.assertNotIn(b"updated to admin", response.data)
+        set_user_role_mock.assert_called_once_with("user@example.com", "admin")
+        log_mock.assert_not_called()
 
     def test_admin_dashboard_excludes_revoked_users_from_summary(self):
         # A "revoked" tombstone is a deleted user kept only so an env role

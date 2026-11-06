@@ -229,11 +229,25 @@ class FileStorageService:
             cleaned[email.lower()] = role
         return cleaned
 
-    def set_user_role(self, email: str, role: str) -> None:
+    def set_user_role(self, email: str, role: str) -> bool:
+        # Propagate ``save_json_file``'s bool so admin role writes stop
+        # lying to the admin UI when the underlying write fails (ENOSPC /
+        # EACCES / fsync error). The pre-fix shape discarded the return
+        # and let every caller — the /admin/dashboard add + update forms,
+        # the /admin/users update form, the /admin/registrations approve
+        # action — render "User added as X." / "Role for X updated to Y."
+        # / silently proceed to email the user, for a role write that
+        # never reached disk. On the next process restart the role was
+        # gone, the ex-approved user could not log in, and the audit log
+        # recorded a role grant that never happened. Mirrors the surfaced-
+        # failure contract PRs #201 / #203 / #206 applied to
+        # ``save_json_file`` / ``save_renter_profiles`` / ``save_renter_contracts``
+        # / ``remove_pending_registration``, and the ``bool`` already
+        # returned by sibling ``delete_user_role``.
         with self.file_lock:
             roles = self.get_user_roles()
             roles[email.lower()] = role
-            self.save_json_file(self.config.user_roles_file, roles)
+            return self.save_json_file(self.config.user_roles_file, roles)
 
     def delete_user_role(self, email: str) -> bool:
         email = email.lower()

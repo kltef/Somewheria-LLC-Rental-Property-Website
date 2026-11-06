@@ -572,8 +572,16 @@ def admin_dashboard_combined():
                 error = "Invalid role."
             elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
+            elif not services.storage.set_user_role(email, new_role):
+                # Surface a storage failure (ENOSPC / EACCES / fsync error
+                # on the file backend; a transaction error on the SQL
+                # backend) instead of rendering "Role for X updated to Y."
+                # for a write that never reached disk and emitting a
+                # ``user_role_updated`` audit entry that never happened.
+                # Mirrors the surfaced-failure contract PR #206 applied to
+                # ``remove_pending_registration``.
+                error = f"Could not update role for {email}. Please retry."
             else:
-                services.storage.set_user_role(email, new_role)
                 success = f"Role for {email} updated to {new_role}."
                 services.notifications.log_site_change(
                     actor_email,
@@ -609,8 +617,13 @@ def admin_dashboard_combined():
                 error = "Invalid role."
             elif not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
+            elif not services.storage.set_user_role(email, new_role):
+                # See the ``update`` branch: surface a storage failure
+                # instead of lying with "User X added as Y." and emitting
+                # a ``user_added`` audit entry for a row that is not on
+                # disk.
+                error = f"Could not add {email}. Please retry."
             else:
-                services.storage.set_user_role(email, new_role)
                 success = f"User {email} added as {new_role}."
                 services.notifications.log_site_change(
                     actor_email,
@@ -753,7 +766,27 @@ def admin_registrations():
             # "renter" here would silently demote an env-configured admin
             # who somehow landed in the pending list.
             if role_rank(services.auth.get_user_role(email)) < role_rank("renter"):
-                services.storage.set_user_role(email, "renter")
+                if not services.storage.set_user_role(email, "renter"):
+                    # Surface a storage failure here BEFORE we remove the
+                    # pending row or notify the user. Without this gate, a
+                    # disk-full / EACCES / fsync error silently drops the
+                    # role grant while the pending row is still cleared
+                    # and the user is told their registration was
+                    # approved — on the next log-in they're still at the
+                    # env-fallback "guest" role, with no stored role and
+                    # no pending row for the admin to retry against.
+                    # Mirrors the surfaced-failure contract applied below
+                    # for ``remove_pending_registration``.
+                    pending = services.storage.get_pending_registrations()
+                    return render_template(
+                        "admin_registrations.html",
+                        pending=pending,
+                        title="Pending Registrations",
+                        error=(
+                            f"Could not approve {email}. "
+                            "Please retry; the user has not been notified."
+                        ),
+                    )
             # Surface a storage failure instead of emailing the user and
             # logging the decision for a pending row that never cleared.
             # Without this gate, a disk-full / EACCES / fsync error silently
@@ -860,8 +893,15 @@ def admin_users():
                 error = "A valid email is required."
             elif not _can_act_on(actor_role, target_role) or not _can_assign(actor_role, new_role):
                 error = "You cannot assign a role at or above your own."
+            elif not services.storage.set_user_role(email, new_role):
+                # Mirror the /admin/dashboard update branch: surface a
+                # storage failure (ENOSPC / EACCES / fsync error on the
+                # file backend, a transaction error on SQL) instead of
+                # lying with "Role for X updated to Y." and emitting a
+                # ``user_role_updated`` audit entry for a row that is not
+                # on disk.
+                error = f"Could not update role for {email}. Please retry."
             else:
-                services.storage.set_user_role(email, new_role)
                 success = f"Role for {email} updated to {new_role}."
                 services.notifications.log_site_change(
                     actor_email,
