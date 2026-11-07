@@ -267,13 +267,32 @@ class SqlStorageService:
         # the role but can't log in as that user. Later entries win per
         # lowered key, mirroring PR #188's merge-not-clobber contract on
         # ``get_renter_contracts`` and PR #189's on ``get_renter_profiles``.
+        #
+        # ``.strip()`` the normalized key and drop rows whose key normalizes
+        # to the empty string, matching the file-backend treatment and the
+        # equivalent guards on ``get_renter_profiles`` / ``get_renter_contracts``.
+        # A raw-SQL row keyed as ``" alice@example.com "`` is otherwise
+        # unreachable from the ``AuthService.get_user_role`` lookup (whose
+        # lower()-only key carries no whitespace) while still surfacing
+        # through ``all_user_roles`` to ``/admin/users`` — admins see the
+        # role but no OAuth login matches it. A ``""`` key is the more
+        # pointed hazard: it closes the same cross-session leak path that
+        # PRs #198 / #199 fixed for profiles and contracts. A broken
+        # session whose ``current_user_email()`` resolves to ``""``
+        # (``_refresh_session_role`` keeps the cached role on a storage
+        # failure per PR #175) can still exercise admin / renter call sites
+        # that reach for ``get_user_role`` and would otherwise match an
+        # arbitrarily-elevated ``""``-keyed row.
         cleaned: dict = {}
         for row in rows:
             email = row["email"]
             role = row["role"]
             if not isinstance(email, str) or not isinstance(role, str):
                 continue
-            cleaned[email.lower()] = role
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
+            cleaned[normalized] = role
         return cleaned
 
     def set_user_role(self, email: str, role: str) -> bool:

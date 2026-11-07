@@ -178,6 +178,73 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
             },
         )
 
+    def test_get_user_roles_strips_whitespace_from_email_keys(self):
+        # ``set_user_role`` lowercases but does NOT strip on write, so in
+        # production a stored row never carries whitespace — but a raw-SQL
+        # insert / pre-normalization migration can still carry a key like
+        # ``" alice@example.com "`` that ``AuthService.get_user_role`` can
+        # never reach (its lookup email is ``.strip().lower()``-ed by every
+        # call site). The row sits in the table while ``all_user_roles``
+        # still surfaces it to ``/admin/users`` under the leading-space key —
+        # admins can SEE the role but no OAuth login matches it. Rows that
+        # differ only in whitespace/case merge under the same stripped+lowered
+        # key (last-wins), mirroring the file-backend guard and the
+        # ``get_renter_profiles`` / ``get_renter_contracts`` contract.
+        self.storage.set_user_role("alice@example.com", "renter")
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                (" alice@example.com ", "admin"),
+            )
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("\tbob@example.com\n", "high_admin"),
+            )
+        loaded = self.storage.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                # alice: lowered + whitespace-wrapped; the raw-SQL row was
+                # written after the set_user_role call, so per last-wins
+                # under the same stripped+lowered key it carries ``admin``.
+                "alice@example.com": "admin",
+                "bob@example.com": "high_admin",
+            },
+        )
+
+    def test_get_user_roles_drops_empty_string_email_key(self):
+        # Mirrors ``test_get_renter_profiles_drops_empty_string_email_key``
+        # and ``test_get_renter_contracts_drops_empty_string_email_key``:
+        # a raw-SQL row keyed as ``""`` (or whitespace-only) would otherwise
+        # be reachable by any broken session whose ``current_user_email()``
+        # resolves to ``""``. ``_refresh_session_role`` keeps the cached
+        # role on a storage failure (PR #175), so such a session can still
+        # exercise ``admin_dashboard_combined`` / ``admin_users`` /
+        # ``admin_registrations`` call sites that reach for
+        # ``AuthService.get_user_role``. Without the drop, a tampered
+        # ``""``-keyed role row could silently grant elevated privileges to
+        # any broken session. The next legitimate write cleans the row off
+        # disk because the saved map doesn't carry the key.
+        self.storage.set_user_role("admin@example.com", "admin")
+        self.storage.set_user_role("renter@example.com", "renter")
+        with self.storage.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("", "high_admin"),
+            )
+            conn.execute(
+                "INSERT INTO user_roles(email, role) VALUES (?, ?)",
+                ("   ", "admin"),
+            )
+        loaded = self.storage.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                "admin@example.com": "admin",
+                "renter@example.com": "renter",
+            },
+        )
+
 
 class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
     def test_add_and_get(self):

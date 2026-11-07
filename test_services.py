@@ -953,6 +953,69 @@ class FileStorageServiceTestCase(unittest.TestCase):
             },
         )
 
+    def test_get_user_roles_strips_whitespace_from_email_keys(self):
+        # ``set_user_role`` lowercases but does NOT strip on write, so in
+        # production a stored key never carries whitespace — but a legacy /
+        # hand-edited ``user_roles.json`` row keyed as
+        # ``" Alice@Example.com "`` is otherwise unreachable from
+        # ``AuthService.get_user_role``, whose lookup email is
+        # ``.strip().lower()``-ed by every call site (``current_user_email``,
+        # the admin-form ``.strip().lower()``, the OAuth callback). The
+        # mixed-case / whitespace row sits in the file as dead weight while
+        # ``all_user_roles`` still surfaces it to ``/admin/users`` under the
+        # leading-space key, so admins can SEE the role but no OAuth login
+        # ever matches it. Rows that differ only in whitespace/case merge
+        # under the same stripped+lowered key (last-wins), mirroring the
+        # merge-not-clobber contract ``get_renter_profiles`` /
+        # ``get_renter_contracts`` already enforce.
+        raw = {
+            " alice@example.com ": "admin",
+            "ALICE@example.com": "renter",
+            "\tbob@example.com\n": "high_admin",
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                "alice@example.com": "renter",
+                "bob@example.com": "high_admin",
+            },
+        )
+
+    def test_get_user_roles_drops_empty_string_email_key(self):
+        # Mirrors ``test_get_renter_profiles_drops_empty_string_email_key``
+        # (PR #198) and ``test_get_renter_contracts_drops_empty_string_email_key``
+        # (PR #199): a hand-edited ``""``- or whitespace-keyed role row
+        # would otherwise be reachable by any broken session whose
+        # ``current_user_email()`` resolves to ``""``. ``_refresh_session_role``
+        # (PR #175) keeps the cached ``renter`` / ``admin`` role on a
+        # storage failure, so such a session can still exercise call sites
+        # that call ``AuthService.get_user_role`` directly or indirectly
+        # (``admin_dashboard_combined`` / ``admin_users`` /
+        # ``admin_registrations``) — if those lookups matched a ``""``-keyed
+        # row with an arbitrary role, a corrupted / hand-edited file could
+        # silently grant elevated privileges across any broken session.
+        # Dropping ``""`` on read makes the row unreachable through
+        # legitimate lookups, and the next legitimate write (``set_user_role``
+        # / ``delete_user_role``) cleans it off disk because the saved map
+        # doesn't carry the key.
+        raw = {
+            "admin@example.com": "admin",
+            "": "high_admin",
+            "   ": "admin",
+            "renter@example.com": "renter",
+        }
+        with patch.object(self.service, "load_json_file", return_value=raw):
+            loaded = self.service.get_user_roles()
+        self.assertEqual(
+            loaded,
+            {
+                "admin@example.com": "admin",
+                "renter@example.com": "renter",
+            },
+        )
+
     def test_get_hidden_listing_ids_drops_non_string_and_empty_entries(self):
         # ``expected_type=list`` verifies the outer container but not each
         # entry. A hand-edited / corrupted ``hidden_listings.json`` can slip

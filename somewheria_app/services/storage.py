@@ -222,11 +222,36 @@ class FileStorageService:
         # couldn't act on it with that account. Later entries win per
         # lowered key, mirroring PR #188's merge-not-clobber contract for
         # ``get_renter_contracts`` and PR #189's for ``get_renter_profiles``.
+        #
+        # ``.strip()`` on the normalized key AND drop rows whose key
+        # normalizes to the empty string, mirroring the same treatment
+        # ``get_renter_profiles`` (PR #198) and ``get_renter_contracts``
+        # (PR #199) apply. A hand-edited row keyed as ``" alice@example.com "``
+        # is otherwise unreachable from ``AuthService.get_user_role``, whose
+        # ``email.lower()`` lookup key carries no whitespace: the mixed-case
+        # row sits in the file as dead weight while ``all_user_roles`` still
+        # surfaces it to ``/admin/users`` under the leading-space key — an
+        # admin can SEE the role but no OAuth login can ever match it. The
+        # empty-string key closes the same cross-session leak path PRs #198 /
+        # #199 fixed for profiles and contracts: a legacy / hand-edited row
+        # keyed as ``""`` would be reachable from any broken session whose
+        # ``current_user_email()`` resolves to ``""`` (``_refresh_session_role``
+        # per PR #175 keeps the cached ``renter`` / ``admin`` role on a
+        # storage failure, so such a session can still exercise call sites
+        # like ``admin_registrations`` / ``admin_users`` /
+        # ``admin_dashboard_combined`` that reach for ``get_user_role``).
+        # Dropping ``""`` on read makes the row unreachable through
+        # legitimate lookups, and the next legitimate ``set_user_role`` /
+        # ``delete_user_role`` call (which doesn't carry the key) cleans it
+        # off disk.
         cleaned: dict = {}
         for email, role in raw.items():
             if not isinstance(email, str) or not isinstance(role, str):
                 continue
-            cleaned[email.lower()] = role
+            normalized = email.lower().strip()
+            if not normalized:
+                continue
+            cleaned[normalized] = role
         return cleaned
 
     def set_user_role(self, email: str, role: str) -> bool:
