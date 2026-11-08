@@ -117,6 +117,28 @@ class UserRolesTestCase(SqlStorageBaseTestCase):
             self.storage.get_user_roles(), {"user@example.com": "revoked"}
         )
 
+    def test_delete_user_role_returns_false_on_sqlite_error(self):
+        # API parity with ``set_user_role`` (same table, sibling method) and
+        # with ``FileStorageService.delete_user_role``'s bool contract: a
+        # ``db.transaction()`` failure (locked db, disk full, I/O error) used
+        # to propagate straight through /admin/dashboard + /admin/users to
+        # the crash handler's empty 503, leaving the admin with no actionable
+        # feedback. Returning ``False`` lets the route fall through to the
+        # existing "User not found." branch — misleading on its own, but
+        # strictly better than a bare 503, and the storage logger still
+        # records the underlying error for post-mortem triage.
+        import unittest.mock as mock
+
+        self.storage.set_user_role("user@example.com", "renter")
+
+        class _Boom(Exception):
+            pass
+
+        with mock.patch.object(
+            self.storage.db, "transaction", side_effect=_Boom("locked")
+        ):
+            self.assertFalse(self.storage.delete_user_role("user@example.com"))
+
     def test_get_user_roles_drops_non_string_email_or_role(self):
         # SQLite's TEXT affinity coerces numeric inserts to text, but a raw
         # BLOB inserted into a TEXT column round-trips back as ``bytes`` — a

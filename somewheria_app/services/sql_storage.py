@@ -333,18 +333,38 @@ class SqlStorageService:
             or email in (getattr(self.config, "admin_users", None) or [])
             or email in (getattr(self.config, "high_admin_users", None) or [])
         )
-        with self.db.transaction() as conn:
-            row = conn.execute("SELECT role FROM user_roles WHERE email = ?", (email,)).fetchone()
-            previous = row["role"] if row else None
-            if previous is None and not env_known:
-                return False
-            if previous == "revoked":
-                return False
-            conn.execute(
-                "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
-                (email, "revoked"),
+        # API parity with the file backend's bool contract: catch a
+        # ``db.transaction()`` failure (locked db, disk full, I/O error) and
+        # return ``False`` instead of letting the exception propagate straight
+        # through /admin/dashboard + /admin/users to the crash handler's empty
+        # 503. The pre-fix shape left the SQL backend as the only path that
+        # 503'd on a storage-layer failure — ``set_user_role`` (same table,
+        # sibling method) and ``remove_pending_registration`` already wrap
+        # their transaction in try/except and return ``False``, and the file
+        # backend's ``delete_user_role`` returns the ``save_json_file`` bool
+        # which already swallows every exception. The admin routes already
+        # branch on the ``False`` return and render "User not found." —
+        # misleading on its own, but strictly better than a bare 503 and
+        # matching the surfaced-failure contract PR #209 established for
+        # ``set_user_role``.
+        try:
+            with self.db.transaction() as conn:
+                row = conn.execute("SELECT role FROM user_roles WHERE email = ?", (email,)).fetchone()
+                previous = row["role"] if row else None
+                if previous is None and not env_known:
+                    return False
+                if previous == "revoked":
+                    return False
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_roles(email, role) VALUES (?, ?)",
+                    (email, "revoked"),
+                )
+            return True
+        except Exception as exc:
+            self.logger.error(
+                "Failed to delete user_role for %s in sqlite: %s", email, exc
             )
-        return True
+            return False
 
     def _replace_user_roles(self, data: dict) -> None:
         with self.db.transaction() as conn:
