@@ -1644,6 +1644,41 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         time_module.sleep(0.1)  # give any racing extra threads a chance to land
         self.assertEqual(len(send_calls), 1)
 
+    def test_crash_handler_bumps_dashboard_error_counter(self):
+        # Regression: unhandled exceptions used to never touch
+        # ``AnalyticsTracker.errors``. ``log_and_notify_error`` call sites
+        # (OAuth error, save error, Zillow sync failure) record one per
+        # event, but a real crash — the single most important signal on
+        # /admin/dashboard — slipped past the counter because the handler
+        # only emailed and logged. The dashboard's "errors_last_24h" tile
+        # highlights red on ``> 0``; a sustained 503 outage would still
+        # read "0" there, defeating the one at-a-glance health check an
+        # operator reaches for. The counter is also what feeds the
+        # analytics chart's errors series.
+        import datetime as dt_module
+
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/kaboom")
+        def kaboom_view():
+            raise RuntimeError("kaboom")
+
+        services = app.extensions["somewheria_services"]
+        services.notifications.send_email = lambda *_a, **_kw: True
+
+        today = dt_module.date.today().isoformat()
+        baseline = services.analytics.errors.get(today, 0)
+
+        client = app.test_client()
+        self.assertEqual(client.get("/kaboom").status_code, 503)
+        self.assertEqual(client.get("/kaboom").status_code, 503)
+
+        # Two crashes -> two counted errors (email cooldown is unrelated to
+        # the counter — it only suppresses duplicate SMTP sends).
+        self.assertEqual(services.analytics.errors.get(today, 0), baseline + 2)
+
     def test_session_role_refresh_survives_storage_failure(self):
         # ``_refresh_session_role`` runs as a before_request on EVERY page.
         # A raise from ``auth.get_user_role`` (SQLite corruption, a transient
