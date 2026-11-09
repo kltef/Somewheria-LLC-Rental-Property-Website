@@ -491,7 +491,30 @@ class TicketService:
                 if ticket.get("email_updates") != new_value:
                     ticket["email_updates"] = new_value
                     ticket["updated_at"] = _now_iso()
-                    self._save(tickets)
+                    # Surface a failed save as a ValueError BEFORE emitting the
+                    # ``ticket_email_updates_toggled`` change-log entry. ``_save``
+                    # returns False on a silent write failure (ENOSPC / EACCES /
+                    # fsync error on the file backend; a transaction error on
+                    # the SQL backend); the pre-fix shape discarded that bool
+                    # and let the audit log record a toggle that never reached
+                    # disk. On the next request ``_load`` would read the pre-
+                    # toggle value back from disk, so the renter's "email
+                    # updates" preference silently reverted while
+                    # ``site_changes.log`` claimed it had flipped — the exact
+                    # lie the ``save_json_file`` bool contract (PR #201) was
+                    # added to prevent. ``ticket_toggle_email`` already catches
+                    # ValueError (via the added guard there) and silently
+                    # redirects back to the detail page, where the still-
+                    # unchanged toggle is immediately visible. Mirrors the
+                    # surfaced-failure contract PRs #202 (``create_ticket``),
+                    # #204 (``add_photo``), #207 (``add_note``), and #208
+                    # (``update_ticket``) applied to the sibling write paths
+                    # on this service.
+                    if not self._save(tickets):
+                        raise ValueError(
+                            "Could not save email-updates preference right now. "
+                            "Please try again."
+                        )
                     changed = True
                 break
         if target is None:

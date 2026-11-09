@@ -278,7 +278,18 @@ def ticket_toggle_email(ticket_id: str):
     if not _is_admin() and not _is_ticket_submitter(ticket, _actor_email()):
         return render_template("403.html", title="Forbidden"), 403
     enabled = bool(request.form.get("email_updates"))
-    services.tickets.set_email_updates(ticket_id, enabled, _actor_email())
+    # Catch ``ValueError`` so a silent save failure (ENOSPC / EACCES / fsync
+    # error — see the new guard inside ``set_email_updates``) redirects back
+    # to the detail page where the still-unchanged toggle is immediately
+    # visible, instead of crashing into the 503 crash handler. Mirrors the
+    # ``admin_ticket_update`` route's ``except ValueError`` shape: the
+    # failure signal is the preference's visibly-unchanged state on the
+    # next page load, strictly better than the pre-fix "redirect + silent
+    # audit-log lie".
+    try:
+        services.tickets.set_email_updates(ticket_id, enabled, _actor_email())
+    except ValueError:
+        pass
     return redirect(url_for("ticket_detail", ticket_id=ticket_id))
 
 
