@@ -4263,6 +4263,84 @@ class TicketUpdateSurfacesSaveFailureTestCase(unittest.TestCase):
         self.notifications.log_site_change.assert_called_once()
 
 
+class TicketSetEmailUpdatesSurfacesSaveFailureTestCase(unittest.TestCase):
+    """Regression: a silent ``_save`` failure inside ``set_email_updates`` must
+    not append a ``ticket_email_updates_toggled`` change-log row.
+
+    ``FileStorageService.save_json_file`` returns ``False`` on a durable-
+    write failure (ENOSPC / EACCES / fsync error). Before this guard
+    ``set_email_updates`` discarded that bool: the toggle was flipped on
+    the in-memory row, ``notifications.log_site_change`` appended a
+    ``ticket_email_updates_toggled`` entry, and the route redirected the
+    user to the detail page — where the pre-toggle value would be
+    immediately visible on the next request because nothing reached disk.
+    The audit-log row, however, could not be unsent, and a reviewer walking
+    the change log would see a mutation that never happened. Mirrors the
+    surfaced-failure contract PRs #202 (``create_ticket``), #204
+    (``add_photo``), #207 (``add_note``), and #208 (``update_ticket``)
+    applied to the sibling write paths on this service.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        # One pre-existing ticket so ``set_email_updates`` reaches the save
+        # path when the toggle flips from on to off.
+        self.tickets_path.write_text(
+            '[{"id": "t1", "status": "open", "priority": "normal", '
+            '"submitted_by": "renter@example.com", '
+            '"email_updates": true, "title": "Leaky faucet", '
+            '"submitter_name": "Renter", '
+            '"notes": [], "created_at": "2024-01-01T00:00:00Z", '
+            '"updated_at": "2024-01-01T00:00:00Z"}]',
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.service = TicketService(self.config, self.storage, self.notifications)
+
+    def test_set_email_updates_raises_value_error_when_save_fails(self):
+        with patch.object(self.storage, "save_json_file", return_value=False):
+            with self.assertRaises(ValueError):
+                # Flip the pre-existing ``True`` to ``False`` so the method
+                # reaches the save path (a no-op POST would short-circuit
+                # before ``_save`` ran at all).
+                self.service.set_email_updates(
+                    "t1", enabled=False, actor_email="renter@example.com"
+                )
+        # No change-log entry for a toggle that never persisted.
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_set_email_updates_no_op_skips_save_and_returns_target(self):
+        # Baseline: a POST with the ticket's current value hits neither the
+        # save path nor the change-log side effect, so no ValueError even
+        # in a disk-full world. Matches the pre-fix no-op semantics the
+        # ``TicketSetEmailUpdatesTestCase`` suite already locks in.
+        with patch.object(self.storage, "save_json_file") as save:
+            result = self.service.set_email_updates(
+                "t1", enabled=True, actor_email="renter@example.com"
+            )
+            save.assert_not_called()
+        self.assertIsNotNone(result)
+        self.notifications.log_site_change.assert_not_called()
+
+    def test_set_email_updates_succeeds_when_save_returns_true(self):
+        # Happy path: with ``_save`` returning True (the default against a
+        # real tempdir), ``set_email_updates`` returns the updated ticket,
+        # the preference lands on disk, and the change-log entry fires as
+        # before.
+        ticket = self.service.set_email_updates(
+            "t1", enabled=False, actor_email="renter@example.com"
+        )
+        self.assertIsNotNone(ticket)
+        self.assertFalse(ticket["email_updates"])
+        self.notifications.log_site_change.assert_called_once()
+
+
 class TicketServiceSavePropagatesBoolTestCase(unittest.TestCase):
     """``TicketService._save`` must return the ``save_json_file`` bool so
     callers can distinguish a durable write from a silent failure.
