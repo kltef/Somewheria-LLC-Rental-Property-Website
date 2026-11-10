@@ -1046,7 +1046,27 @@ class PropertyService:
             raise RuntimeError("No storage service configured; cannot hide listings.")
         if not self.get_property(property_id):
             raise KeyError("Property not found")
-        self.storage.set_listing_hidden(property_id, not active)
+        if not self.storage.set_listing_hidden(property_id, not active):
+            # Surface a storage failure (ENOSPC / EACCES / fsync error on
+            # the file backend; a transaction error on the SQL backend)
+            # BEFORE logging a ``property_reactivated`` / ``property_deactivated``
+            # audit entry and letting the route render a success redirect
+            # for a hidden-set change that never reached disk. Without
+            # this gate, admin clicks "Deactivate" on a listing, sees the
+            # expected redirect, and ``log_site_change`` records a
+            # deactivation — but the hidden-set write was lost, so on the
+            # next process restart the public /for-rent page keeps
+            # serving the listing. ``toggle_active`` catches the
+            # resulting ``RuntimeError`` and renders the generic
+            # "Operation failed. Please try again." 500 so the admin
+            # retries instead of trusting the audit entry. Mirrors the
+            # surfaced-failure contract PRs #201 / #203 / #206 / #209
+            # applied to ``save_json_file`` / ``save_renter_profiles`` /
+            # ``save_renter_contracts`` / ``remove_pending_registration`` /
+            # ``set_user_role``.
+            raise RuntimeError(
+                f"Failed to persist hidden-listing state for {property_id}."
+            )
         self.notifications.log_site_change(
             actor_email,
             "property_reactivated" if active else "property_deactivated",
@@ -1078,7 +1098,30 @@ class PropertyService:
         # the upstream ever re-issues the same UUID the "new" listing would
         # be silently hidden from the public site with no UI trace.
         if self.storage is not None:
-            self.storage.set_listing_hidden(property_id, False)
+            if not self.storage.set_listing_hidden(property_id, False):
+                # The upstream row is already gone and the local cache is
+                # already rewritten — raising here would mislead the admin
+                # into retrying a delete that did succeed. But a lost
+                # tombstone-clear is exactly the long-term hazard the
+                # block above exists to prevent (a recycled upstream UUID
+                # silently hidden from the public site with no UI trace),
+                # so surface it as an admin alert instead of swallowing
+                # it. Mirrors the surfaced-failure contract PRs #201 /
+                # #203 / #206 / #209 applied elsewhere; the difference
+                # here is that the main action (upstream DELETE) has
+                # already committed, so we log + notify rather than
+                # raise. ``log_and_notify_error`` is rate-limited per
+                # (subject, path) fingerprint, so a sustained disk-full
+                # event won't flood the admin inbox.
+                self.notifications.log_and_notify_error(
+                    "Hidden-listing tombstone cleanup failed",
+                    (
+                        f"delete_property succeeded for {property_id} but "
+                        "clearing the hidden-listings tombstone failed; a "
+                        "stale entry may remain and would silently hide a "
+                        "future upstream UUID collision."
+                    ),
+                )
         self.notifications.log_site_change(actor_email, "property_deleted", {"property_id": property_id})
         self._safe_zillow_publish("publish_delete", property_id)
 

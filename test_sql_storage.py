@@ -986,6 +986,36 @@ class HiddenListingsTestCase(SqlStorageBaseTestCase):
             self.storage.get_hidden_listing_ids(), ["fresh-1", "fresh-2"]
         )
 
+    def test_set_listing_hidden_returns_true_on_commit(self):
+        # API parity with the file backend's new bool contract: a
+        # durable write returns True so
+        # ``PropertyService.set_listing_active`` / ``delete_property``
+        # can gate ``property_deactivated`` / ``property_reactivated`` /
+        # the tombstone-clear alert on an actual commit instead of
+        # lying to the admin UI on a transaction error.
+        self.assertTrue(self.storage.set_listing_hidden("prop-1", True))
+        self.assertTrue(self.storage.set_listing_hidden("prop-1", False))
+
+    def test_set_listing_hidden_returns_false_on_sqlite_error(self):
+        # A ``db.transaction()`` that raises (locked db, I/O error)
+        # used to propagate straight through
+        # ``PropertyService.set_listing_active`` to the crash handler's
+        # empty 503 — the write never persisted AND the admin got no
+        # actionable feedback. Returning ``False`` matches the file
+        # backend's new ``bool`` contract and lets the admin UI render
+        # "Operation failed. Please try again." via the route's
+        # generic ``except Exception``. Mirrors the catch-and-log
+        # shape ``set_user_role`` already applies (PR #209).
+        import unittest.mock as mock
+
+        class _Boom(Exception):
+            pass
+
+        with mock.patch.object(
+            self.storage.db, "transaction", side_effect=_Boom("locked")
+        ):
+            self.assertFalse(self.storage.set_listing_hidden("prop-1", True))
+
     def test_get_hidden_listing_ids_drops_non_string_and_empty_rows(self):
         # ``set_listing_hidden`` and ``_replace_hidden_listings`` both coerce
         # to ``str(...)`` before insert, so the write path never produces
