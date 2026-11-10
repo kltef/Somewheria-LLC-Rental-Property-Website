@@ -452,7 +452,22 @@ class FileStorageService:
         # roles, pending registrations, lead captures, and profiles.
         return [item for item in ids if isinstance(item, str) and item]
 
-    def set_listing_hidden(self, property_id: str, hidden: bool) -> None:
+    def set_listing_hidden(self, property_id: str, hidden: bool) -> bool:
+        # Propagate ``save_json_file``'s bool so admin deactivate /
+        # reactivate / delete writes stop lying to the admin UI when the
+        # underlying write fails (ENOSPC / EACCES / fsync error). The
+        # pre-fix shape discarded the return and let callers in
+        # ``PropertyService.set_listing_active`` and ``delete_property``
+        # emit ``property_deactivated`` / ``property_reactivated`` /
+        # ``property_deleted`` audit entries and render a success redirect
+        # for a hidden-listing write that never reached disk. On the next
+        # process restart the hidden set was gone, the public /for-rent
+        # page served a listing the admin had just "hidden", and the audit
+        # log recorded a hide/show that never happened. Mirrors the
+        # surfaced-failure contract PRs #201 / #203 / #206 / #209 applied
+        # to ``save_json_file`` / ``save_renter_profiles`` /
+        # ``save_renter_contracts`` / ``remove_pending_registration`` /
+        # ``set_user_role``.
         property_id = str(property_id)
         with self.file_lock:
             ids = self.get_hidden_listing_ids()
@@ -461,7 +476,7 @@ class FileStorageService:
                     ids.append(property_id)
             else:
                 ids = [item for item in ids if item != property_id]
-            self.save_json_file(self.config.hidden_listings_file, ids)
+            return self.save_json_file(self.config.hidden_listings_file, ids)
 
     def get_renter_contracts(self) -> dict:
         raw = self.load_json_file(self.config.contracts_file, {}, expected_type=dict)

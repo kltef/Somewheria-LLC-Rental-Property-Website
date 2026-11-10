@@ -648,18 +648,35 @@ class SqlStorageService:
             if isinstance(row["property_id"], str) and row["property_id"]
         ]
 
-    def set_listing_hidden(self, property_id: str, hidden: bool) -> None:
+    def set_listing_hidden(self, property_id: str, hidden: bool) -> bool:
+        # API parity with the file backend's new ``bool`` contract. A
+        # ``True`` return means the row is committed (SQLite's ``COMMIT``
+        # succeeded); ``False`` means ``db.transaction()`` rolled back
+        # and the hidden-set change is NOT on disk. Lets
+        # ``PropertyService.set_listing_active`` / ``delete_property``
+        # gate their ``property_deactivated`` / ``property_reactivated``
+        # audit entry and success redirect on an actual commit instead
+        # of lying to the admin UI on a transaction error. Matches the
+        # catch-and-log shape ``set_user_role`` already applies (PR
+        # #209).
         property_id = str(property_id)
-        with self.db.transaction() as conn:
-            if hidden:
-                conn.execute(
-                    "INSERT OR REPLACE INTO hidden_listings(property_id) VALUES (?)",
-                    (property_id,),
-                )
-            else:
-                conn.execute(
-                    "DELETE FROM hidden_listings WHERE property_id = ?", (property_id,)
-                )
+        try:
+            with self.db.transaction() as conn:
+                if hidden:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO hidden_listings(property_id) VALUES (?)",
+                        (property_id,),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM hidden_listings WHERE property_id = ?", (property_id,)
+                    )
+            return True
+        except Exception as exc:
+            self.logger.error(
+                "Failed to set hidden_listing for %s in sqlite: %s", property_id, exc
+            )
+            return False
 
     def _replace_hidden_listings(self, data: list) -> None:
         with self.db.transaction() as conn:

@@ -271,6 +271,26 @@ class FileStorageServiceTestCase(unittest.TestCase):
 
         save_json_mock.assert_called_once_with(self.config.hidden_listings_file, ["prop-2"])
 
+    def test_set_listing_hidden_propagates_save_result(self):
+        # ``save_json_file`` returns False on ENOSPC / EACCES / fsync error
+        # (PR #201). The pre-fix shape discarded that bool and returned
+        # ``None``, so ``PropertyService.set_listing_active`` emitted a
+        # ``property_deactivated`` / ``property_reactivated`` audit entry
+        # and let the route render a success redirect for a hidden-set
+        # write that never reached disk. Propagating the bool lets
+        # ``set_listing_active`` raise instead so the admin sees
+        # "Operation failed. Please try again." and retries. Mirrors the
+        # surfaced-failure contract pinned by
+        # ``test_set_user_role_propagates_save_result``.
+        with patch.object(
+            self.service, "get_hidden_listing_ids", return_value=[]
+        ), patch.object(self.service, "save_json_file", return_value=True):
+            self.assertTrue(self.service.set_listing_hidden("prop-1", True))
+        with patch.object(
+            self.service, "get_hidden_listing_ids", return_value=[]
+        ), patch.object(self.service, "save_json_file", return_value=False):
+            self.assertFalse(self.service.set_listing_hidden("prop-1", True))
+
     def test_add_pending_registration_appends_and_saves(self):
         with patch.object(self.service, "get_pending_registrations", return_value=[{"email": "keep@example.com"}]), patch.object(
             self.service,
@@ -1837,6 +1857,35 @@ class PropertyServiceTestCase(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.service.set_listing_active("ghost", active=False, actor_email="admin@example.com")
 
+    def test_set_listing_active_surfaces_set_listing_hidden_failure(self):
+        # ``set_listing_hidden`` returns False on ENOSPC / EACCES / fsync
+        # error on the file backend (and a transaction error on the SQL
+        # backend). The pre-fix shape discarded that bool and fell
+        # through to ``log_site_change`` — admin clicks "Deactivate",
+        # sees the expected redirect, and the audit log records a
+        # deactivation, but the hidden-set write was lost and on the
+        # next process restart the public /for-rent page keeps serving
+        # the listing. Pin the surfaced failure here so the route's
+        # generic ``except Exception`` catches the ``RuntimeError`` and
+        # the admin sees "Operation failed. Please try again."
+        # Mirrors ``test_admin_registrations_approve_surfaces_set_user_role_save_failure``
+        # for the hide/show side of the admin listings UI.
+        self.service.cache = [{"id": "prop-1"}]
+        storage = Mock()
+        storage.set_listing_hidden.return_value = False
+        self.service.storage = storage
+
+        with self.assertRaises(RuntimeError):
+            self.service.set_listing_active(
+                "prop-1", active=False, actor_email="admin@example.com"
+            )
+
+        storage.set_listing_hidden.assert_called_once_with("prop-1", True)
+        # The audit entry must NOT fire when the hidden-set write was
+        # lost — a retry after disk pressure clears emits exactly one
+        # ``property_deactivated`` entry, not a duplicate.
+        self.notifications.log_site_change.assert_not_called()
+
     def test_get_visible_properties_filters_hidden_ids(self):
         self.service.cache = [{"id": "prop-1"}, {"id": "prop-2"}]
         storage = Mock()
@@ -1890,6 +1939,42 @@ class PropertyServiceTestCase(unittest.TestCase):
             self.service.delete_property("prop-1", "admin@example.com")
 
         storage.set_listing_hidden.assert_called_once_with("prop-1", False)
+
+    def test_delete_property_surfaces_tombstone_clear_failure(self):
+        # ``set_listing_hidden`` returns False on a storage write failure
+        # (ENOSPC / EACCES / fsync error on the file backend; a
+        # transaction error on the SQL backend). The upstream DELETE has
+        # already committed and the in-memory cache has already been
+        # rewritten by the time we reach the tombstone clear, so a
+        # RuntimeError here would mislead the admin into retrying a
+        # delete that did succeed. But a silently-lost tombstone-clear
+        # is exactly the long-term hazard the clear exists to prevent
+        # (a recycled upstream UUID silently hidden from the public
+        # site), so the service must at least log + notify. Pin the
+        # alert here so the behavior can't silently regress.
+        self.service.cache = [{"id": "prop-1"}]
+        storage = Mock()
+        storage.set_listing_hidden.return_value = False
+        self.service.storage = storage
+        response = Mock(status_code=204, text="")
+        with patch("somewheria_app.services.properties.requests.delete", return_value=response):
+            self.service.delete_property("prop-1", "admin@example.com")
+
+        # The admin alert must fire so a sustained disk-full / EACCES
+        # event is visible, not silently papered over.
+        self.notifications.log_and_notify_error.assert_called_once()
+        subject = self.notifications.log_and_notify_error.call_args.args[0]
+        self.assertIn("tombstone", subject.lower())
+        # The main action (upstream DELETE) still succeeded, so
+        # ``property_deleted`` must still be recorded — otherwise the
+        # audit log would omit a delete that did happen.
+        self.notifications.log_site_change.assert_called_once_with(
+            "admin@example.com",
+            "property_deleted",
+            {"property_id": "prop-1"},
+        )
+        # And the cache must still reflect the delete.
+        self.assertEqual(self.service.cache, [])
 
     def test_delete_property_without_storage_does_not_crash(self):
         # ``storage`` is optional on PropertyService — the cleanup call must
