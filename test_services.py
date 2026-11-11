@@ -95,6 +95,40 @@ class AuthServiceTestCase(unittest.TestCase):
         # non-string never had a chance to become a lookup key.
         self.storage.get_user_roles.assert_not_called()
 
+    def test_get_user_role_strips_whitespace_before_lookup(self):
+        # Storage already strips email keys on read (PR #210) and every
+        # write path already strips before storing; the lookup side was
+        # the one place that did only ``.lower()``. A caller passing a
+        # whitespace-wrapped email — a future call site that forgets the
+        # ``.strip()``, or a legacy session whose stored email still
+        # carries padding from a pre-#196 login — otherwise misses both
+        # the file role AND the env-list fallback, silently demoting a
+        # known admin to "guest" (which ``_refresh_session_role`` then
+        # writes back to the session, soft-locking the user).
+        self.storage.get_user_roles.return_value = {"user@example.com": "admin"}
+
+        self.assertEqual(self.service.get_user_role("  user@example.com  "), "admin")
+        # Env-list fallback must still resolve for a whitespace-wrapped
+        # lookup against a stripped+lowered config entry.
+        self.storage.get_user_roles.return_value = {}
+        self.assertEqual(self.service.get_user_role(" owner@example.com\n"), "high_admin")
+        self.assertEqual(self.service.get_user_role("\tadmin@example.com "), "admin")
+        self.assertEqual(self.service.get_user_role("  renter@example.com"), "renter")
+
+    def test_get_user_role_returns_guest_for_whitespace_only_email(self):
+        # An email that strips to the empty string must never consult
+        # storage — ``get_user_roles`` already drops empty-string keys
+        # on read (PR #210), but a corrupted intermediate value that
+        # hadn't yet been filtered should not match either, and the env
+        # lists are ``_csv_env``-filtered so an ``""`` lookup against
+        # them is always a miss. Short-circuiting here mirrors the
+        # non-string early-return above.
+        self.storage.get_user_roles.return_value = {"": "admin"}
+
+        for blank in ("", "   ", "\t\n", "  \r\n  "):
+            self.assertEqual(self.service.get_user_role(blank), "guest", blank)
+        self.storage.get_user_roles.assert_not_called()
+
     def test_all_user_roles_includes_env_configured_admins(self):
         # On a fresh deploy user_roles.json is empty, but the .env-configured
         # admins must still show up on the user-management page.

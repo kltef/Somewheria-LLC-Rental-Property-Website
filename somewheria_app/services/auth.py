@@ -50,7 +50,28 @@ class AuthService:
         # #144-#171 added elsewhere for corrupted / hand-edited state.
         if not isinstance(email, str):
             return "guest"
-        email = email.lower()
+        # ``.strip()`` on the normalized lookup key so a caller passing a
+        # whitespace-wrapped email (`` alice@example.com``) resolves against
+        # the stored role instead of silently falling through to "guest". Every
+        # write path already strips: ``login_user`` ``.strip().lower()``s
+        # before storing the session email (PR #196); ``get_user_roles``
+        # ``.strip()``s stored keys on read (PR #210); ``_csv_env`` strips
+        # env entries at config construction. The lookup side was the one
+        # place that did only ``.lower()``, so a future caller forgetting
+        # the strip (or a legacy session carrying a whitespace-wrapped
+        # email through) silently demoted a known user to "guest" — the
+        # cached-role path in ``_refresh_session_role`` would then rewrite
+        # the session, soft-locking the user out of every renter/admin
+        # page until an admin re-adds them. Returning "guest" for the
+        # stripped-to-empty case also short-circuits the storage read for
+        # the ``""`` key — ``get_user_roles`` already drops empty keys
+        # (PR #210), but a corrupted-but-not-yet-filtered intermediate
+        # value should not match either. Mirrors the same stripping idiom
+        # PRs #198 / #199 / #210 applied on the storage-read side for
+        # profiles, contracts, and roles.
+        email = email.strip().lower()
+        if not email:
+            return "guest"
         user_roles = self.storage.get_user_roles()
         if email in user_roles:
             role = user_roles[email]
