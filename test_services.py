@@ -4567,5 +4567,116 @@ class JiraCreateWithRetriesSchedulesEveryBackoffTestCase(unittest.TestCase):
         )
 
 
+class JiraCreateOncePersistenceFailureTestCase(unittest.TestCase):
+    """Regression: ``_attempt_jira_create_once`` must surface a silent
+    ``_save`` failure after the external JIRA issue has already been created.
+
+    ``FileStorageService.save_json_file`` returns ``False`` on a durable-
+    write failure (ENOSPC / EACCES / fsync error on the file backend; a
+    transaction error on the SQL backend — now a bool per PR #201). Before
+    this guard the pre-fix shape discarded that bool: ``self.jira.create_issue``
+    had already committed the JIRA mirror externally, the local ``jira_key``
+    write silently dropped on the floor, and the surrounding retry loop in
+    ``_jira_create_with_retries`` saw the truthy return value and treated
+    the attempt as a success. Downstream consequences:
+
+    * ``find_by_jira_key`` can no longer route inbound JIRA webhooks to the
+      local ticket (no ``jira_key`` row to match on).
+    * The admin UI can't deep-link to JIRA for that ticket.
+    * A later ``_enqueue_jira_create`` on the same ticket (admin re-trigger
+      / restart replay) silently creates a *second* JIRA mirror because the
+      local row still looks un-mirrored.
+
+    The fix: when ``_save`` returns ``False`` after a successful
+    ``create_issue``, log the orphan at ``ERROR`` level with both the JIRA
+    key and the local ticket id so operators can repair the mapping by
+    hand. The exception is NOT raised — raising would propagate up through
+    ``_jira_create_with_retries``, which catches ``Exception`` and would
+    call ``self.jira.create_issue`` again on the next attempt, creating a
+    duplicate JIRA mirror on every retry. Returning the key preserves the
+    "one JIRA create per enqueue" contract while still telling the operator
+    something went wrong. Mirrors the surfaced-failure contract PRs #202 /
+    #204 / #207 / #208 / #212 applied to the sibling TicketService write
+    paths — this write path was the last unguarded one.
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tickets_path = Path(self.tmp.name) / "tickets.json"
+        self.config = SimpleNamespace(tickets_file=self.tickets_path)
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.jira = MagicMock()
+        self.jira.create_issue.return_value = "OPS-42"
+        self.service = TicketService(
+            self.config, self.storage, self.notifications, jira=self.jira
+        )
+        # Seed a persisted ticket so ``get_ticket`` + the atomic re-read both
+        # find a match before the save attempt fires.
+        self.storage.save_json_file(
+            self.tickets_path,
+            [
+                {
+                    "id": "ticket-1",
+                    "title": "Leaky faucet",
+                    "status": "open",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                }
+            ],
+        )
+
+    def test_returns_key_and_logs_error_when_save_fails(self):
+        with patch.object(
+            self.service, "_save", return_value=False
+        ) as save_mock, patch.object(self.service, "logger") as logger_mock:
+            result = self.service._attempt_jira_create_once("ticket-1")
+
+        # The external JIRA mirror exists, so the retry loop must NOT see a
+        # falsy return (that would also trip a duplicate ``create_issue`` on
+        # the next attempt). Return the key the external call produced.
+        self.assertEqual(result, "OPS-42")
+        self.jira.create_issue.assert_called_once()
+        save_mock.assert_called_once()
+        # The orphan must surface at ERROR level with both identifiers so
+        # operators can restore the mapping by hand.
+        logger_mock.error.assert_called_once()
+        error_args = logger_mock.error.call_args.args
+        self.assertIn("OPS-42", error_args)
+        self.assertIn("ticket-1", error_args)
+
+    def test_does_not_raise_when_save_fails(self):
+        # Must not raise: ``_jira_create_with_retries`` catches ``Exception``
+        # and would call ``self.jira.create_issue`` again on the next attempt.
+        with patch.object(self.service, "_save", return_value=False), patch.object(
+            self.service, "logger"
+        ):
+            # Should not raise.
+            self.service._attempt_jira_create_once("ticket-1")
+
+    def test_retry_loop_sees_truthy_key_and_stops_on_persistence_failure(self):
+        # End-to-end: when ``_save`` fails after a successful ``create_issue``,
+        # the retry loop must not call ``create_issue`` a second time (which
+        # would create a duplicate JIRA mirror).
+        with patch.object(self.service, "_save", return_value=False), patch.object(
+            self.service, "logger"
+        ), patch("somewheria_app.services.tickets.time.sleep", return_value=None):
+            self.service._jira_create_with_retries("ticket-1")
+        self.assertEqual(self.jira.create_issue.call_count, 1)
+
+    def test_happy_path_does_not_log_error(self):
+        # Baseline: a real durable save completes, so ``_save`` returns True,
+        # ``jira_key`` is persisted, and no ERROR is emitted.
+        with patch.object(self.service, "logger") as logger_mock:
+            result = self.service._attempt_jira_create_once("ticket-1")
+        self.assertEqual(result, "OPS-42")
+        logger_mock.error.assert_not_called()
+        # And the persisted row now carries the jira_key.
+        reloaded = self.service.get_ticket("ticket-1")
+        self.assertEqual(reloaded["jira_key"], "OPS-42")
+
+
 if __name__ == "__main__":
     unittest.main()

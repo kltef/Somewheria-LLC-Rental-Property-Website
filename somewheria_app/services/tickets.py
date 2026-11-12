@@ -453,14 +453,35 @@ class TicketService:
             return None
         # Persist the JIRA key onto the ticket so the admin UI can deep-link
         # and the webhook can map JIRA events back to the local ticket.
+        saved = False
         with self.storage.atomic():
             tickets = self._load()
             for stored in tickets:
                 if stored.get("id") == ticket_id:
                     stored["jira_key"] = key
                     stored["updated_at"] = _now_iso()
-                    self._save(tickets)
+                    saved = self._save(tickets)
                     break
+        if not saved:
+            # The JIRA mirror already exists externally. A silent ``_save``
+            # drop (ENOSPC / EACCES / fsync error on the file backend; a
+            # transaction error on the SQL backend — now surfaced by the
+            # ``save_json_file`` bool contract from PR #201) must NOT
+            # propagate as an exception: ``_jira_create_with_retries`` would
+            # catch it and call ``self.jira.create_issue`` again, creating a
+            # duplicate mirror on the JIRA side on every subsequent attempt.
+            # Instead, log the orphan loudly so operators can repair the
+            # jira_key mapping by hand. Without the mapping,
+            # ``find_by_jira_key`` can't route inbound JIRA webhooks back to
+            # the local ticket and a later ``_enqueue_jira_create`` on the
+            # same ticket (admin re-trigger / restart) would silently create
+            # a second JIRA issue. Returning ``key`` keeps the retry loop
+            # from firing another ``create_issue`` for this call.
+            self.logger.error(
+                "JIRA mirror %s created for ticket %s but jira_key persistence "
+                "failed; manual repair required to restore webhook mapping",
+                key, ticket_id,
+            )
         return key
 
     def find_by_jira_key(self, jira_key: str) -> dict | None:
