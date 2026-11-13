@@ -313,6 +313,26 @@ class PendingRegistrationsTestCase(SqlStorageBaseTestCase):
         # The original payload is preserved; the duplicate does not overwrite it.
         self.assertEqual(rows[0]["name"], "First")
 
+    def test_add_pending_registration_returns_false_on_sqlite_failure(self):
+        # API parity with ``FileStorageService.add_pending_registration``:
+        # a transaction exception used to propagate up through the
+        # anonymous ``/register`` POST to the crash handler's empty 503.
+        # Returning ``False`` lets the ``register`` route fall through to
+        # the same success template without firing the admin email,
+        # matching what the file backend's silent-save-failure path
+        # already does. Mirrors the catch-and-log shape
+        # ``remove_pending_registration`` applies for the same table.
+        with patch.object(
+            self.storage.db, "transaction", side_effect=RuntimeError("db locked")
+        ):
+            self.assertFalse(
+                self.storage.add_pending_registration(
+                    {"email": "boom@example.com", "name": "Boom"}
+                )
+            )
+        # The failure was not silently partial: no row leaked through.
+        self.assertEqual(self.storage.get_pending_registrations(), [])
+
     def test_get_pending_registrations_drops_non_dict_payloads(self):
         # A payload column that deserializes to something other than a dict
         # (e.g. hand-edited row storing ``"null"``, ``"42"``, or a JSON array)
