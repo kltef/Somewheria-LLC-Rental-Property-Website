@@ -192,20 +192,45 @@ class SqlStorageService:
         ]
 
     def add_pending_registration(self, registration: dict) -> bool:
+        # API parity with ``FileStorageService.add_pending_registration``:
+        # True when the row was newly stored, False when the email is
+        # missing / already pending, OR when a sqlite failure (locked DB,
+        # disk full, I/O error) prevented a durable write. The pre-fix
+        # shape let the transaction exception propagate straight through
+        # the anonymous ``/register`` POST to the crash handler's empty
+        # 503 — the submitter got no actionable feedback and the admin
+        # got a stack-trace email instead of the normal "new registration"
+        # notice. The file backend already swallows every exception
+        # inside ``save_json_file`` and returns ``False``, so this leaves
+        # the SQL backend as the only path that 503'd on a storage-layer
+        # failure for this method. Returning ``False`` lets ``register``
+        # fall through to the same success template without firing the
+        # admin email — mirroring what the file backend does today and
+        # keeping the submitter response snappy. Matches the catch-and-log
+        # shape ``remove_pending_registration`` (PR #206) /
+        # ``set_user_role`` (PR #209) / ``delete_user_role`` (PR #211) /
+        # ``save_renter_profiles`` / ``save_renter_contracts`` already
+        # apply on this class.
         email = (registration.get("email") or "").strip().lower()
         if not email:
             return False
-        with self.db.transaction() as conn:
-            existing = conn.execute(
-                "SELECT 1 FROM pending_registrations WHERE email = ?", (email,)
-            ).fetchone()
-            if existing:
-                return False
-            conn.execute(
-                "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
-                (email, dumps(registration)),
+        try:
+            with self.db.transaction() as conn:
+                existing = conn.execute(
+                    "SELECT 1 FROM pending_registrations WHERE email = ?", (email,)
+                ).fetchone()
+                if existing:
+                    return False
+                conn.execute(
+                    "INSERT INTO pending_registrations(email, payload) VALUES (?, ?)",
+                    (email, dumps(registration)),
+                )
+            return True
+        except Exception as exc:
+            self.logger.error(
+                "Failed to add pending_registration to sqlite: %s", exc
             )
-        return True
+            return False
 
     def remove_pending_registration(self, email: str) -> bool:
         # API parity with ``FileStorageService.remove_pending_registration``:
