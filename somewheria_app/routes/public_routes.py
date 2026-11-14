@@ -250,7 +250,17 @@ def schedule_appointment(uuid):
             error=f"Date must be within {MAX_APPOINTMENT_DAYS_AHEAD} days.",
         ), 400
 
-    property_name = services.properties.fetch_live_property_name(uuid)
+    # Try the in-memory cache first (no HTTP, no deep copy) and fall back to
+    # the live upstream only on a cache miss. Visitors reach this POST via the
+    # /property/<uuid> page, which itself was reached either from /for-rent
+    # (which refreshes the cache synchronously) or from a direct link that
+    # populated the record via ``fetch_property_record``, so the cache is
+    # almost always warm and the extra 10s-timeout outbound request is pure
+    # user-facing latency. Mirrors the cache-first idiom already used in
+    # ``ticket_routes.create_ticket``.
+    property_name = services.properties.get_property_name(uuid)
+    if not property_name:
+        property_name = services.properties.fetch_live_property_name(uuid)
     if not property_name:
         return jsonify(success=False, error="Property not found."), 404
 
