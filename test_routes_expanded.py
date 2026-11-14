@@ -550,6 +550,60 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         book_mock.assert_called_once_with("prop-1", future_date)
         send_email_async_mock.assert_called_once()
 
+    def test_schedule_appointment_uses_cached_name_without_hitting_upstream(self):
+        # When the property is already in the cache (the common case — every
+        # visitor reaches the schedule form through /for-rent, which refreshes
+        # the cache synchronously), the route must pull the display name from
+        # the cache rather than firing an extra 10s-timeout HTTP call to the
+        # upstream details endpoint. Prevents regressing to the old pattern
+        # that added ~100-500ms of user-facing latency to every appointment.
+        self.seed_property("prop-1", name="Maple House")
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "fetch_live_property_name"
+        ) as fetch_live_mock, patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(self.services.notifications, "send_email_async") as send_email_async_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"success": True})
+        fetch_live_mock.assert_not_called()
+        send_email_async_mock.assert_called_once()
+        self.assertIn("Maple House", send_email_async_mock.call_args[0][1])
+
+    def test_schedule_appointment_falls_back_to_upstream_on_cache_miss(self):
+        # Cold-cache path: a visitor reaching /property/<uuid>/schedule without
+        # /for-rent first (direct link, bookmark) finds an empty cache, so the
+        # route must fall back to the live upstream fetch to confirm the
+        # property exists. Preserves the old behavior for this edge case.
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "fetch_live_property_name", return_value="Maple House"
+        ) as fetch_live_mock, patch.object(
+            self.services.appointments, "book", return_value=True
+        ), patch.object(self.services.notifications, "send_email_async"):
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        fetch_live_mock.assert_called_once_with("prop-1")
+
     def test_about_page_loads(self):
         response = self.client.get("/about")
 
