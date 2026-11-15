@@ -491,6 +491,46 @@ class ExpandedRouteCoverageTestCase(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "That date is already booked.")
         send_email_mock.assert_not_called()
 
+    def test_schedule_appointment_returns_409_on_save_failure_without_sending_email(self):
+        # A save failure inside ``AppointmentService.book`` (ENOSPC, EACCES,
+        # fsync error on the appointments file) used to re-raise straight
+        # through the unauthenticated ``/property/<uuid>/schedule`` POST to
+        # the crash handler's empty 503 — the user got a blank response and
+        # every unique failure fingerprint fanned out an admin crash email.
+        # Worse, if the raise had instead been swallowed at a shallower
+        # level, the "Viewing Appointment Request" email would have fired
+        # for a booking that never persisted — a ghost appointment that
+        # cannot be reproduced after the next restart.
+        #
+        # The surfaced-failure contract now collapses the save-failure
+        # case into the same ``False`` the already-booked path returns, so
+        # the route renders 409 (slightly misleading but strictly better
+        # than a crash) AND the admin email is correctly suppressed.
+        future_date = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+        with patch.object(
+            self.services.properties, "fetch_live_property_name", return_value="Maple House"
+        ), patch.object(
+            self.services.appointments, "save", return_value=False
+        ), patch.object(
+            self.services.notifications, "send_email"
+        ) as send_email_mock, patch.object(
+            self.services.notifications, "send_email_async"
+        ) as send_email_async_mock:
+            response = self.client.post(
+                "/property/prop-1/schedule",
+                json={
+                    "name": "Alex",
+                    "date": future_date,
+                    "contact_method": "email",
+                    "contact_info": "alex@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "That date is already booked.")
+        send_email_mock.assert_not_called()
+        send_email_async_mock.assert_not_called()
+
     def test_schedule_appointment_rejects_hidden_listing_for_public(self):
         # Mirrors ``property_details``: a deactivated listing is unpublished
         # from the public site, so a POST to /property/<uuid>/schedule (via a

@@ -1457,18 +1457,68 @@ class AppointmentServiceTestCase(unittest.TestCase):
 
     def test_save_failure_preserves_existing_file(self):
         # First save establishes the original contents we want preserved.
-        self.service.save({"prop-1": {"2030-01-10"}})
+        self.assertTrue(self.service.save({"prop-1": {"2030-01-10"}}))
         original = self.appointments_path.read_text(encoding="utf-8")
 
         # Force the os.replace step to fail; the original file must survive
-        # untouched and no leftover temp file may remain.
+        # untouched and no leftover temp file may remain. The write failure
+        # surfaces as a ``False`` return (not a raised exception) matching
+        # the sibling silent-save contracts on ``save_json_file`` et al —
+        # ``book()`` relies on that bool to short-circuit the admin email
+        # and the "booking confirmed" response so neither fires for a
+        # booking that never persisted.
         with patch("somewheria_app.services.appointments.os.replace", side_effect=OSError("disk full")):
-            with self.assertRaises(OSError):
-                self.service.save({"prop-1": {"2099-12-31"}})
+            self.assertFalse(self.service.save({"prop-1": {"2099-12-31"}}))
 
         self.assertEqual(self.appointments_path.read_text(encoding="utf-8"), original)
         leftovers = [p for p in self.appointments_path.parent.iterdir() if p.name != "appointments.txt"]
         self.assertEqual(leftovers, [], f"Temp file leaked after failed save: {leftovers}")
+
+    def test_save_returns_true_on_success(self):
+        # Bool contract parity with ``save_json_file`` / ``save_binary_file``:
+        # the success path must return True so ``book()`` (and any future
+        # caller) can distinguish durable writes from silent failures
+        # without reaching for the filesystem.
+        self.assertTrue(self.service.save({"prop-1": {"2030-05-01"}}))
+
+    def test_save_returns_false_when_mkstemp_fails(self):
+        # Exercises the pre-try outer path: a ``mkstemp`` failure (ENOSPC,
+        # EACCES on the parent dir, quota exhaustion) used to re-raise
+        # straight through ``book()`` and the unauthenticated
+        # ``/property/<uuid>/schedule`` POST to the crash handler's empty
+        # 503. The outer catch now logs the error and returns False so the
+        # route can render a plain "already booked" 409 — strictly better
+        # than a blank response plus a crash email per 10-minute
+        # fingerprint.
+        with patch(
+            "somewheria_app.services.appointments.tempfile.mkstemp",
+            side_effect=OSError("disk full"),
+        ):
+            self.assertFalse(self.service.save({"prop-1": {"2030-05-01"}}))
+
+    def test_book_returns_false_when_save_fails(self):
+        # The save-failure path must collapse into the same ``False`` return
+        # the already-booked path uses so ``schedule_appointment`` renders
+        # 409 and (crucially) suppresses the "Viewing Appointment Request"
+        # admin email. Without this, a save failure either (a) re-raised to
+        # the crash handler's empty 503 with a per-fingerprint admin crash
+        # email, or (b) fired the "booking requested" notification for a
+        # booking that never reached disk — the admin would then calendar
+        # a ghost appointment the next process restart cannot reproduce.
+        with patch.object(self.service, "save", return_value=False):
+            self.assertFalse(self.service.book("prop-1", "2030-05-01"))
+
+    def test_book_returns_false_when_save_fails_without_raising(self):
+        # Belt-and-suspenders against a regression that lets save()'s
+        # exception propagate up through book() — a real ENOSPC on the
+        # os.replace step must surface as a clean ``False`` (not an OSError)
+        # so the unauthenticated schedule POST never reaches the crash
+        # handler.
+        with patch(
+            "somewheria_app.services.appointments.os.replace",
+            side_effect=OSError("disk full"),
+        ):
+            self.assertFalse(self.service.book("prop-1", "2030-05-01"))
 
     def test_load_ignores_malformed_lines(self):
         self.appointments_path.write_text(
