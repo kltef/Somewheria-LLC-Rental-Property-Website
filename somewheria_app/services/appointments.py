@@ -92,7 +92,7 @@ class AppointmentService:
                         existing.update(parsed_dates)
         return appointments
 
-    def save(self, appointments: dict[str, set[str]]) -> None:
+    def save(self, appointments: dict[str, set[str]]) -> bool:
         # Atomic write: render the full payload to a sibling temp file, fsync,
         # then os.replace() over the destination. A crash mid-write leaves the
         # original file intact instead of a half-written, truncated one.
@@ -100,36 +100,70 @@ class AppointmentService:
         # DEBUG log level: save() runs on every booking, and successful writes
         # are already observable via os.replace() completing (and via the
         # ``ticket_created`` / notification email fired by the caller).
+        #
+        # Returns True when the payload is durably on disk, False when the
+        # write failed (ENOSPC / EACCES / fsync error / a crash inside
+        # os.replace, or a parent-mkdir / mkstemp failure before the inner
+        # try block is entered). The pre-fix shape re-raised every exception
+        # straight through ``book()`` and the unauthenticated
+        # ``/property/<uuid>/schedule`` POST to the crash handler's empty
+        # 503 — the user got a blank response, every save failure fanned
+        # out an admin crash email per 10-minute fingerprint, and the
+        # booking was NOT persisted but the in-memory ``appointments`` dict
+        # held a bogus entry until the next load(). Returning a bool lets
+        # ``book()`` surface the failure like the sibling silent-save fixes
+        # (``save_json_file`` PR #201, ``save_renter_profiles`` / ``_contracts``
+        # PR #203, ``set_user_role`` PR #209, ``set_listing_hidden`` PR #213,
+        # ``TicketService._save`` PR #202) rather than crashing the request.
         path = self.config.property_appointments_file
         self.logger.debug("Saving %s appointment sets to %s", len(appointments), path.resolve())
-        with self._lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    for property_id, date_set in appointments.items():
-                        line = f"{property_id}:{','.join(sorted(date_set))}\n"
-                        handle.write(line)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(tmp_name, path)
-            except Exception:
+        try:
+            with self._lock:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
                 try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-                raise
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        for property_id, date_set in appointments.items():
+                            line = f"{property_id}:{','.join(sorted(date_set))}\n"
+                            handle.write(line)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp_name, path)
+                except Exception:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+            return True
+        except Exception as exc:
+            self.logger.error("Failed to save appointments to %s: %s", path, exc)
+            return False
 
     def book(self, property_id: str, iso_date: str) -> bool:
         # Returns True when the booking was newly recorded, False when the
-        # date was already taken for that property. Load+save run under the
-        # same lock so a second caller cannot squeeze in between and produce
-        # a double-booking on the same property/date.
+        # date was already taken for that property OR the save failed. Load+
+        # save run under the same lock so a second caller cannot squeeze in
+        # between and produce a double-booking on the same property/date.
+        #
+        # Collapsing the save-failure case into the same ``False`` the
+        # already-booked path returns is intentional: the sole caller
+        # (``schedule_appointment`` in ``routes/public_routes.py``) renders
+        # 409 "already booked" on False and skips the "Viewing Appointment
+        # Request" admin email. On a save failure that's a slightly
+        # misleading user-facing message, but strictly better than the
+        # pre-fix empty-503 crash handler path (which also fanned out an
+        # admin crash email per 10-minute fingerprint), AND the admin email
+        # is correctly suppressed — a "booking requested" notification for
+        # a booking that never persisted would otherwise reach the inbox
+        # and land on the admin's calendar as a ghost appointment. The
+        # failure itself is already logged by ``save()`` for triage.
         with self._lock:
             appointments = self.load()
             booked = appointments.setdefault(property_id, set())
             if iso_date in booked:
                 return False
             booked.add(iso_date)
-            self.save(appointments)
+            if not self.save(appointments):
+                return False
             return True
