@@ -384,6 +384,32 @@ class JiraWebhookRouteTestCase(unittest.TestCase):
         body = resp.get_json()
         self.assertEqual(body["error"], "missing issue key")
 
+    def test_save_failure_during_transition_acks_without_retry(self):
+        # ``update_ticket`` raises ``ValueError`` when ``_save`` returns False
+        # (ENOSPC / EACCES / fsync error on the file backend, or a transaction
+        # error on the SQL backend — see PR #208). The pre-fix shape let that
+        # propagate uncaught through ``jira_webhook`` into the global crash
+        # handler's empty 503, which fanned out an admin crash email per
+        # 10-minute fingerprint AND told JIRA to auto-retry the webhook
+        # against the same degraded backend. ``transition_local_ticket`` now
+        # catches ``ValueError`` and returns ``None`` so the webhook acks
+        # with the ``ignored_status`` shape (HTTP 200), suppressing the retry
+        # storm.
+        def _boom(*_args, **_kwargs):
+            raise ValueError("Could not save ticket update right now. Please try again.")
+
+        self.services.tickets.update_ticket = _boom
+        resp = self.client.post(
+            "/webhooks/jira",
+            data=json.dumps({"issue": {"key": "STUB-1", "fields": {"status": {"name": "Done"}}}}),
+            content_type="application/json",
+            headers={"X-JIRA-Webhook-Secret": "shhh"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body.get("ignored_status"), "Done")
+
     def test_non_string_nested_status_name_treated_as_unmapped(self):
         # A non-string ``issue.fields.status.name`` used to become a Python
         # repr string via ``str(...)``, which then rode back to the caller
