@@ -166,6 +166,29 @@ class JiraClient:
         if not local_status:
             self.logger.info("Ignoring unmapped JIRA status %r for ticket %s", jira_status, ticket_id)
             return None
-        return tickets_service.update_ticket(
-            ticket_id, {"status": local_status}, actor_email
-        )
+        # ``update_ticket`` raises ``ValueError`` when the underlying ``_save``
+        # returns False — ENOSPC / EACCES / fsync error on the file backend,
+        # or a transaction error on the SQL backend (see PR #208). The pre-fix
+        # shape let that propagate uncaught through the sole caller
+        # (``routes/webhook_routes.py:jira_webhook``) into the global crash
+        # handler's empty 503, which (a) fans out an admin crash email per
+        # 10-minute fingerprint and (b) tells JIRA to auto-retry the webhook,
+        # so a sustained storage hiccup turns into a retry storm against the
+        # same degraded backend. Convert the raise into the same ``None``
+        # the unmapped-status branch above returns: ``jira_webhook`` then
+        # acks with ``{"ok": True, "ignored_status": jira_status}`` (HTTP
+        # 200) so JIRA doesn't tight-loop retry, and the next legitimate
+        # transition will apply cleanly once storage recovers. Mirrors the
+        # ``except ValueError:`` catches sibling callers ``admin_ticket_update``
+        # (PR #208), ``ticket_toggle_email`` (PR #212) and ``ticket_add_note``
+        # (PR #207) already use on the surfaced-save-failure branch.
+        try:
+            return tickets_service.update_ticket(
+                ticket_id, {"status": local_status}, actor_email
+            )
+        except ValueError as exc:
+            self.logger.warning(
+                "Deferring JIRA status %r for ticket %s: %s",
+                jira_status, ticket_id, exc,
+            )
+            return None
