@@ -4728,5 +4728,73 @@ class JiraCreateOncePersistenceFailureTestCase(unittest.TestCase):
         self.assertEqual(reloaded["jira_key"], "OPS-42")
 
 
+class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
+    """Regression: ``trigger_background_refresh`` must reset its coalesce
+    flag when the thread bootstrap raises.
+
+    ``trigger_background_refresh`` sets ``_background_refresh_active = True``
+    before constructing/starting the worker thread. The flag is only ever
+    reset back to ``False`` inside ``_refresh_with_change_log``'s outer
+    ``finally`` block — if ``threading.Thread(...)`` or ``thread.start()``
+    raises (realistic cases: ``RuntimeError: can't start new thread`` at
+    the OS thread limit under sustained load, ``MemoryError`` allocating
+    the stack), the worker body never runs and that ``finally`` never
+    fires. Without this guard the flag stays wedged ``True`` for the
+    lifetime of the process: every subsequent trigger (admin mutations,
+    the public ``/for-rent-refresh.json`` endpoint) coalesces into a
+    no-op, and recovery requires a full process restart.
+    """
+
+    def setUp(self):
+        self.notifications = Mock()
+        self.config = SimpleNamespace(
+            api_base_url="https://api.example.com",
+            upload_dir=Path(tempfile.gettempdir()),
+        )
+        self.service = PropertyService(self.config, self.notifications)
+
+    def test_flag_cleared_when_thread_start_raises(self):
+        with patch(
+            "somewheria_app.services.properties.threading.Thread"
+        ) as thread_cls:
+            thread_instance = MagicMock()
+            thread_instance.start.side_effect = RuntimeError("can't start new thread")
+            thread_cls.return_value = thread_instance
+            with self.assertRaises(RuntimeError):
+                self.service.trigger_background_refresh("admin@example.com")
+
+        # The flag must be reset so the next trigger can take another shot.
+        self.assertFalse(self.service._background_refresh_active)
+
+    def test_flag_cleared_when_thread_construction_raises(self):
+        with patch(
+            "somewheria_app.services.properties.threading.Thread",
+            side_effect=RuntimeError("thread construction failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.service.trigger_background_refresh("admin@example.com")
+
+        self.assertFalse(self.service._background_refresh_active)
+
+    def test_followup_trigger_still_fires_after_start_failure(self):
+        # End-to-end: a failed bootstrap must not permanently disable the
+        # coalesce path. A second call should proceed to construct and
+        # start a thread.
+        with patch(
+            "somewheria_app.services.properties.threading.Thread"
+        ) as thread_cls:
+            failing_thread = MagicMock()
+            failing_thread.start.side_effect = RuntimeError("can't start new thread")
+            good_thread = MagicMock()
+            thread_cls.side_effect = [failing_thread, good_thread]
+            with self.assertRaises(RuntimeError):
+                self.service.trigger_background_refresh("admin@example.com")
+            # Second attempt proceeds and calls start() on the second Thread.
+            self.service.trigger_background_refresh("admin@example.com")
+
+        self.assertEqual(thread_cls.call_count, 2)
+        good_thread.start.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

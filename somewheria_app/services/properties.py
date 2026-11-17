@@ -412,8 +412,28 @@ class PropertyService:
             if self._background_refresh_active:
                 return
             self._background_refresh_active = True
-        thread = threading.Thread(target=self._refresh_with_change_log, args=(actor_email,), daemon=True)
-        thread.start()
+        # Clear the flag if ``Thread(...)`` / ``start()`` raises — otherwise
+        # the ``finally`` in ``_refresh_with_change_log`` (which is the sole
+        # path that resets ``_background_refresh_active``) never runs, and
+        # the flag stays wedged True for the lifetime of the process. Every
+        # subsequent trigger then no-ops: admin mutations stop propagating
+        # into the cache and ``/for-rent-refresh.json`` becomes a permanent
+        # no-op until a process restart. ``RuntimeError: can't start new
+        # thread`` (OS thread limit under sustained load) and ``MemoryError``
+        # (stack allocation) are the realistic failure modes here — same
+        # class of recovery the surrounding "surface silent failures" PRs
+        # (#201-#219) applied to the storage layer, moved to the thread
+        # bootstrap because this is the only trigger-site state the
+        # worker-side ``finally`` cannot see.
+        try:
+            thread = threading.Thread(
+                target=self._refresh_with_change_log, args=(actor_email,), daemon=True
+            )
+            thread.start()
+        except Exception:
+            with self._background_refresh_flag_lock:
+                self._background_refresh_active = False
+            raise
 
     def _refresh_with_change_log(self, actor_email: str) -> None:
         # Serialize with refresh_cache so an admin-triggered refresh and a
