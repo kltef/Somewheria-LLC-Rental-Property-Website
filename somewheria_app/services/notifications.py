@@ -142,7 +142,32 @@ class NotificationService:
                     "Background async email send failed for %r: %s", subject, exc
                 )
 
-        threading.Thread(target=_worker, name="notify-email", daemon=True).start()
+        # Catch a failure of the thread bootstrap itself — realistic cases:
+        # ``RuntimeError: can't start new thread`` at the OS thread limit
+        # under sustained load, ``MemoryError`` allocating the stack. The
+        # worker body's own try/except never runs in that case because the
+        # worker never starts, so a raise here would propagate straight
+        # through every caller — including ``log_and_notify_error`` called
+        # from inside the ``except`` arms of ``save_edit`` / ``google_callback``
+        # / ``upload_image`` / ``delete_listing`` / ``toggle_sale`` /
+        # ``toggle_active`` and from ``log_and_notify_error`` itself —
+        # double-faulting into the global crash handler's empty 503 (plus
+        # one admin crash email per fingerprint) and losing the clean
+        # error page those catch blocks were trying to render. Mirrors the
+        # catch-and-log shape PR #220 established for
+        # ``trigger_background_refresh``'s thread bootstrap, moved to the
+        # enqueue site here because this wrapper's whole contract is
+        # fire-and-forget: no caller observes a return value or expects a
+        # raise on dispatch failure. The lost email send is strictly
+        # better than the empty 503 — the failure is already logged for
+        # triage, and the next legitimate call will get a fresh thread
+        # bootstrap once the OS pressure subsides.
+        try:
+            threading.Thread(target=_worker, name="notify-email", daemon=True).start()
+        except Exception as exc:
+            self.console.warning(
+                "Could not dispatch async email worker for %r: %s", subject, exc
+            )
 
     def _html_email_body(self, subject: str, body: str) -> str:
         escaped_subject = html.escape(subject)

@@ -2494,6 +2494,46 @@ class NotificationServiceTestCase(unittest.TestCase):
         self.assertTrue(kwargs.get("daemon"))
         thread_instance.start.assert_called_once()
 
+    def test_send_email_async_swallows_thread_start_failure(self):
+        # A ``RuntimeError: can't start new thread`` at the OS thread limit
+        # (or a ``MemoryError`` allocating the stack) during the thread
+        # bootstrap must NOT propagate — the wrapper is fire-and-forget and
+        # is called from inside every error-handling catch block on the site
+        # (``log_and_notify_error`` from ``save_edit`` / ``google_callback``
+        # / ``upload_image`` / ``delete_listing`` / ``toggle_sale`` /
+        # ``toggle_active``). A raise would double-fault into the global
+        # crash handler's empty 503 and lose the clean error page the
+        # caller was trying to render. Mirror ``_enqueue_email``'s
+        # fire-and-forget guarantee at the enqueue site.
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.notifications.threading.Thread"
+            ) as thread_ctor:
+                thread_instance = Mock()
+                thread_instance.start.side_effect = RuntimeError("can't start new thread")
+                thread_ctor.return_value = thread_instance
+                # Must not raise.
+                self.service.send_email_async("Subject", "Body")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+    def test_send_email_async_swallows_thread_construction_failure(self):
+        # Mirror the above for the case where ``threading.Thread(...)``
+        # itself raises (realistic: ``MemoryError`` allocating the stack).
+        # The worker body's own try/except never runs, so the enqueue site
+        # is the only place that can catch this.
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.notifications.threading.Thread",
+                side_effect=RuntimeError("thread construction failed"),
+            ):
+                # Must not raise.
+                self.service.send_email_async("Subject", "Body")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
     def test_log_site_change_writes_json_line(self):
         handle = mock_open()
         with patch.object(Path, "open", handle):
