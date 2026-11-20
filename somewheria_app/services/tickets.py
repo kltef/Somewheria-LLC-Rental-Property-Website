@@ -383,11 +383,32 @@ class TicketService:
             except Exception as exc:
                 self.logger.warning("Background email send failed for %r: %s", subject, exc)
 
-        threading.Thread(
-            target=_worker,
-            name="ticket-email",
-            daemon=True,
-        ).start()
+        # Catch a failure of the thread bootstrap itself — realistic cases:
+        # ``RuntimeError: can't start new thread`` at the OS thread limit
+        # under sustained load, ``MemoryError`` allocating the stack. The
+        # worker body's own try/except never runs in that case because the
+        # worker never starts, so a raise here would propagate straight
+        # through the callers — ``create_ticket`` (admin inbox notification,
+        # fired AFTER the ticket is already persisted) and ``add_note``
+        # (renter-reply heads-up to staff, fired AFTER the note is already
+        # persisted) — 503'ing the request via the global crash handler
+        # even though the submission IS on disk and visible on the next
+        # page load. Mirrors the catch-and-log shape PR #221 established
+        # for ``NotificationService.send_email_async`` and PR #220 for
+        # ``trigger_background_refresh``. The lost email send is strictly
+        # better than the misleading 503 — the failure is logged for
+        # triage, and the request thread is the only place that can catch
+        # a bootstrap failure.
+        try:
+            threading.Thread(
+                target=_worker,
+                name="ticket-email",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            self.logger.warning(
+                "Could not dispatch ticket email worker for %r: %s", subject, exc
+            )
 
     # --------------------------------------------------------------- JIRA
 
@@ -407,13 +428,33 @@ class TicketService:
                 self.logger.warning("Inline JIRA create failed for %s: %s", ticket_id, exc)
             return
 
-        thread = threading.Thread(
-            target=self._jira_create_with_retries,
-            args=(ticket_id,),
-            name=f"jira-create-{ticket_id[:8]}",
-            daemon=True,
-        )
-        thread.start()
+        # Catch a failure of the thread bootstrap itself — realistic cases:
+        # ``RuntimeError: can't start new thread`` at the OS thread limit
+        # under sustained load, ``MemoryError`` allocating the stack. The
+        # retry-loop's own try/except never runs in that case because the
+        # worker never starts, so a raise here would propagate straight
+        # through ``create_ticket`` AFTER the local ticket is already
+        # persisted — 503'ing ticket submission for the renter even though
+        # the ticket IS on disk, and (per the module's own contract above)
+        # "JIRA being down MUST NOT block ticket creation". Mirrors the
+        # catch-and-log shape PR #221 established for
+        # ``NotificationService.send_email_async`` and PR #220 for
+        # ``trigger_background_refresh``. The lost mirror attempt is
+        # strictly better than the misleading 503 — the failure is logged
+        # for triage, and the ticket is still visible in the admin UI so
+        # staff can re-trigger the mirror later.
+        try:
+            thread = threading.Thread(
+                target=self._jira_create_with_retries,
+                args=(ticket_id,),
+                name=f"jira-create-{ticket_id[:8]}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as exc:
+            self.logger.warning(
+                "Could not dispatch JIRA create worker for %s: %s", ticket_id, exc
+            )
 
     def _jira_create_with_retries(self, ticket_id: str) -> None:
         last_exc: Exception | None = None

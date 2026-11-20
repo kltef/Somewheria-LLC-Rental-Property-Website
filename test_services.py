@@ -4836,5 +4836,90 @@ class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
         good_thread.start.assert_called_once()
 
 
+class TicketEnqueueThreadBootstrapTestCase(unittest.TestCase):
+    """Regression: ``_enqueue_email`` and ``_enqueue_jira_create`` must swallow
+    a failure of the thread bootstrap itself.
+
+    Both wrappers are fire-and-forget — the worker body has its own
+    try/except, but the worker body never runs when
+    ``threading.Thread(...)`` or ``.start()`` raises (realistic cases:
+    ``RuntimeError: can't start new thread`` at the OS thread limit under
+    sustained load, ``MemoryError`` allocating the stack). The enqueue site
+    is the only place that can catch that. Without the guard, a bootstrap
+    failure propagates through ``create_ticket`` / ``add_note`` AFTER the
+    ticket or note has already been persisted, 503'ing the request via the
+    global crash handler even though the submission IS on disk and visible
+    on the next page load — and for JIRA, the module's own contract says
+    "JIRA being down MUST NOT block ticket creation". Mirrors PR #221
+    (``NotificationService.send_email_async``) and PR #220
+    (``trigger_background_refresh``).
+    """
+
+    def setUp(self):
+        from somewheria_app.services.tickets import TicketService
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = SimpleNamespace(tickets_file=Path(self.tmp.name) / "tickets.json")
+        self.storage = FileStorageService(self.config)
+        self.notifications = MagicMock()
+        self.jira = MagicMock()
+        self.service = TicketService(
+            self.config, self.storage, self.notifications, jira=self.jira
+        )
+
+    def test_enqueue_email_swallows_thread_start_failure(self):
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.tickets.threading.Thread"
+            ) as thread_ctor:
+                thread_instance = Mock()
+                thread_instance.start.side_effect = RuntimeError("can't start new thread")
+                thread_ctor.return_value = thread_instance
+                # Must not raise.
+                self.service._enqueue_email("Subject", "Body")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+    def test_enqueue_email_swallows_thread_construction_failure(self):
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.tickets.threading.Thread",
+                side_effect=RuntimeError("thread construction failed"),
+            ):
+                # Must not raise.
+                self.service._enqueue_email("Subject", "Body")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+    def test_enqueue_jira_create_swallows_thread_start_failure(self):
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.tickets.threading.Thread"
+            ) as thread_ctor:
+                thread_instance = Mock()
+                thread_instance.start.side_effect = RuntimeError("can't start new thread")
+                thread_ctor.return_value = thread_instance
+                # Must not raise.
+                self.service._enqueue_jira_create("ticket-abcdef12")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+    def test_enqueue_jira_create_swallows_thread_construction_failure(self):
+        os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch(
+                "somewheria_app.services.tickets.threading.Thread",
+                side_effect=RuntimeError("thread construction failed"),
+            ):
+                # Must not raise.
+                self.service._enqueue_jira_create("ticket-abcdef12")
+        finally:
+            os.environ["DISABLE_BACKGROUND_THREADS"] = "1"
+
+
 if __name__ == "__main__":
     unittest.main()
