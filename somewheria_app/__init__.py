@@ -279,7 +279,30 @@ def create_app() -> Flask:
             except Exception as mail_err:  # pragma: no cover - best-effort
                 print(f"[crash-handler] Could not send alert email: {mail_err}")
 
-        threading.Thread(target=_worker, daemon=True).start()
+        # Catch a failure of the thread bootstrap itself — realistic cases:
+        # ``RuntimeError: can't start new thread`` at the OS thread limit
+        # under sustained load, ``MemoryError`` allocating the stack. The
+        # worker body's own try/except never runs in that case because the
+        # worker never starts, so a raise here would propagate back through
+        # ``_crash_response`` into Flask's error handling: the empty 503
+        # that this handler is explicitly designed to serve (line 332 —
+        # "no template, no DB, no AWS — nothing that could itself fail")
+        # never reaches the visitor, and Flask falls through to its default
+        # 500 page. The point of the whole crash handler is that it cannot
+        # itself fail; letting the admin-email bootstrap propagate violates
+        # that contract. Mirrors the catch-and-log shape PR #221 established
+        # for ``NotificationService.send_email_async``, PR #220 for
+        # ``trigger_background_refresh``, and PR #222 for
+        # ``TicketService._enqueue_email`` / ``_enqueue_jira_create``. The
+        # lost email alert is strictly better than the empty-503 contract
+        # being broken — the crash is already in ``application.log`` (via
+        # ``app.logger.exception`` just below the caller) for triage, and
+        # the next legitimate crash will get a fresh thread bootstrap once
+        # the OS pressure subsides.
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as thread_err:
+            print(f"[crash-handler] Could not dispatch alert worker: {thread_err}")
 
     def _crash_response(exc: BaseException):
         try:
