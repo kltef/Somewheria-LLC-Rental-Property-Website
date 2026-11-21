@@ -1644,6 +1644,38 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         time_module.sleep(0.1)  # give any racing extra threads a chance to land
         self.assertEqual(len(send_calls), 1)
 
+    def test_crash_handler_serves_503_when_alert_thread_start_fails(self):
+        # ``_send_crash_email_async`` spawns a daemon thread to call
+        # ``NotificationService.send_email``. A ``RuntimeError: can't
+        # start new thread`` at the OS thread limit (or a ``MemoryError``
+        # allocating the stack) during that bootstrap must NOT propagate
+        # out of the crash handler: the whole point of the handler is to
+        # serve the bare empty 503 (no template, no DB, no AWS — nothing
+        # that could itself fail), and letting the admin-email dispatch
+        # failure escape would drop Flask back to its default 500 page.
+        # Mirrors the catch-and-log shape PRs #220 / #221 / #222 applied
+        # to ``trigger_background_refresh`` / ``send_email_async`` /
+        # ``TicketService._enqueue_email`` / ``_enqueue_jira_create``.
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
+            app = create_app()
+        app.config.update(TESTING=False, PROPAGATE_EXCEPTIONS=False)
+
+        @app.route("/force-crash")
+        def force_crash():
+            raise RuntimeError("boom")
+
+        client = app.test_client()
+        with patch(
+            "somewheria_app.threading.Thread",
+            side_effect=RuntimeError("can't start new thread"),
+        ):
+            response = client.get("/force-crash")
+
+        # The bare 503 contract is preserved even when the admin email
+        # thread can't be started.
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.data, b"")
+
     def test_session_role_refresh_survives_storage_failure(self):
         # ``_refresh_session_role`` runs as a before_request on EVERY page.
         # A raise from ``auth.get_user_role`` (SQLite corruption, a transient
