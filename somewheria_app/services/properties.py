@@ -261,7 +261,6 @@ class PropertyService:
         self._last_refresh_ok = None      # bool of last attempt; None = never run
         self._last_refresh_error = None   # error string from the last failure
         self._last_refresh_seconds = None # duration of the last attempt
-        self.refresh_thread = None
 
     def _safe_zillow_publish(self, method_name: str, *args, **kwargs) -> None:
         if self.zillow is None:
@@ -273,20 +272,6 @@ class PropertyService:
             # admin operation has already succeeded against the source of
             # truth (the upstream property API).
             self.logger.warning("Zillow %s enqueue failed: %s", method_name, exc)
-
-    def start_background_refresh(self) -> None:
-        if self.refresh_thread and self.refresh_thread.is_alive():
-            return
-        self.refresh_thread = threading.Thread(target=self._periodic_refresh, daemon=True)
-        self.refresh_thread.start()
-
-    def _periodic_refresh(self) -> None:
-        while True:
-            try:
-                self.refresh_cache()
-            except Exception as exc:
-                self.logger.error("Background refresh failed: %s", exc)
-            time.sleep(self.config.cache_refresh_interval)
 
     def refresh_cache(self) -> None:
         # Serialize concurrent refreshes so at most one upstream fanout is
