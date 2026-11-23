@@ -46,48 +46,6 @@ class CoveragePropertyServiceTestCase(unittest.TestCase):
             if file_path.exists():
                 file_path.unlink()
 
-    def test_start_background_refresh_starts_thread_once(self):
-        thread_mock = Mock()
-        thread_mock.is_alive.return_value = False
-
-        with patch("somewheria_app.services.properties.threading.Thread", return_value=thread_mock) as thread_ctor:
-            self.service.start_background_refresh()
-
-        thread_ctor.assert_called_once()
-        thread_mock.start.assert_called_once()
-        self.assertIs(self.service.refresh_thread, thread_mock)
-
-    def test_start_background_refresh_skips_when_existing_thread_is_alive(self):
-        thread_mock = Mock()
-        thread_mock.is_alive.return_value = True
-        self.service.refresh_thread = thread_mock
-
-        with patch("somewheria_app.services.properties.threading.Thread") as thread_ctor:
-            self.service.start_background_refresh()
-
-        thread_ctor.assert_not_called()
-
-    def test_periodic_refresh_runs_refresh_then_sleeps(self):
-        with patch.object(self.service, "refresh_cache") as refresh_cache_mock, patch(
-            "somewheria_app.services.properties.time.sleep",
-            side_effect=StopIteration,
-        ) as sleep_mock:
-            with self.assertRaises(StopIteration):
-                self.service._periodic_refresh()
-
-        refresh_cache_mock.assert_called_once()
-        sleep_mock.assert_called_once_with(5)
-
-    def test_periodic_refresh_logs_failures(self):
-        with patch.object(self.service, "refresh_cache", side_effect=RuntimeError("boom")), patch(
-            "somewheria_app.services.properties.time.sleep",
-            side_effect=StopIteration,
-        ), patch.object(self.service.logger, "error") as error_mock:
-            with self.assertRaises(StopIteration):
-                self.service._periodic_refresh()
-
-        error_mock.assert_called_once()
-
     def test_refresh_cache_updates_cache_and_logs(self):
         latest = [{"id": "prop-1"}]
         with patch.object(self.service, "fetch_all_properties", return_value=latest), patch.object(
@@ -1558,13 +1516,10 @@ class CoverageAnalyticsAndFactoryTestCase(unittest.TestCase):
         self.assertEqual(len(chart_data["unique_users"]), 3)
 
     def test_create_app_skips_background_thread_when_disabled(self):
-        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False), patch(
-            "somewheria_app.services.properties.PropertyService.start_background_refresh"
-        ) as refresh_mock:
+        with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "1"}, clear=False):
             app = create_app()
 
         self.assertTrue(app.config["DISABLE_BACKGROUND_THREADS"])
-        refresh_mock.assert_not_called()
 
     def test_create_app_starts_background_thread_when_enabled(self):
         with patch.dict(os.environ, {"DISABLE_BACKGROUND_THREADS": "0"}, clear=False):
@@ -2232,14 +2187,10 @@ class CoverageRouteBranchTestCase(unittest.TestCase):
 
 
 class CoverageStartupExecutionTestCase(unittest.TestCase):
-    def test_start_cache_refresh_thread_calls_service(self):
-        with patch.object(
-            website_app.app.extensions["somewheria_services"].properties,
-            "start_background_refresh",
-        ) as refresh_mock:
-            website_app.start_cache_refresh_thread()
-
-        refresh_mock.assert_not_called()
+    def test_start_cache_refresh_thread_is_noop(self):
+        # Shim kept for external callers after periodic refresh was removed;
+        # must stay callable and return None without touching any service.
+        self.assertIsNone(website_app.start_cache_refresh_thread())
 
     def test_print_check_file_delegates_to_appointment_service(self):
         with patch.object(
@@ -2272,7 +2223,7 @@ class CoverageStartupExecutionTestCase(unittest.TestCase):
     def test_main_block_runs_default_startup_path(self):
         fake_services = SimpleNamespace(
             config=SimpleNamespace(property_appointments_file=Path("appointments.txt")),
-            properties=SimpleNamespace(refresh_cache=Mock(), start_background_refresh=Mock()),
+            properties=SimpleNamespace(refresh_cache=Mock()),
             appointments=SimpleNamespace(print_check_file=Mock()),
         )
         fake_app = SimpleNamespace(
