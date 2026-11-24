@@ -397,28 +397,51 @@ class PropertyService:
             if self._background_refresh_active:
                 return
             self._background_refresh_active = True
-        # Clear the flag if ``Thread(...)`` / ``start()`` raises — otherwise
-        # the ``finally`` in ``_refresh_with_change_log`` (which is the sole
-        # path that resets ``_background_refresh_active``) never runs, and
-        # the flag stays wedged True for the lifetime of the process. Every
-        # subsequent trigger then no-ops: admin mutations stop propagating
-        # into the cache and ``/for-rent-refresh.json`` becomes a permanent
-        # no-op until a process restart. ``RuntimeError: can't start new
-        # thread`` (OS thread limit under sustained load) and ``MemoryError``
-        # (stack allocation) are the realistic failure modes here — same
-        # class of recovery the surrounding "surface silent failures" PRs
-        # (#201-#219) applied to the storage layer, moved to the thread
-        # bootstrap because this is the only trigger-site state the
-        # worker-side ``finally`` cannot see.
+        # Catch-and-log a failure of the thread bootstrap itself — realistic
+        # cases: ``RuntimeError: can't start new thread`` at the OS thread
+        # limit under sustained load, ``MemoryError`` allocating the stack.
+        # Two things must happen before this returns:
+        #
+        #   1. Reset ``_background_refresh_active`` — otherwise the flag
+        #      stays wedged True for the lifetime of the process (the
+        #      ``finally`` in ``_refresh_with_change_log`` is the sole
+        #      path that resets it, and the worker body never runs when
+        #      the bootstrap raises). Every subsequent trigger then no-ops:
+        #      admin mutations stop propagating into the cache and
+        #      ``/for-rent-refresh.json`` becomes a permanent no-op until
+        #      a process restart.
+        #
+        #   2. Swallow the exception rather than propagate it. Callers
+        #      ``create_property`` / ``update_property`` / ``upload_image``
+        #      all invoke this AFTER the upstream write has already
+        #      succeeded, so a raise would propagate back through
+        #      ``save_edit`` / ``upload_image`` into their generic
+        #      ``except Exception`` branch and render "Failed to save
+        #      changes. Please try again." for a mutation that DID land
+        #      upstream — then the admin's retry calls ``update_property``,
+        #      which reads a still-unrefreshed cache and raises
+        #      ``KeyError`` → "Property not found", 404. The cache being
+        #      briefly stale is a strictly better outcome than that chain;
+        #      the next ``/for-rent`` hit (or the next successful trigger
+        #      once OS pressure subsides) refreshes it. Mirrors the
+        #      catch-and-log shape PR #221 established for
+        #      ``NotificationService.send_email_async``, PR #222 for
+        #      ``TicketService._enqueue_email`` / ``_enqueue_jira_create``,
+        #      and PR #223 for ``_send_crash_email_async`` — all of which
+        #      the 4 "mirrors PR #220" comments across the codebase already
+        #      describe this method as implementing.
         try:
             thread = threading.Thread(
                 target=self._refresh_with_change_log, args=(actor_email,), daemon=True
             )
             thread.start()
-        except Exception:
+        except Exception as exc:
             with self._background_refresh_flag_lock:
                 self._background_refresh_active = False
-            raise
+            self.logger.warning(
+                "Could not dispatch background refresh worker for %r: %s",
+                actor_email, exc,
+            )
 
     def _refresh_with_change_log(self, actor_email: str) -> None:
         # Serialize with refresh_cache so an admin-triggered refresh and a
