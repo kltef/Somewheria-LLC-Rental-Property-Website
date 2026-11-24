@@ -4770,7 +4770,7 @@ class JiraCreateOncePersistenceFailureTestCase(unittest.TestCase):
 
 class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
     """Regression: ``trigger_background_refresh`` must reset its coalesce
-    flag when the thread bootstrap raises.
+    flag AND swallow the exception when the thread bootstrap raises.
 
     ``trigger_background_refresh`` sets ``_background_refresh_active = True``
     before constructing/starting the worker thread. The flag is only ever
@@ -4779,10 +4779,22 @@ class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
     raises (realistic cases: ``RuntimeError: can't start new thread`` at
     the OS thread limit under sustained load, ``MemoryError`` allocating
     the stack), the worker body never runs and that ``finally`` never
-    fires. Without this guard the flag stays wedged ``True`` for the
+    fires. Without the flag reset it stays wedged ``True`` for the
     lifetime of the process: every subsequent trigger (admin mutations,
     the public ``/for-rent-refresh.json`` endpoint) coalesces into a
     no-op, and recovery requires a full process restart.
+
+    The exception must ALSO be swallowed rather than re-raised. Callers
+    ``create_property`` / ``update_property`` / ``upload_image`` all invoke
+    this AFTER the upstream write has already succeeded, so a raise would
+    propagate back through ``save_edit`` / ``upload_image`` and render
+    "Failed to save changes. Please try again." for a mutation that DID
+    land upstream — then the admin's retry reads a still-unrefreshed cache
+    and gets "Property not found", 404. Matches the catch-and-log shape the
+    sibling thread-bootstrap sites (``NotificationService.send_email_async``,
+    ``TicketService._enqueue_email`` / ``_enqueue_jira_create``, and
+    ``_send_crash_email_async``) all use, which the 4 "mirrors PR #220"
+    comments across the codebase already describe this method as using.
     """
 
     def setUp(self):
@@ -4800,8 +4812,10 @@ class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
             thread_instance = MagicMock()
             thread_instance.start.side_effect = RuntimeError("can't start new thread")
             thread_cls.return_value = thread_instance
-            with self.assertRaises(RuntimeError):
-                self.service.trigger_background_refresh("admin@example.com")
+            # The caller must NOT see the RuntimeError — the upstream
+            # mutation that triggered this has already succeeded, so a
+            # raise would render a misleading "save failed" to the admin.
+            self.service.trigger_background_refresh("admin@example.com")
 
         # The flag must be reset so the next trigger can take another shot.
         self.assertFalse(self.service._background_refresh_active)
@@ -4811,8 +4825,8 @@ class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
             "somewheria_app.services.properties.threading.Thread",
             side_effect=RuntimeError("thread construction failed"),
         ):
-            with self.assertRaises(RuntimeError):
-                self.service.trigger_background_refresh("admin@example.com")
+            # Swallowed — see ``test_flag_cleared_when_thread_start_raises``.
+            self.service.trigger_background_refresh("admin@example.com")
 
         self.assertFalse(self.service._background_refresh_active)
 
@@ -4827,8 +4841,8 @@ class TriggerBackgroundRefreshThreadStartFailureTestCase(unittest.TestCase):
             failing_thread.start.side_effect = RuntimeError("can't start new thread")
             good_thread = MagicMock()
             thread_cls.side_effect = [failing_thread, good_thread]
-            with self.assertRaises(RuntimeError):
-                self.service.trigger_background_refresh("admin@example.com")
+            # First attempt: swallowed.
+            self.service.trigger_background_refresh("admin@example.com")
             # Second attempt proceeds and calls start() on the second Thread.
             self.service.trigger_background_refresh("admin@example.com")
 
