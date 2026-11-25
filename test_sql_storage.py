@@ -1076,6 +1076,46 @@ class PathShimUnknownPathTestCase(SqlStorageBaseTestCase):
         # Must not raise; the warning is logged but the request flow continues.
         self.storage.save_json_file(self.base / "unknown.json", [{"x": 1}])
 
+    def test_save_json_file_propagates_renter_profiles_bool(self):
+        # ``save_renter_profiles`` catches sqlite failures internally and
+        # returns False. The pre-fix shim called it but discarded the bool
+        # and returned True from the outer ``return True``, re-opening the
+        # silent-save lie elsewhere closed by PRs #201 / #203 / #209 / #213.
+        # On a durable write the shim returns True; on a storage failure it
+        # returns False — matching the file backend's ``save_json_file``
+        # contract.
+        self.assertTrue(
+            self.storage.save_json_file(
+                self.config.renter_profile_file,
+                {"alice@example.com": {"name": "Alice"}},
+            )
+        )
+        with patch.object(self.storage, "save_renter_profiles", return_value=False):
+            self.assertFalse(
+                self.storage.save_json_file(
+                    self.config.renter_profile_file,
+                    {"alice@example.com": {"name": "Alice"}},
+                )
+            )
+
+    def test_save_json_file_propagates_renter_contracts_bool(self):
+        # Same surfaced-failure contract as ``renter_profiles`` above: the
+        # inner method's False must not be laundered into a True by the
+        # shim. Mirrors the regression test above.
+        self.assertTrue(
+            self.storage.save_json_file(
+                self.config.contracts_file,
+                {"alice@example.com": [{"id": "c1", "property_name": "P1"}]},
+            )
+        )
+        with patch.object(self.storage, "save_renter_contracts", return_value=False):
+            self.assertFalse(
+                self.storage.save_json_file(
+                    self.config.contracts_file,
+                    {"alice@example.com": [{"id": "c1", "property_name": "P1"}]},
+                )
+            )
+
     def test_missing_config_attribute_is_treated_as_unknown_path(self):
         # If a config forgets one of the known file attributes (e.g. an
         # older AppConfig deployed against a newer sql_storage), the path
