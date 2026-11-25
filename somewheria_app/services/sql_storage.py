@@ -146,9 +146,19 @@ class SqlStorageService:
             elif key == "pending_registrations":
                 self._replace_pending_registrations(data)
             elif key == "renter_profiles":
-                self.save_renter_profiles(data)
+                # ``save_renter_profiles`` / ``save_renter_contracts`` catch
+                # sqlite failures internally and return False, so the outer
+                # ``except`` never sees them — a plain ``self.save_renter_profiles(data)``
+                # would leave ``save_json_file`` returning True unconditionally
+                # for this routing key, re-opening the silent-save lie the bool
+                # contract on ``save_json_file`` was added to prevent. Every
+                # other branch here either succeeds or raises, so propagating
+                # the bool is only required for these two wrapper methods.
+                # Matches the surfaced-failure contract PRs #201 / #203 / #206 /
+                # #209 / #213 applied elsewhere.
+                return self.save_renter_profiles(data)
             elif key == "renter_contracts":
-                self.save_renter_contracts(data)
+                return self.save_renter_contracts(data)
             elif key == "lead_captures":
                 self._replace_pending_lead_captures(data)
             elif key == "hidden_listings":
