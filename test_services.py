@@ -3723,6 +3723,78 @@ class ZillowPublisherTestCase(unittest.TestCase):
         self.assertEqual(self.publisher.success_count, 0)
         self.assertEqual(self.publisher.failure_count, 0)
 
+    def test_enqueue_swallows_thread_start_failure(self):
+        # ``threading.Thread(...).start()`` can raise ``RuntimeError: can't
+        # start new thread`` under OS thread-limit pressure, or ``MemoryError``
+        # allocating the stack. The retry worker's own try/except never
+        # runs in that case because the worker never starts, so a raise
+        # here would propagate straight through ``publish_create`` —
+        # violating the class docstring's "non-raising at the boundary"
+        # contract and the module-header guarantee that "Zillow sync
+        # failures must NEVER block an admin operation". Mirrors the
+        # catch-and-log shape PR #220/#221/#222/#223/#225 established at
+        # every other thread-start site in the services layer.
+        #
+        # Explicitly drop DISABLE_BACKGROUND_THREADS so _enqueue reaches
+        # the threaded branch; the test base otherwise sets it to "1" and
+        # the inline path would never touch threading.Thread.
+        prev_disable = os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                    "ZILLOW_API_TOKEN": "token",
+                    "ZILLOW_FEED_KEY": "feed",
+                },
+            ), patch(
+                "somewheria_app.services.zillow.threading.Thread"
+            ) as thread_ctor:
+                thread_instance = Mock()
+                thread_instance.start.side_effect = RuntimeError("can't start new thread")
+                thread_ctor.return_value = thread_instance
+                # Must not raise even though the worker's .start() blew up.
+                self.publisher.publish_create({"id": "prop-9"})
+        finally:
+            if prev_disable is not None:
+                os.environ["DISABLE_BACKGROUND_THREADS"] = prev_disable
+        # The failure is recorded for the admin status page so an operator
+        # can see the OS-pressure event instead of it disappearing silently.
+        self.assertEqual(self.publisher.failure_count, 1)
+        self.assertEqual(self.publisher.success_count, 0)
+        snapshot = self.publisher.status_snapshot()
+        self.assertEqual(len(snapshot["recent_errors"]), 1)
+        self.assertEqual(snapshot["recent_errors"][0]["action"], "create")
+        self.assertEqual(snapshot["recent_errors"][0]["property_id"], "prop-9")
+        self.assertIn("thread bootstrap failed", snapshot["recent_errors"][0]["error"])
+
+    def test_enqueue_swallows_thread_construction_failure(self):
+        # Belt-and-suspenders: the ``threading.Thread(...)`` constructor
+        # itself can raise before ``.start()`` is even reached (e.g.
+        # MemoryError allocating the Thread object). The guard must catch
+        # that too — otherwise the raise skips past the .start() try/except
+        # and propagates up through publish_update to the caller.
+        prev_disable = os.environ.pop("DISABLE_BACKGROUND_THREADS", None)
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "ZILLOW_API_BASE_URL": "https://zillow.example.com",
+                    "ZILLOW_API_TOKEN": "token",
+                    "ZILLOW_FEED_KEY": "feed",
+                },
+            ), patch(
+                "somewheria_app.services.zillow.threading.Thread",
+                side_effect=RuntimeError("thread construction failed"),
+            ):
+                # Must not raise.
+                self.publisher.publish_update({"id": "prop-10"})
+        finally:
+            if prev_disable is not None:
+                os.environ["DISABLE_BACKGROUND_THREADS"] = prev_disable
+        self.assertEqual(self.publisher.failure_count, 1)
+        self.assertEqual(self.publisher.success_count, 0)
+
 
 class TicketsNowIsoTestCase(unittest.TestCase):
     """Lock the on-disk timestamp format for tickets.
