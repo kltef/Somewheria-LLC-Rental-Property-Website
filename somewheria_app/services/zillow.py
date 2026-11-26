@@ -157,13 +157,47 @@ class ZillowPublisher:
                     )
             return
 
-        worker = threading.Thread(
-            target=self._retry_worker,
-            args=(action, property_id, payload),
-            daemon=True,
-            name=f"zillow-publish-{action}-{property_id or 'na'}",
-        )
-        worker.start()
+        # Catch a failure of the thread bootstrap itself — realistic cases:
+        # ``RuntimeError: can't start new thread`` at the OS thread limit
+        # under sustained load, ``MemoryError`` allocating the stack. The
+        # retry worker's own try/except never runs in that case because the
+        # worker never starts, so a raise here would propagate straight
+        # through ``publish_create`` / ``publish_update`` / ``publish_delete``
+        # / ``publish_for_sale_toggle`` — which the module docstring and the
+        # class docstring both advertise as "non-raising at the boundary"
+        # and the source-of-truth comment at the top of the file ("Zillow
+        # sync failures must NEVER block an admin operation") explicitly
+        # relies on. The caller-side ``PropertyService._safe_zillow_publish``
+        # wrapper does mask this today, but a thread-bootstrap raise is
+        # NOT a Zillow sync failure — it is an OS-pressure signal that
+        # belongs in the Zillow module's own log with the action/property
+        # context, not disguised as an "enqueue failed" warning in the
+        # property-service log. Mirrors the catch-and-log shape PR #221
+        # established for ``NotificationService.send_email_async``, PR #220
+        # for ``trigger_background_refresh``, PR #222 for ``TicketService.
+        # _enqueue_email`` / ``_enqueue_jira_create``, and PR #223 for the
+        # crash handler's own alert dispatch. The lost publish is strictly
+        # better than the boundary contract being broken — the admin
+        # operation has already succeeded against the source of truth, the
+        # failure is recorded as a Zillow sync error for the admin status
+        # page, and the next publish will get a fresh thread bootstrap
+        # once OS pressure subsides.
+        try:
+            worker = threading.Thread(
+                target=self._retry_worker,
+                args=(action, property_id, payload),
+                daemon=True,
+                name=f"zillow-publish-{action}-{property_id or 'na'}",
+            )
+            worker.start()
+        except Exception as exc:
+            self.logger.warning(
+                "Could not dispatch Zillow worker for action=%s property_id=%s: %s",
+                action,
+                property_id or "<unknown>",
+                exc,
+            )
+            self._record_failure(action, property_id, f"thread bootstrap failed: {exc}")
 
     def _retry_worker(self, action: str, property_id: str, payload: dict) -> None:
         last_exc: Optional[Exception] = None
