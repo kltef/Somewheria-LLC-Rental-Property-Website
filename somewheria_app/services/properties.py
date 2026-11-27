@@ -1116,7 +1116,19 @@ class PropertyService:
             timeout=20,
         )
         if response.status_code not in (200, 204):
-            raise RuntimeError(f"Remote API responded {response.status_code}: {response.text}")
+            # Cap the upstream body the same way ``save_edit``'s HTTPError
+            # branch does (admin_routes.py). ``delete_listing`` catches this
+            # RuntimeError via a generic ``except Exception`` and emails the
+            # stringified exception through ``log_and_notify_error``; without
+            # a cap an API Gateway / nginx 4xx that returns a multi-KB HTML
+            # error page would ride the full body into the admin alert
+            # inbox (and the application log), where the per-fingerprint
+            # 10-minute cooldown bounds repetition but not the size of each
+            # message. ``response.text`` can also be ``None`` on a
+            # construct-by-hand response in a test — ``or ""`` keeps the
+            # slice from TypeError'ing in that path.
+            body = (response.text or "")[:500]
+            raise RuntimeError(f"Remote API responded {response.status_code}: {body}")
         with self.cache_lock:
             self.cache = [item for item in self.cache if item.get("id") != property_id]
         # Clear any hidden-listing tombstone for this id. Without this a
