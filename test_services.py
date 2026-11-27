@@ -2009,6 +2009,43 @@ class PropertyServiceTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.service.delete_property("prop-1", "admin@example.com")
 
+    def test_delete_property_caps_remote_error_body_in_runtime_error(self):
+        # An API Gateway / nginx 4xx can return a multi-KB HTML error page.
+        # The RuntimeError string is caught by ``delete_listing`` and emailed
+        # through ``log_and_notify_error`` as the ``exc`` string, so an
+        # unbounded body would bloat the admin alert inbox (and the
+        # application log). Match the ``save_edit`` HTTPError branch's cap
+        # (admin_routes.py uses ``[:500]``) so the alert stays legible and
+        # the 10-minute per-fingerprint cooldown bounds repetition without
+        # the per-message size also being unbounded.
+        self.service.cache = [{"id": "prop-1"}]
+        huge_body = "x" * 10_000
+        response = Mock(status_code=502, text=huge_body)
+        with patch("somewheria_app.services.properties.requests.delete", return_value=response):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.service.delete_property("prop-1", "admin@example.com")
+        message = str(ctx.exception)
+        # The status code must still be visible so the admin can triage.
+        self.assertIn("502", message)
+        # The body is included but capped.
+        self.assertIn("xxx", message)
+        # Overall message length is bounded: 500 chars of body plus the
+        # small fixed prefix, well under the raw 10 000 the mock advertised.
+        self.assertLess(len(message), 700)
+
+    def test_delete_property_tolerates_none_remote_body(self):
+        # A hand-constructed response mock can return ``None`` from
+        # ``.text``; without the ``or ""`` guard the body slice would
+        # TypeError and swallow the real status-code signal in a confusing
+        # exception. The function should still raise RuntimeError with the
+        # status code so the admin knows upstream rejected the delete.
+        self.service.cache = [{"id": "prop-1"}]
+        response = Mock(status_code=502, text=None)
+        with patch("somewheria_app.services.properties.requests.delete", return_value=response):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.service.delete_property("prop-1", "admin@example.com")
+        self.assertIn("502", str(ctx.exception))
+
     def test_delete_property_clears_hidden_listing_tombstone(self):
         # Regression: an admin who deactivates (hides) a listing and then
         # deletes it upstream previously left the id in hidden_listings
